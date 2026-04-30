@@ -67,7 +67,23 @@ if {$cfg(build_static) eq 1} {
     }
 }
 add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/shell/impl"
-add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/dynamic/impl"
+set dyn_impl_dir "$hw_dir/constraints/$cfg(fdev)/dynamic/impl"
+foreach xdc [glob -nocomplain "$dyn_impl_dir/*.xdc"] {
+    set xdc_name [file tail $xdc]
+    if {$cfg(en_dcard) eq 0 && [string match "*ddr*" $xdc_name]} {
+        continue
+    }
+    if {$cfg(en_hcard) eq 0 && [string match "*hbm*" $xdc_name]} {
+        continue
+    }
+    if {$cfg(en_net_0) eq 0 && [string match "*net_0*" $xdc_name]} {
+        continue
+    }
+    if {$cfg(en_net_1) eq 0 && [string match "*net_1*" $xdc_name]} {
+        continue
+    }
+    add_files -fileset [get_filesets constrs_1] $xdc
+}
 set_property used_in_synthesis false [get_files -of_objects [get_filesets constrs_1]]
 set_property used_in_implementation true [get_files -of_objects [get_filesets constrs_1]]
 
