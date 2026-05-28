@@ -76,6 +76,11 @@ set cfg(en_cred_local)          ${EN_CRED_LOCAL}
 set cfg(en_cred_remote)         ${EN_CRED_REMOTE}
 set cfg(n_reg)                  ${N_REGIONS}
 set cfg(en_strm)                ${EN_STRM}
+set cfg(en_peer)                ${EN_PEER}
+set cfg(peer_backend)           ${PEER_BACKEND}
+set cfg(n_peer_links)           ${N_PEER_LINKS}
+set cfg(n_peer_axi)             ${N_PEER_AXI}
+set cfg(n_host_strm_axi)        ${N_HOST_STRM_AXI}
 set cfg(en_mem)                 ${EN_MEM}
 set cfg(mem_offset)             ${MEM_OFFSET}
 set cfg(ddr_size)               ${DDR_SIZE}
@@ -163,6 +168,9 @@ set cfg(nr_hst)                 ${NR_HST}
 set cfg(eos_time)               ${EOS_TIME}
 set cfg(n_wbs)                  ${N_WBS}
 set cfg(n_strm_axi)             ${N_STRM_AXI}
+set cfg(n_host_strm_axi)        ${N_HOST_STRM_AXI}
+set cfg(n_peer_axi)             ${N_PEER_AXI}
+set cfg(n_peer_links)           ${N_PEER_LINKS}
 set cfg(mult_strm_axi)          ${MULT_STRM_AXI}
 set cfg(n_card_axi)             ${N_CARD_AXI}
 set cfg(mult_card_axi)          ${MULT_CARD_AXI}

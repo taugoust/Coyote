@@ -725,6 +725,32 @@ module design_user_wrapper_{{ c_reg }} (
     AXI4SR axis_host_recv_int [N_STRM_AXI] (.*);
     AXI4SR axis_card_send_int [N_CARD_AXI] (.*);
     AXI4SR axis_card_recv_int [N_CARD_AXI] (.*); 
+
+{% if cnfg.en_strm %}
+    AXI4SR axis_host_send_user [N_HOST_STRM_AXI] (.*);
+    AXI4SR axis_host_recv_user [N_HOST_STRM_AXI] (.*);
+
+{% for i in range(0, cnfg.n_host_strm_axi) %}
+    `AXISR_ASSIGN(axis_host_recv_int[{{ i }}], axis_host_recv_user[{{ i }}])
+    `AXISR_ASSIGN(axis_host_send_user[{{ i }}], axis_host_send_int[{{ i }}])
+{% endfor %}
+{% endif %}
+
+{% if cnfg.en_peer %}
+    AXI4SR axis_peer_send [N_PEER_AXI] (.*);
+    AXI4SR axis_peer_recv [N_PEER_AXI] (.*);
+    logic [N_PEER_LINKS-1:0] peer_link_up;
+    logic [(4*N_PEER_LINKS)-1:0] peer_lane_up;
+
+{% if cnfg.peer_backend == 'host_stream' %}
+    assign peer_link_up = {N_PEER_LINKS{1'b1}};
+    assign peer_lane_up = {N_PEER_LINKS{4'hf}};
+{% for i in range(0, cnfg.n_peer_axi) %}
+    `AXISR_ASSIGN(axis_host_recv_int[N_HOST_STRM_AXI + {{ i }}], axis_peer_recv[{{ i }}])
+    `AXISR_ASSIGN(axis_peer_send[{{ i }}], axis_host_send_int[N_HOST_STRM_AXI + {{ i }}])
+{% endfor %}
+{% endif %}
+{% endif %}
     
 {% if cnfg.en_strm and cnfg.en_mem %}
     req_mux_stream_1_2 inst_stream_mux_rd (
@@ -1091,8 +1117,14 @@ module design_user_wrapper_{{ c_reg }} (
         .rq_wr(user_rq_wr_int),
     {% endif %}
     {% if cnfg.en_strm %}
-        .axis_host_recv(axis_host_recv_int),
-        .axis_host_send(axis_host_send_int),
+        .axis_host_recv(axis_host_recv_user),
+        .axis_host_send(axis_host_send_user),
+    {% endif %}
+    {% if cnfg.en_peer %}
+        .axis_peer_recv(axis_peer_recv),
+        .axis_peer_send(axis_peer_send),
+        .peer_link_up(peer_link_up),
+        .peer_lane_up(peer_lane_up),
     {% endif %}
     {% if cnfg.en_mem %}
         .axis_card_recv(axis_card_recv_int),

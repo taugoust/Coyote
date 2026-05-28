@@ -114,6 +114,16 @@ module tb_user;
     AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_recv[N_STRM_AXI](.*);
     AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_send[N_STRM_AXI](.*);
 
+    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_recv_user[N_HOST_STRM_AXI](.*);
+    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_send_user[N_HOST_STRM_AXI](.*);
+
+`ifdef EN_PEER
+    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_peer_recv[N_PEER_AXI](.*);
+    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_peer_send[N_PEER_AXI](.*);
+    logic [N_PEER_LINKS-1:0] peer_link_up;
+    logic [(4*N_PEER_LINKS)-1:0] peer_lane_up;
+`endif
+
     c_axisr host_recv_drv[N_STRM_AXI];
     c_axisr host_send_drv[N_STRM_AXI];
 
@@ -170,8 +180,14 @@ module tb_user;
         .rq_wr(rq_wr),
     `endif
     `ifdef EN_STRM
-        .axis_host_recv(axis_host_recv),
-        .axis_host_send(axis_host_send),
+        .axis_host_recv(axis_host_recv_user),
+        .axis_host_send(axis_host_send_user),
+    `endif
+    `ifdef EN_PEER
+        .axis_peer_recv(axis_peer_recv),
+        .axis_peer_send(axis_peer_send),
+        .peer_link_up(peer_link_up),
+        .peer_lane_up(peer_lane_up),
     `endif
     `ifdef EN_MEM
         .axis_card_recv(axis_card_recv),
@@ -231,6 +247,45 @@ module tb_user;
             host_send_drv[i] = new(axis_host_send[i], i);
         end
     end
+
+`ifdef EN_STRM
+    for (genvar i = 0; i < N_HOST_STRM_AXI; i++) begin
+        assign axis_host_recv_user[i].tdata = axis_host_recv[i].tdata;
+        assign axis_host_recv_user[i].tkeep = axis_host_recv[i].tkeep;
+        assign axis_host_recv_user[i].tlast = axis_host_recv[i].tlast;
+        assign axis_host_recv_user[i].tid = axis_host_recv[i].tid;
+        assign axis_host_recv_user[i].tvalid = axis_host_recv[i].tvalid;
+        assign axis_host_recv[i].tready = axis_host_recv_user[i].tready;
+
+        assign axis_host_send[i].tdata = axis_host_send_user[i].tdata;
+        assign axis_host_send[i].tkeep = axis_host_send_user[i].tkeep;
+        assign axis_host_send[i].tlast = axis_host_send_user[i].tlast;
+        assign axis_host_send[i].tid = axis_host_send_user[i].tid;
+        assign axis_host_send[i].tvalid = axis_host_send_user[i].tvalid;
+        assign axis_host_send_user[i].tready = axis_host_send[i].tready;
+    end
+`endif
+
+`ifdef EN_PEER
+    assign peer_link_up = {N_PEER_LINKS{1'b1}};
+    assign peer_lane_up = {N_PEER_LINKS{4'hf}};
+
+    for (genvar i = 0; i < N_PEER_AXI; i++) begin
+        assign axis_peer_recv[i].tdata = axis_host_recv[N_HOST_STRM_AXI + i].tdata;
+        assign axis_peer_recv[i].tkeep = axis_host_recv[N_HOST_STRM_AXI + i].tkeep;
+        assign axis_peer_recv[i].tlast = axis_host_recv[N_HOST_STRM_AXI + i].tlast;
+        assign axis_peer_recv[i].tid = axis_host_recv[N_HOST_STRM_AXI + i].tid;
+        assign axis_peer_recv[i].tvalid = axis_host_recv[N_HOST_STRM_AXI + i].tvalid;
+        assign axis_host_recv[N_HOST_STRM_AXI + i].tready = axis_peer_recv[i].tready;
+
+        assign axis_host_send[N_HOST_STRM_AXI + i].tdata = axis_peer_send[i].tdata;
+        assign axis_host_send[N_HOST_STRM_AXI + i].tkeep = axis_peer_send[i].tkeep;
+        assign axis_host_send[N_HOST_STRM_AXI + i].tlast = axis_peer_send[i].tlast;
+        assign axis_host_send[N_HOST_STRM_AXI + i].tid = axis_peer_send[i].tid;
+        assign axis_host_send[N_HOST_STRM_AXI + i].tvalid = axis_peer_send[i].tvalid;
+        assign axis_peer_send[i].tready = axis_host_send[N_HOST_STRM_AXI + i].tready;
+    end
+`endif
 
 `ifdef EN_MEM
     for (genvar i = 0; i < N_CARD_AXI; i++) begin

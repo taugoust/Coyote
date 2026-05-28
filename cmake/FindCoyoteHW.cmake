@@ -76,6 +76,15 @@ set(EN_STRM 1 CACHE STRING "Enable host streams")
 # Number of parallel streams from host (per vFPGA)
 set(N_STRM_AXI 1 CACHE STRING "Number of host streams")
 
+# Optional direct FPGA-to-FPGA peer service. The public service is peer; concrete
+# transports such as Aurora are backends. The initial host_stream backend reserves
+# host stream(s) for peer traffic so applications can prototype the peer ULI
+# before a physical link backend is integrated.
+set(EN_PEER 0 CACHE STRING "Enable direct FPGA-to-FPGA peer service")
+set(PEER_BACKEND "none" CACHE STRING "Peer backend: none, host_stream")
+set(N_PEER_LINKS 1 CACHE STRING "Number of peer links")
+set(N_PEER_AXI 1 CACHE STRING "Number of peer streams")
+
 # Enable streams from card memory (HBM/DDR)
 set(EN_MEM 0 CACHE STRING "Enable memory streams")
 
@@ -602,6 +611,36 @@ macro(validation_checks_hw)
         if (EN_NET AND FPGA_ARCH STREQUAL "versal")
             message(FATAL_ERROR "Networking not supported yet on Versal devices.")
         endif()
+
+        ##
+        ## Peer service
+        ##
+        if(NOT EN_PEER)
+            set(PEER_BACKEND "none")
+            set(N_HOST_STRM_AXI ${N_STRM_AXI})
+        else()
+            if(NOT PEER_BACKEND STREQUAL "host_stream")
+                message(FATAL_ERROR "Unsupported PEER_BACKEND '${PEER_BACKEND}'. Currently supported: host_stream.")
+            endif()
+            if(N_PEER_LINKS GREATER 1)
+                message(FATAL_ERROR "N_PEER_LINKS > 1 is not supported yet.")
+            endif()
+            if(N_PEER_AXI GREATER 1)
+                message(FATAL_ERROR "N_PEER_AXI > 1 is not supported yet.")
+            endif()
+            if(PEER_BACKEND STREQUAL "host_stream")
+                if(NOT EN_STRM)
+                    message(FATAL_ERROR "PEER_BACKEND=host_stream requires EN_STRM=1.")
+                endif()
+                if(N_STRM_AXI LESS 2)
+                    message(FATAL_ERROR "PEER_BACKEND=host_stream requires N_STRM_AXI >= 2: stream 0 remains host-facing, stream 1 backs peer.")
+                endif()
+                MATH(EXPR N_HOST_STRM_AXI "${N_STRM_AXI}-${N_PEER_AXI}")
+                if(N_HOST_STRM_AXI LESS 1)
+                    message(FATAL_ERROR "PEER_BACKEND=host_stream must leave at least one host stream visible to the application.")
+                endif()
+            endif()
+        endif()
         
         # Mult user channels
         set(MULT_RDMA_AXI 0)
@@ -756,6 +795,10 @@ macro(validation_checks_hw)
         set(NN 0)
         set(STRM_CHAN -1 CACHE STRING "Stream channel.")
         set(CARD_CHAN -1 CACHE STRING "Memory channel.")
+        if(NOT DEFINED N_HOST_STRM_AXI)
+            set(N_HOST_STRM_AXI ${N_STRM_AXI})
+        endif()
+
         set(MULT_STRM_AXI 0)
         set(MULT_CARD_AXI 0)
         if(EN_STRM)
@@ -788,6 +831,24 @@ macro(validation_checks_hw)
         endif()
 
         include("${SHELL_PATH}/export.cmake")
+
+        # Backward compatibility with shell exports generated before the optional
+        # peer service existed.
+        if(NOT DEFINED EN_PEER)
+            set(EN_PEER 0)
+        endif()
+        if(NOT DEFINED PEER_BACKEND)
+            set(PEER_BACKEND "none")
+        endif()
+        if(NOT DEFINED N_PEER_LINKS)
+            set(N_PEER_LINKS 1)
+        endif()
+        if(NOT DEFINED N_PEER_AXI)
+            set(N_PEER_AXI 1)
+        endif()
+        if(NOT DEFINED N_HOST_STRM_AXI)
+            set(N_HOST_STRM_AXI ${N_STRM_AXI})
+        endif()
 
         if(EN_PR EQUAL 0)
             message(FATAL_ERROR "PR not enabled in the shell.")
