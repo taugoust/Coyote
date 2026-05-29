@@ -34,6 +34,9 @@
 {% if cnfg.peer_backend == 'host_stream' %}
 `define PEER_BACKEND_HOST_STREAM
 {% endif %}
+{% if cnfg.peer_backend == 'aurora_qsfp1' %}
+`define PEER_BACKEND_AURORA_QSFP1
+{% endif %}
 {% endif %}
 {% if cnfg.en_mem %}
 `define EN_MEM

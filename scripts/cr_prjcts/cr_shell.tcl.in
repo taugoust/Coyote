@@ -130,6 +130,8 @@ if {$cfg(en_card) eq 1} {
 if {$cfg(en_net) eq 1} {
     source "$scripts_dir/ip_inst/network_infrastructure.tcl" -notrace
 }
+# PEER_BACKEND=aurora_qsfp1 will source aurora_infrastructure.tcl here once
+# the Aurora backend/IP files are ported behind the generic peer interface.
 
 ########################################################################################################
 # SHELL BLOCK DESIGNS
