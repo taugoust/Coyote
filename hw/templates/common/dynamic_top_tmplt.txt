@@ -105,6 +105,14 @@ module design_dynamic_top #(
     metaIntf.m                                  m_filter_config,
 {% endif %}
 
+{% if cnfg.en_peer and cnfg.peer_backend == 'aurora_qsfp1' %}
+    // Peer streams backed by shell-side Aurora backend
+    AXI4SR.s                                    s_axis_peer_recv [N_PEER_AXI],
+    AXI4SR.m                                    m_axis_peer_send [N_PEER_AXI],
+    input  wire[N_PEER_LINKS-1:0]               peer_link_up,
+    input  wire[(4*N_PEER_LINKS)-1:0]           peer_lane_up,
+{% endif %}
+
 {% if cnfg.en_wb %}
     // Writeback
     metaIntf.m                                  m_wback,
@@ -1224,6 +1232,23 @@ module design_dynamic_top #(
         .filter_config_data(m_filter_config.data),
         .filter_config_ready(m_filter_config.ready),
         .filter_config_valid(m_filter_config.valid),
+{% endif %}
+
+{% if cnfg.en_peer and cnfg.peer_backend == 'aurora_qsfp1' and i == 0 %}
+        .axis_peer_recv_tdata(s_axis_peer_recv[0].tdata),
+        .axis_peer_recv_tkeep(s_axis_peer_recv[0].tkeep),
+        .axis_peer_recv_tid(s_axis_peer_recv[0].tid),
+        .axis_peer_recv_tlast(s_axis_peer_recv[0].tlast),
+        .axis_peer_recv_tready(s_axis_peer_recv[0].tready),
+        .axis_peer_recv_tvalid(s_axis_peer_recv[0].tvalid),
+        .axis_peer_send_tdata(m_axis_peer_send[0].tdata),
+        .axis_peer_send_tkeep(m_axis_peer_send[0].tkeep),
+        .axis_peer_send_tid(m_axis_peer_send[0].tid),
+        .axis_peer_send_tlast(m_axis_peer_send[0].tlast),
+        .axis_peer_send_tready(m_axis_peer_send[0].tready),
+        .axis_peer_send_tvalid(m_axis_peer_send[0].tvalid),
+        .peer_link_up_in(peer_link_up),
+        .peer_lane_up_in(peer_lane_up),
 {% endif %}
 
 {% if cnfg.fpga_arch == 'ultrascale_plus' %}

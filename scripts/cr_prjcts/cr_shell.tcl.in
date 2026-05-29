@@ -102,6 +102,10 @@ if {$cfg(en_net) eq 1} {
         add_files "$hw_dir/hdl/network/tcp"
     }
 }
+if {$cfg(peer_backend) eq "aurora_qsfp1"} {
+    add_files "$hw_dir/hdl/aurora"
+    add_files "$hw_dir/hdl/peer"
+}
 add_files "$proj_dir/hdl"
 
 # Top level
@@ -130,8 +134,9 @@ if {$cfg(en_card) eq 1} {
 if {$cfg(en_net) eq 1} {
     source "$scripts_dir/ip_inst/network_infrastructure.tcl" -notrace
 }
-# PEER_BACKEND=aurora_qsfp1 will source aurora_infrastructure.tcl here once
-# the Aurora backend/IP files are ported behind the generic peer interface.
+if {$cfg(peer_backend) eq "aurora_qsfp1"} {
+    source "$scripts_dir/ip_inst/aurora_infrastructure.tcl" -notrace
+}
 
 ########################################################################################################
 # SHELL BLOCK DESIGNS

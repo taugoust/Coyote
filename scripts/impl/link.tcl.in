@@ -82,6 +82,9 @@ foreach xdc [glob -nocomplain "$dyn_impl_dir/*.xdc"] {
     if {$cfg(en_net_1) eq 0 && [string match "*net_1*" $xdc_name]} {
         continue
     }
+    if {$cfg(peer_backend) ne "aurora_qsfp1" && [string match "*zaurora*" $xdc_name]} {
+        continue
+    }
     add_files -fileset [get_filesets constrs_1] $xdc
 }
 set_property used_in_synthesis false [get_files -of_objects [get_filesets constrs_1]]
