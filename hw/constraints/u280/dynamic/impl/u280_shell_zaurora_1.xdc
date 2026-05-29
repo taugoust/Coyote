@@ -14,6 +14,26 @@
 set_property PACKAGE_PIN M43 [get_ports gt1_refclk_n]
 set_property PACKAGE_PIN M42 [get_ports gt1_refclk_p]
 
+# QSFP1 transceiver lanes. These duplicate u280_shell_net_1.xdc's data-lane
+# pinout because aurora_qsfp1 does not enable Coyote EN_NET_1, so net_1.xdc is
+# intentionally skipped by the build flow.
+set_property PACKAGE_PIN G54 [get_ports {gt1_rxn_in[0]}]
+set_property PACKAGE_PIN F52 [get_ports {gt1_rxn_in[1]}]
+set_property PACKAGE_PIN E54 [get_ports {gt1_rxn_in[2]}]
+set_property PACKAGE_PIN D52 [get_ports {gt1_rxn_in[3]}]
+set_property PACKAGE_PIN G53 [get_ports {gt1_rxp_in[0]}]
+set_property PACKAGE_PIN F51 [get_ports {gt1_rxp_in[1]}]
+set_property PACKAGE_PIN E53 [get_ports {gt1_rxp_in[2]}]
+set_property PACKAGE_PIN D51 [get_ports {gt1_rxp_in[3]}]
+set_property PACKAGE_PIN G49 [get_ports {gt1_txn_out[0]}]
+set_property PACKAGE_PIN E49 [get_ports {gt1_txn_out[1]}]
+set_property PACKAGE_PIN C49 [get_ports {gt1_txn_out[2]}]
+set_property PACKAGE_PIN A50 [get_ports {gt1_txn_out[3]}]
+set_property PACKAGE_PIN G48 [get_ports {gt1_txp_out[0]}]
+set_property PACKAGE_PIN E48 [get_ports {gt1_txp_out[1]}]
+set_property PACKAGE_PIN C48 [get_ports {gt1_txp_out[2]}]
+set_property PACKAGE_PIN A49 [get_ports {gt1_txp_out[3]}]
+
 # Note: the Aurora IP defines its own create_clock on the MGTREFCLK input via
 # its packaged XDC (period 6.206 ns = 1/161.1328125 MHz). We do NOT redefine
 # it here — doing so would conflict with the IP's internal constraint.
