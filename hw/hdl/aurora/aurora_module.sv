@@ -232,7 +232,6 @@ module aurora_module (
     wire reset_pb_sync_uclk;
     xpm_cdc_async_rst #(
         .DEST_SYNC_FF   (4),
-        .INIT           (1),
         .INIT_SYNC_FF   (0),
         .RST_ACTIVE_HIGH(1)
     ) u_rst_sync_uclk (
