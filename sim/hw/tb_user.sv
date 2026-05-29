@@ -267,6 +267,7 @@ module tb_user;
 `endif
 
 `ifdef EN_PEER
+`ifdef PEER_BACKEND_HOST_STREAM
     assign peer_link_up = {N_PEER_LINKS{1'b1}};
     assign peer_lane_up = {N_PEER_LINKS{4'hf}};
 
@@ -285,6 +286,9 @@ module tb_user;
         assign axis_host_send[N_HOST_STRM_AXI + i].tvalid = axis_peer_send[i].tvalid;
         assign axis_peer_send[i].tready = axis_host_send[N_HOST_STRM_AXI + i].tready;
     end
+`else
+    initial $fatal(1, "EN_PEER simulation requires a supported peer backend model.");
+`endif
 `endif
 
 `ifdef EN_MEM

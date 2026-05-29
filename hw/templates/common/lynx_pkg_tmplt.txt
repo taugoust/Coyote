@@ -31,6 +31,9 @@
 {% endif %}
 {% if cnfg.en_peer %}
 `define EN_PEER
+{% if cnfg.peer_backend == 'host_stream' %}
+`define PEER_BACKEND_HOST_STREAM
+{% endif %}
 {% endif %}
 {% if cnfg.en_mem %}
 `define EN_MEM
