@@ -267,10 +267,10 @@ module tb_user;
 `endif
 
 `ifdef EN_PEER
-`ifdef PEER_BACKEND_HOST_STREAM
     assign peer_link_up = {N_PEER_LINKS{1'b1}};
     assign peer_lane_up = {N_PEER_LINKS{4'hf}};
 
+`ifdef PEER_BACKEND_HOST_STREAM
     for (genvar i = 0; i < N_PEER_AXI; i++) begin
         assign axis_peer_recv[i].tdata = axis_host_recv[N_HOST_STRM_AXI + i].tdata;
         assign axis_peer_recv[i].tkeep = axis_host_recv[N_HOST_STRM_AXI + i].tkeep;
@@ -285,6 +285,19 @@ module tb_user;
         assign axis_host_send[N_HOST_STRM_AXI + i].tid = axis_peer_send[i].tid;
         assign axis_host_send[N_HOST_STRM_AXI + i].tvalid = axis_peer_send[i].tvalid;
         assign axis_peer_send[i].tready = axis_host_send[N_HOST_STRM_AXI + i].tready;
+    end
+`elsif PEER_BACKEND_AURORA_QSFP1
+    // XSim does not model the physical Aurora link. For peer-facing user logic
+    // simulation, model the remote FPGA as a direct peer loopback. This validates
+    // the backend-independent peer contract while full Aurora/QSFP behavior is
+    // left for hardware bring-up.
+    for (genvar i = 0; i < N_PEER_AXI; i++) begin
+        assign axis_peer_recv[i].tdata = axis_peer_send[i].tdata;
+        assign axis_peer_recv[i].tkeep = axis_peer_send[i].tkeep;
+        assign axis_peer_recv[i].tlast = axis_peer_send[i].tlast;
+        assign axis_peer_recv[i].tid = axis_peer_send[i].tid;
+        assign axis_peer_recv[i].tvalid = axis_peer_send[i].tvalid;
+        assign axis_peer_send[i].tready = axis_peer_recv[i].tready;
     end
 `else
     initial $fatal(1, "EN_PEER simulation requires a supported peer backend model.");

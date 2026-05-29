@@ -17,7 +17,8 @@ if {$cfg(peer_backend) eq "aurora_qsfp1"} {
         # the IP itself is configured generically here.
         create_ip -name aurora_64b66b -vendor xilinx.com -library ip \
             -module_name aurora_loopback_ip
-        # SupportLevel=0  -> include shared logic (QPLL, init) in the core
+        # SupportLevel=1  -> include shared logic (QPLL, init) in the core.
+        # SupportLevel=0 in Vivado 2023.2 exposes external QPLL/user clocks.
         # drp_mode=Native is the no-AXI4-Lite DRP option in Vivado 2023.2.
         set_property -dict [list \
             CONFIG.C_AURORA_LANES       {4} \
@@ -26,7 +27,7 @@ if {$cfg(peer_backend) eq "aurora_qsfp1"} {
             CONFIG.C_INIT_CLK           {100.0} \
             CONFIG.dataflow_config      {Duplex} \
             CONFIG.interface_mode       {Framing} \
-            CONFIG.SupportLevel         {0} \
+            CONFIG.SupportLevel         {1} \
             CONFIG.drp_mode             {Native} \
         ] [get_ips aurora_loopback_ip]
     }
