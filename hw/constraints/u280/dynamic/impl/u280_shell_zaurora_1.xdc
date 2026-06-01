@@ -42,7 +42,13 @@ set_property PACKAGE_PIN A49 [get_ports {gt1_txp_out[3]}]
 # GTYE4_CHANNEL LOCs in the PCIe/XDMA quad (X1Y0..X1Y3). Override those LOCs
 # after the IP XDC is read so the Aurora GTs land on the U280 QSFP1 group used
 # by Coyote's gt1_* top-level pins.
-set_property LOC GTYE4_CHANNEL_X0Y44 [get_cells -hierarchical -quiet -filter {NAME =~ *inst_aurora*gen_channel_container[24].*gen_gtye4_channel_inst[0].GTYE4_CHANNEL_PRIM_INST}]
-set_property LOC GTYE4_CHANNEL_X0Y45 [get_cells -hierarchical -quiet -filter {NAME =~ *inst_aurora*gen_channel_container[24].*gen_gtye4_channel_inst[1].GTYE4_CHANNEL_PRIM_INST}]
-set_property LOC GTYE4_CHANNEL_X0Y46 [get_cells -hierarchical -quiet -filter {NAME =~ *inst_aurora*gen_channel_container[24].*gen_gtye4_channel_inst[2].GTYE4_CHANNEL_PRIM_INST}]
-set_property LOC GTYE4_CHANNEL_X0Y47 [get_cells -hierarchical -quiet -filter {NAME =~ *inst_aurora*gen_channel_container[24].*gen_gtye4_channel_inst[3].GTYE4_CHANNEL_PRIM_INST}]
+# The Aurora generated channel instance indices are reversed relative to the
+# gt1_* top-level lane numbering after PACKAGE_PIN placement on U280 bank 135:
+#   gt1_*[0] -> channel instance [3] -> X0Y44
+#   gt1_*[1] -> channel instance [2] -> X0Y45
+#   gt1_*[2] -> channel instance [1] -> X0Y46
+#   gt1_*[3] -> channel instance [0] -> X0Y47
+set_property LOC GTYE4_CHANNEL_X0Y44 [get_cells -hierarchical -quiet -filter {NAME =~ *inst_aurora*gen_channel_container[24].*gen_gtye4_channel_inst[3].GTYE4_CHANNEL_PRIM_INST}]
+set_property LOC GTYE4_CHANNEL_X0Y45 [get_cells -hierarchical -quiet -filter {NAME =~ *inst_aurora*gen_channel_container[24].*gen_gtye4_channel_inst[2].GTYE4_CHANNEL_PRIM_INST}]
+set_property LOC GTYE4_CHANNEL_X0Y46 [get_cells -hierarchical -quiet -filter {NAME =~ *inst_aurora*gen_channel_container[24].*gen_gtye4_channel_inst[1].GTYE4_CHANNEL_PRIM_INST}]
+set_property LOC GTYE4_CHANNEL_X0Y47 [get_cells -hierarchical -quiet -filter {NAME =~ *inst_aurora*gen_channel_container[24].*gen_gtye4_channel_inst[0].GTYE4_CHANNEL_PRIM_INST}]
