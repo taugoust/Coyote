@@ -34,6 +34,26 @@ set_property PACKAGE_PIN E48 [get_ports {gt1_txp_out[1]}]
 set_property PACKAGE_PIN C48 [get_ports {gt1_txp_out[2]}]
 set_property PACKAGE_PIN A49 [get_ports {gt1_txp_out[3]}]
 
+# Be explicit about port LOC too. The generated Aurora GT XDC initially ties
+# the transceiver shape to PCIe sites X1Y0..X1Y3; setting only PACKAGE_PIN is
+# not enough to clear all restored physical port placement in the linked DCP.
+set_property LOC G54 [get_ports {gt1_rxn_in[0]}]
+set_property LOC F52 [get_ports {gt1_rxn_in[1]}]
+set_property LOC E54 [get_ports {gt1_rxn_in[2]}]
+set_property LOC D52 [get_ports {gt1_rxn_in[3]}]
+set_property LOC G53 [get_ports {gt1_rxp_in[0]}]
+set_property LOC F51 [get_ports {gt1_rxp_in[1]}]
+set_property LOC E53 [get_ports {gt1_rxp_in[2]}]
+set_property LOC D51 [get_ports {gt1_rxp_in[3]}]
+set_property LOC G49 [get_ports {gt1_txn_out[0]}]
+set_property LOC E49 [get_ports {gt1_txn_out[1]}]
+set_property LOC C49 [get_ports {gt1_txn_out[2]}]
+set_property LOC A50 [get_ports {gt1_txn_out[3]}]
+set_property LOC G48 [get_ports {gt1_txp_out[0]}]
+set_property LOC E48 [get_ports {gt1_txp_out[1]}]
+set_property LOC C48 [get_ports {gt1_txp_out[2]}]
+set_property LOC A49 [get_ports {gt1_txp_out[3]}]
+
 # Note: the Aurora IP defines its own create_clock on the MGTREFCLK input via
 # its packaged XDC (period 6.206 ns = 1/161.1328125 MHz). We do NOT redefine
 # it here — doing so would conflict with the IP's internal constraint.
