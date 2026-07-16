@@ -33,6 +33,10 @@ unset ::env(PYTHONHOME)
 
 source "${CMAKE_BINARY_DIR}/base.tcl"
 
+set external_dynamic_service_sources [list ${EXTERNAL_DYNAMIC_SERVICE_SOURCES_TCL}]
+set external_dynamic_service_include_dirs [list ${EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS_TCL}]
+set external_dynamic_service_init_tcl [lindex [list ${EXTERNAL_DYNAMIC_SERVICE_INIT_TCL_TCL}] 0]
+
 ${APPS_ALL}
 
 # This hardcodes the use of vFPGA configuration 0 region 0
@@ -103,6 +107,24 @@ set files [list \
 ]
 add_files -fileset $obj $files
 
+if {$cfg(sim_external_dynamic_service) eq 1} {
+    add_files -norecurse -fileset $obj [file normalize "$sim_build_dir/dynamic_service_sim.sv"]
+    add_files -norecurse -fileset $obj $external_dynamic_service_sources
+    if {[llength $external_dynamic_service_include_dirs] > 0} {
+        set_property include_dirs \
+            [concat [get_property include_dirs $obj] $external_dynamic_service_include_dirs] \
+            $obj
+    }
+    # tb_user is held in sources_1 while XSim options are collected from
+    # sim_1. Set the selector on both filesets so project and packaged-runtime
+    # compilation take the same service-aware branch.
+    foreach define_fileset [list $obj [get_filesets sim_1]] {
+        set sim_defines [get_property verilog_define $define_fileset]
+        lappend sim_defines COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE
+        set_property verilog_define $sim_defines $define_fileset
+    }
+}
+
 foreach src_dir $src_dirs {
     if {[file exists "${CMAKE_SOURCE_DIR}/$src_dir/hdl"]} {
         add_files -fileset $obj [file normalize "${CMAKE_SOURCE_DIR}/$src_dir/hdl"]
@@ -135,6 +157,9 @@ set_property -name {XELAB.MORE_OPTIONS} -value $xelab_options -object [get_files
 
 # User infrastructure
 source "$scripts_dir/ip_inst/common_infrastructure.tcl" -notrace
+if {$cfg(sim_external_dynamic_service) eq 1 && $external_dynamic_service_init_tcl ne ""} {
+    source $external_dynamic_service_init_tcl
+}
 
 puts "**** Sim sources set"
 puts "****"

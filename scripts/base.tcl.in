@@ -177,6 +177,14 @@ set cfg(en_xterm)               ${EN_XTERM}
 set cfg(sim_clock_period)       ${SIM_CLOCK_PERIOD}
 set cfg(data_dest_bits)         ${DATA_DEST_BITS}
 set cfg(vaddr_bits)             ${VADDR_BITS}
+set cfg(app_interface_version)  ${COYOTE_APP_INTERFACE_VERSION}
+set cfg(axi_data_bits)          ${COYOTE_AXI_DATA_BITS}
+set cfg(en_external_dynamic_service) ${EN_EXTERNAL_DYNAMIC_SERVICE}
+set cfg(external_dynamic_service_name) ${EXTERNAL_DYNAMIC_SERVICE_NAME}
+set cfg(external_dynamic_service_top) ${EXTERNAL_DYNAMIC_SERVICE_TOP}
+set cfg(external_dynamic_service_abi) ${EXTERNAL_DYNAMIC_SERVICE_ABI}
+set cfg(external_dynamic_service_interface_version) ${EXTERNAL_DYNAMIC_SERVICE_INTERFACE_VERSION}
+set cfg(sim_external_dynamic_service) ${SIM_EXTERNAL_DYNAMIC_SERVICE}
 
 ########################################################################################################
 # UTIL

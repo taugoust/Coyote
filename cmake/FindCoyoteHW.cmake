@@ -65,6 +65,7 @@ set(PMTU_BYTES 4096 CACHE STRING "Packetization size [B]")
 set(UNIT_TEST_DIR "${CMAKE_SOURCE_DIR}/unit-tests" CACHE STRING "Path to the unit-test folder.")
 set(SIM_DPI_LIB_NAME "coyote_sim" CACHE STRING "Name of the DPI-C library to link for simulation WITHOUT the '.so' extension.")
 set(SIM_CLOCK_PERIOD "4ns" CACHE STRING "Clock period used in the simulation. Can have one of the following extensions: fs, ps, ns, us, ms, sec")
+set(SIM_EXTERNAL_DYNAMIC_SERVICE 0 CACHE STRING "Include the registered external dynamic service in the integration simulation")
 
 ##
 ## MEMORY & STREAMS
@@ -290,6 +291,21 @@ set(EN_XTERM 1 CACHE STRING "Terminal prints")
 ##
 set(LOAD_APPS 0 CACHE STRING "Load external apps")
 
+# One optional, out-of-tree service can be resident in the dynamic layer.
+# Source paths remain build-only; scalar identity and interface metadata are
+# exported with a routed shell for later BUILD_APP invocations.
+set(COYOTE_APP_INTERFACE_VERSION 1)
+set(COYOTE_AXI_DATA_BITS 512)
+set(EXTERNAL_DYNAMIC_SERVICE_INTERFACE_VERSION 1)
+set(EN_EXTERNAL_DYNAMIC_SERVICE 0)
+set(EXTERNAL_DYNAMIC_SERVICE_REGISTERED 0)
+set(EXTERNAL_DYNAMIC_SERVICE_NAME "none")
+set(EXTERNAL_DYNAMIC_SERVICE_TOP "none")
+set(EXTERNAL_DYNAMIC_SERVICE_ABI "none")
+set(EXTERNAL_DYNAMIC_SERVICE_SOURCES "")
+set(EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS "")
+set(EXTERNAL_DYNAMIC_SERVICE_INIT_TCL "")
+
 ############################################
 ##        SOFTWARE DEPENDENCIES           ##
 ############################################
@@ -311,6 +327,125 @@ function(period_calc expr out)
     execute_process(COMMAND awk "BEGIN {printf ${expr}}" OUTPUT_VARIABLE __out)
     set(${out} ${__out} PARENT_SCOPE)
 endfunction()
+
+# Convert paths to a Tcl list whose elements remain intact in generated scripts.
+function(_coyote_paths_to_tcl out_var)
+    set(result "")
+    foreach(path IN LISTS ARGN)
+        string(REPLACE "\\" "\\\\" escaped "${path}")
+        string(REPLACE "\"" "\\\"" escaped "${escaped}")
+        string(REPLACE "$" "\\$" escaped "${escaped}")
+        string(REPLACE "[" "\\[" escaped "${escaped}")
+        string(REPLACE "]" "\\]" escaped "${escaped}")
+        set(result "${result} \"${escaped}\"")
+    endforeach()
+    set(${out_var} "${result}" PARENT_SCOPE)
+endfunction()
+
+# Register one optional out-of-tree service in the dynamic layer. Relative paths
+# are resolved at the call site so Nix store paths and source overlays work alike.
+function(register_dynamic_service)
+    if(BUILD_APP)
+        message(FATAL_ERROR "register_dynamic_service() is only valid for shell/static builds; BUILD_APP imports service metadata from SHELL_PATH")
+    endif()
+    if(EN_EXTERNAL_DYNAMIC_SERVICE)
+        message(FATAL_ERROR "Only one external dynamic service can be registered")
+    endif()
+
+    cmake_parse_arguments(
+        "SERVICE"
+        ""
+        "NAME;TOP;ABI;INIT_TCL"
+        "SOURCES;INCLUDE_DIRS"
+        ${ARGN}
+    )
+
+    if(SERVICE_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "Unknown register_dynamic_service() arguments: ${SERVICE_UNPARSED_ARGUMENTS}")
+    endif()
+    foreach(required NAME TOP ABI)
+        if(NOT DEFINED SERVICE_${required} OR SERVICE_${required} STREQUAL "")
+            message(FATAL_ERROR "register_dynamic_service() requires ${required}")
+        endif()
+    endforeach()
+    if(NOT SERVICE_SOURCES)
+        message(FATAL_ERROR "register_dynamic_service() requires at least one RTL source")
+    endif()
+
+    if(NOT SERVICE_NAME MATCHES "^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
+        message(FATAL_ERROR "Dynamic service NAME must contain only letters, digits, '.', '_', '+', or '-'")
+    endif()
+    if(NOT SERVICE_TOP MATCHES "^[A-Za-z_][A-Za-z0-9_]*$")
+        # Keep the identifier safe for both generated SystemVerilog and the
+        # scalar Tcl configuration consumed by write_hdl.py.
+        message(FATAL_ERROR "Dynamic service TOP must be a simple SystemVerilog module identifier")
+    endif()
+    if(NOT SERVICE_ABI MATCHES "^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
+        message(FATAL_ERROR "Dynamic service ABI must contain only letters, digits, '.', '_', '+', or '-'")
+    endif()
+
+    set(normalized_sources "")
+    foreach(path IN LISTS SERVICE_SOURCES)
+        get_filename_component(path_abs "${path}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(NOT EXISTS "${path_abs}" OR IS_DIRECTORY "${path_abs}")
+            message(FATAL_ERROR "Dynamic service RTL source does not exist or is not a file: ${path_abs}")
+        endif()
+        list(APPEND normalized_sources "${path_abs}")
+    endforeach()
+    list(REMOVE_DUPLICATES normalized_sources)
+
+    set(normalized_include_dirs "")
+    foreach(path IN LISTS SERVICE_INCLUDE_DIRS)
+        get_filename_component(path_abs "${path}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(NOT IS_DIRECTORY "${path_abs}")
+            message(FATAL_ERROR "Dynamic service include directory does not exist: ${path_abs}")
+        endif()
+        list(APPEND normalized_include_dirs "${path_abs}")
+    endforeach()
+    list(REMOVE_DUPLICATES normalized_include_dirs)
+
+    set(init_tcl "")
+    if(DEFINED SERVICE_INIT_TCL AND NOT SERVICE_INIT_TCL STREQUAL "")
+        get_filename_component(init_tcl "${SERVICE_INIT_TCL}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(NOT EXISTS "${init_tcl}" OR IS_DIRECTORY "${init_tcl}")
+            message(FATAL_ERROR "Dynamic service INIT_TCL does not exist or is not a file: ${init_tcl}")
+        endif()
+    endif()
+
+    set(EN_EXTERNAL_DYNAMIC_SERVICE 1 PARENT_SCOPE)
+    set(EXTERNAL_DYNAMIC_SERVICE_REGISTERED 1 PARENT_SCOPE)
+    set(EXTERNAL_DYNAMIC_SERVICE_NAME "${SERVICE_NAME}" PARENT_SCOPE)
+    set(EXTERNAL_DYNAMIC_SERVICE_TOP "${SERVICE_TOP}" PARENT_SCOPE)
+    set(EXTERNAL_DYNAMIC_SERVICE_ABI "${SERVICE_ABI}" PARENT_SCOPE)
+    set(EXTERNAL_DYNAMIC_SERVICE_SOURCES "${normalized_sources}" PARENT_SCOPE)
+    set(EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS "${normalized_include_dirs}" PARENT_SCOPE)
+    set(EXTERNAL_DYNAMIC_SERVICE_INIT_TCL "${init_tcl}" PARENT_SCOPE)
+
+    message("** External dynamic service ${SERVICE_NAME} (ABI ${SERVICE_ABI})")
+endfunction()
+
+macro(_validate_external_dynamic_service)
+    if(EN_EXTERNAL_DYNAMIC_SERVICE)
+        if(NOT EN_STRM)
+            message(FATAL_ERROR "External dynamic services require EN_STRM=1")
+        endif()
+        if((BUILD_SHELL OR BUILD_STATIC) AND NOT EXTERNAL_DYNAMIC_SERVICE_REGISTERED)
+            message(FATAL_ERROR "External dynamic services must be configured with register_dynamic_service()")
+        endif()
+    endif()
+
+    if(SIM_EXTERNAL_DYNAMIC_SERVICE)
+        if(BUILD_APP)
+            message(FATAL_ERROR "Service-aware simulation must be created with the shell/static build that owns the service sources")
+        endif()
+        if(NOT EN_EXTERNAL_DYNAMIC_SERVICE OR NOT EXTERNAL_DYNAMIC_SERVICE_REGISTERED)
+            message(FATAL_ERROR "SIM_EXTERNAL_DYNAMIC_SERVICE requires a registered external dynamic service")
+        endif()
+        if(NOT N_REGIONS EQUAL 1 OR NOT N_STRM_AXI EQUAL 1)
+            message(FATAL_ERROR "Service-aware integration simulation currently supports N_REGIONS=1 and N_STRM_AXI=1")
+        endif()
+    endif()
+endmacro()
 
 # Performs base validation checks of configured parmeters and sets the other params
 macro(validation_checks_hw)
@@ -795,6 +930,7 @@ macro(validation_checks_hw)
 
     endif()
 
+    _validate_external_dynamic_service()
 endmacro()
 
 # Load applications
@@ -877,6 +1013,10 @@ endmacro()
 
 # Generate templated scripts, from the parameters configured here
 macro(gen_scripts)
+    _coyote_paths_to_tcl(EXTERNAL_DYNAMIC_SERVICE_SOURCES_TCL ${EXTERNAL_DYNAMIC_SERVICE_SOURCES})
+    _coyote_paths_to_tcl(EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS_TCL ${EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS})
+    _coyote_paths_to_tcl(EXTERNAL_DYNAMIC_SERVICE_INIT_TCL_TCL ${EXTERNAL_DYNAMIC_SERVICE_INIT_TCL})
+
     # Python
     configure_file(${CYT_DIR}/scripts/cr_prjcts/write_hdl.py.in ${CMAKE_BINARY_DIR}/write_hdl.py)
     configure_file(${CYT_DIR}/scripts/impl/fix_bif.py.in ${CMAKE_BINARY_DIR}/fix_bif.py)
@@ -950,25 +1090,39 @@ macro(gen_dep_lists)
         # The synthesised checkpoints and the vFPGA floorplans are linked and routed for each configuration
         # More details can be found in gen_targets and the script flow_dyn_versal.tcl
         if(BUILD_SHELL AND FPGA_ARCH STREQUAL "ultrascale_plus")
-            set(DEP_DCP_LIST_COMP ${CMAKE_BINARY_DIR}/checkpoints/shell_subdivided.dcp)
-        else()
-            set(DEP_DCP_LIST_COMP  ${SHELL_PATH}/checkpoints/shell_routed_locked.dcp)
+            # pnr_shell.tcl owns shell_routed.dcp; flow_dyn.tcl subsequently
+            # subdivides it and owns shell_subdivided.dcp.
+            set(DEP_DCP_LIST_COMP ${CMAKE_BINARY_DIR}/checkpoints/shell_routed.dcp)
+        elseif(BUILD_APP)
+            set(DEP_DCP_LIST_COMP ${SHELL_PATH}/checkpoints/shell_routed_locked.dcp)
             foreach(i RANGE ${NN_CONFIG})
                 foreach(j RANGE ${NN_REGIONS})
                     list(APPEND DEP_DCP_LIST_COMP ${CMAKE_BINARY_DIR}/checkpoints/config_${i}/user_synthed_c${i}_${j}.dcp)
-                endforeach() 
+                endforeach()
             endforeach()
+        else()
+            set(DEP_DCP_LIST_COMP "")
         endif()
     else()
         set(DEP_DCP_LIST_COMP ${CMAKE_BINARY_DIR}/checkpoints/shell_routed.dcp)
     endif()
 
     # Dynamic
-    # Same comments as above --- nested DFX not supported, hence pr_recombine is not supported on Versal devices
-    if(BUILD_SHELL AND FPGA_ARCH STREQUAL "ultrascale_plus")
-        set(DEP_DCP_LIST_DYN ${CMAKE_BINARY_DIR}/checkpoints/shell_recombined.dcp)
-    else()
-        set(DEP_DCP_LIST_DYN "")
+    # Declare every shell artifact owned by the dynamic flow, including the
+    # locked checkpoint exported to later BUILD_APP invocations.
+    set(DEP_DCP_LIST_DYN "")
+    if(BUILD_SHELL)
+        if(FPGA_ARCH STREQUAL "ultrascale_plus")
+            list(APPEND DEP_DCP_LIST_DYN
+                ${CMAKE_BINARY_DIR}/checkpoints/shell_subdivided.dcp
+                ${CMAKE_BINARY_DIR}/checkpoints/shell_recombined.dcp
+            )
+        else()
+            # Versal does not support subdivision/recombination; its dynamic
+            # flow routes the complete shell around the application RPs.
+            list(APPEND DEP_DCP_LIST_DYN ${CMAKE_BINARY_DIR}/checkpoints/shell_routed.dcp)
+        endif()
+        list(APPEND DEP_DCP_LIST_DYN ${CMAKE_BINARY_DIR}/checkpoints/shell_routed_locked.dcp)
     endif()
     foreach(i RANGE ${NN_CONFIG})
         list(APPEND DEP_DCP_LIST_DYN ${CMAKE_BINARY_DIR}/checkpoints/config_${i}/shell_routed_c${i}.dcp)
@@ -992,17 +1146,31 @@ macro(gen_dep_lists)
             set(DEP_DCP_LIST_BGEN  "")
         endif()
         if(EN_PR)
-            if (FPGA_ARCH STREQUAL "ultrascale_plus")
+            # PR bitgen writes deployable artifacts under bitstreams/. App-only
+            # builds intentionally declare no full-shell output.
+            set(DEP_DCP_LIST_BGEN "")
+            if(BUILD_SHELL)
+                if(FPGA_ARCH STREQUAL "ultrascale_plus")
+                    list(APPEND DEP_DCP_LIST_BGEN
+                        ${CMAKE_BINARY_DIR}/bitstreams/shell_top.bin
+                        ${CMAKE_BINARY_DIR}/bitstreams/cyt_top.bit
+                    )
+                else()
+                    list(APPEND DEP_DCP_LIST_BGEN ${CMAKE_BINARY_DIR}/bitstreams/cyt_top.pdi)
+                endif()
+            endif()
+
+            if(FPGA_ARCH STREQUAL "ultrascale_plus")
                 foreach(i RANGE ${NN_CONFIG})
                     foreach(j RANGE ${NN_REGIONS})
-                        list(APPEND DEP_DCP_LIST_BGEN ${CMAKE_BINARY_DIR}/bitstreams/config_${i}/vfpga_c${i}_${j}.bit)
-                    endforeach()    
+                        list(APPEND DEP_DCP_LIST_BGEN ${CMAKE_BINARY_DIR}/bitstreams/config_${i}/vfpga_c${i}_${j}.bin)
+                    endforeach()
                 endforeach()
             else()
                 foreach(i RANGE ${NN_CONFIG})
                     foreach(j RANGE ${NN_REGIONS})
                         list(APPEND DEP_DCP_LIST_BGEN ${CMAKE_BINARY_DIR}/bitstreams/config_${i}/vfpga_c${i}_${j}.pdi)
-                    endforeach()    
+                    endforeach()
                 endforeach()
             endif()
         endif()
@@ -1174,7 +1342,6 @@ macro(gen_targets)
         )
 
         if(BUILD_APP)
-            # TODO (Versal): Add support for app build flow
             add_custom_command(
                 OUTPUT ${DEP_DCP_LIST_DYN}
                 ${APP_CMD}
@@ -1214,6 +1381,7 @@ endmacro()
 
 # Create build
 macro(create_hw)
+    _validate_external_dynamic_service()
     gen_scripts()
     gen_targets()
 

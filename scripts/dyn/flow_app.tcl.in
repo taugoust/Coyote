@@ -71,7 +71,12 @@ for {set i 0}  {$i < $cfg(n_config)} {incr i} {
     write_checkpoint -force "$dcp_dir/config_$i/shell_opted_c$i.dcp"
 
     if {$cfg(build_opt) eq 1} {
-        place_design -directive Auto_1
+        # Auto_1 is unavailable on supported Versal tool versions.
+        if {$cfg(fpga_arch) eq "versal"} {
+            place_design -directive AggressiveExplore
+        } else {
+            place_design -directive Auto_1
+        }
     } else {
         place_design
     }

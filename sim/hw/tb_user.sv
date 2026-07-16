@@ -114,6 +114,53 @@ module tb_user;
     AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_recv[N_STRM_AXI](.*);
     AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_send[N_STRM_AXI](.*);
 
+`ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE
+    // The existing direct-user simulator exposes routed streams. For the
+    // single-region/single-stream integration mode, adapt stream zero to the
+    // aggregate host-stream cut used by the resident dynamic service.
+    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_recv_user[N_STRM_AXI](.*);
+    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_send_user[N_STRM_AXI](.*);
+    AXI4S axis_host_in_shell[N_REGIONS](.*);
+    AXI4S axis_host_in_user[N_REGIONS](.*);
+    AXI4S axis_host_out_user[N_REGIONS](.*);
+    AXI4S axis_host_out_shell[N_REGIONS](.*);
+
+    assign axis_host_in_shell[0].tdata = axis_host_recv[0].tdata;
+    assign axis_host_in_shell[0].tkeep = axis_host_recv[0].tkeep;
+    assign axis_host_in_shell[0].tlast = axis_host_recv[0].tlast;
+    assign axis_host_in_shell[0].tvalid = axis_host_recv[0].tvalid;
+    assign axis_host_recv[0].tready = axis_host_in_shell[0].tready;
+
+    assign axis_host_recv_user[0].tdata = axis_host_in_user[0].tdata;
+    assign axis_host_recv_user[0].tkeep = axis_host_in_user[0].tkeep;
+    assign axis_host_recv_user[0].tlast = axis_host_in_user[0].tlast;
+    assign axis_host_recv_user[0].tvalid = axis_host_in_user[0].tvalid;
+    assign axis_host_recv_user[0].tid = '0;
+    assign axis_host_in_user[0].tready = axis_host_recv_user[0].tready;
+
+    assign axis_host_out_user[0].tdata = axis_host_send_user[0].tdata;
+    assign axis_host_out_user[0].tkeep = axis_host_send_user[0].tkeep;
+    assign axis_host_out_user[0].tlast = axis_host_send_user[0].tlast;
+    assign axis_host_out_user[0].tvalid = axis_host_send_user[0].tvalid;
+    assign axis_host_send_user[0].tready = axis_host_out_user[0].tready;
+
+    assign axis_host_send[0].tdata = axis_host_out_shell[0].tdata;
+    assign axis_host_send[0].tkeep = axis_host_out_shell[0].tkeep;
+    assign axis_host_send[0].tlast = axis_host_out_shell[0].tlast;
+    assign axis_host_send[0].tvalid = axis_host_out_shell[0].tvalid;
+    assign axis_host_send[0].tid = '0;
+    assign axis_host_out_shell[0].tready = axis_host_send[0].tready;
+
+    design_dynamic_service_sim inst_dynamic_service (
+        .s_axis_host_in(axis_host_in_shell),
+        .m_axis_host_in(axis_host_in_user),
+        .s_axis_host_out(axis_host_out_user),
+        .m_axis_host_out(axis_host_out_shell),
+        .aclk(aclk),
+        .aresetn(aresetn)
+    );
+`endif
+
     c_axisr host_recv_drv[N_STRM_AXI];
     c_axisr host_send_drv[N_STRM_AXI];
 
@@ -170,8 +217,13 @@ module tb_user;
         .rq_wr(rq_wr),
     `endif
     `ifdef EN_STRM
+        `ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE
+        .axis_host_recv(axis_host_recv_user),
+        .axis_host_send(axis_host_send_user),
+        `else
         .axis_host_recv(axis_host_recv),
         .axis_host_send(axis_host_send),
+        `endif
     `endif
     `ifdef EN_MEM
         .axis_card_recv(axis_card_recv),
