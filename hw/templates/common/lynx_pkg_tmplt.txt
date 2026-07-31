@@ -360,6 +360,12 @@ package lynxTypes;
     
     localparam integer STAT_PROBE = {{ cnfg.stat_probe }};
     localparam integer SHELL_PROBE = {{ cnfg.shell_probe }};
+    localparam integer EXTERNAL_SERVICE_CONTROL_ENABLED = {{ cnfg.en_external_dynamic_service_control }};
+    localparam integer EXTERNAL_SERVICE_CONTROL_INTERFACE_VERSION = {{ cnfg.external_dynamic_service_control_interface_version }};
+    localparam integer EXTERNAL_SERVICE_CONTROL_BASE = {{ cnfg.external_dynamic_service_control_base }};
+    localparam integer EXTERNAL_SERVICE_CONTROL_BYTES = {{ cnfg.external_dynamic_service_control_bytes }};
+    localparam integer EXTERNAL_SERVICE_CONTROL_ADDR_BITS = {{ cnfg.external_dynamic_service_control_addr_bits }};
+    localparam integer EXTERNAL_SERVICE_CONTROL_DATA_BITS = {{ cnfg.external_dynamic_service_control_data_bits }};
     
     localparam integer N_REGIONS = {{ cnfg.n_reg }};
     localparam integer N_REGIONS_BITS = clog2s({{ cnfg.n_reg }});

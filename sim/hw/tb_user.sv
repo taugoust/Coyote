@@ -124,6 +124,9 @@ module tb_user;
     AXI4S axis_host_in_user[N_REGIONS](.*);
     AXI4S axis_host_out_user[N_REGIONS](.*);
     AXI4S axis_host_out_shell[N_REGIONS](.*);
+    AXI4L service_ctrl(.*);
+
+    initial service_ctrl.tie_off_m();
 
     assign axis_host_in_shell[0].tdata = axis_host_recv[0].tdata;
     assign axis_host_in_shell[0].tkeep = axis_host_recv[0].tkeep;
@@ -156,6 +159,7 @@ module tb_user;
         .m_axis_host_in(axis_host_in_user),
         .s_axis_host_out(axis_host_out_user),
         .m_axis_host_out(axis_host_out_shell),
+        .s_axi_ctrl(service_ctrl),
         .aclk(aclk),
         .aresetn(aresetn)
     );

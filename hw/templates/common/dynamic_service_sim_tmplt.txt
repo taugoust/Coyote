@@ -35,11 +35,15 @@ module design_dynamic_service_sim (
     AXI4S.m                     m_axis_host_in [N_REGIONS],
     AXI4S.s                     s_axis_host_out [N_REGIONS],
     AXI4S.m                     m_axis_host_out [N_REGIONS],
+    AXI4L.s                     s_axi_ctrl,
     input logic                 aclk,
     input logic                 aresetn
 );
 
     {{ cnfg.external_dynamic_service_top }} inst_external_dynamic_service (
+{% if cnfg.en_external_dynamic_service_control %}
+        .s_axi_ctrl(s_axi_ctrl),
+{% endif %}
         .aclk(aclk),
         .aresetn(aresetn),
         .s_axis_host_in(s_axis_host_in),
@@ -47,5 +51,9 @@ module design_dynamic_service_sim (
         .s_axis_host_out(s_axis_host_out),
         .m_axis_host_out(m_axis_host_out)
     );
+
+{% if not cnfg.en_external_dynamic_service_control %}
+    always_comb s_axi_ctrl.tie_off_s();
+{% endif %}
 
 endmodule

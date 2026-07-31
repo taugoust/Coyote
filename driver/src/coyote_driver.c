@@ -49,8 +49,13 @@ bool en_hmm = false;
 module_param(en_hmm, bool, 0000);
 MODULE_PARM_DESC(en_hmm, "Enable HMM");
 
-// Include the DMA Buffer mechanism to enable peer-to-peer DMA transfers between FPGAs and GPUs
+// Include the DMA Buffer mechanism to enable peer-to-peer DMA transfers between FPGAs and GPUs.
+// Linux 6.13 changed MODULE_IMPORT_NS to take a string literal.
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+MODULE_IMPORT_NS("DMA_BUF");
+#else
 MODULE_IMPORT_NS(DMA_BUF);
+#endif
 
 static int __init coyote_init(void) {
     pr_info("Loading Coyote PCIe driver...\n");

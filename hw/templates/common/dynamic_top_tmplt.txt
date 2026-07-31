@@ -36,6 +36,10 @@ module design_dynamic_top #(
 ) (
     // AXI4 Lite control
     AXI4L.s                                     s_axi_ctrl [N_REGIONS],
+{% if cnfg.en_external_dynamic_service_control %}
+    // Optional resident-service control (already in the service clock domain)
+    AXI4L.s                                     s_axi_service_ctrl,
+{% endif %}
     
 {% if cnfg.en_avx %}
     // AXI4 AVX control
@@ -313,6 +317,9 @@ module design_dynamic_top #(
     AXI4S axis_host_out_service [N_REGIONS] ();
 
     {{ cnfg.external_dynamic_service_top }} inst_external_dynamic_service (
+{% if cnfg.en_external_dynamic_service_control %}
+        .s_axi_ctrl(s_axi_service_ctrl),
+{% endif %}
 {% if cnfg.en_uclk %}
         .aclk(uclk),
         .aresetn(uresetn),

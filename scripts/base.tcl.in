@@ -184,6 +184,13 @@ set cfg(external_dynamic_service_name) ${EXTERNAL_DYNAMIC_SERVICE_NAME}
 set cfg(external_dynamic_service_top) ${EXTERNAL_DYNAMIC_SERVICE_TOP}
 set cfg(external_dynamic_service_abi) ${EXTERNAL_DYNAMIC_SERVICE_ABI}
 set cfg(external_dynamic_service_interface_version) ${EXTERNAL_DYNAMIC_SERVICE_INTERFACE_VERSION}
+set cfg(en_external_dynamic_service_control) ${EN_EXTERNAL_DYNAMIC_SERVICE_CONTROL}
+set cfg(external_dynamic_service_control_abi) ${EXTERNAL_DYNAMIC_SERVICE_CONTROL_ABI}
+set cfg(external_dynamic_service_control_interface_version) ${EXTERNAL_DYNAMIC_SERVICE_CONTROL_INTERFACE_VERSION}
+set cfg(external_dynamic_service_control_base) ${EXTERNAL_DYNAMIC_SERVICE_CONTROL_BASE}
+set cfg(external_dynamic_service_control_bytes) ${EXTERNAL_DYNAMIC_SERVICE_CONTROL_BYTES}
+set cfg(external_dynamic_service_control_addr_bits) ${EXTERNAL_DYNAMIC_SERVICE_CONTROL_ADDR_BITS}
+set cfg(external_dynamic_service_control_data_bits) ${EXTERNAL_DYNAMIC_SERVICE_CONTROL_DATA_BITS}
 set cfg(sim_external_dynamic_service) ${SIM_EXTERNAL_DYNAMIC_SERVICE}
 
 ########################################################################################################

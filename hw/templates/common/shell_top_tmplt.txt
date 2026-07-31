@@ -418,6 +418,11 @@ module shell_top (
     AXI4 s_axi_main();
     `AXI_ASSIGN_S2I(s_axi_main, s_axi_main)    
     AXI4L axi_cnfg ();
+{% if cnfg.en_external_dynamic_service_control %}
+    AXI4L axi_cnfg_shell ();
+    AXI4L axi_service_ctrl_aclk ();
+    AXI4L axi_service_ctrl ();
+{% endif %}
     AXI4L axi_ctrl [N_REGIONS] ();
     AXI4 #(.AXI4_DATA_BITS(AVX_DATA_BITS)) axim_ctrl [N_REGIONS] ();
     
@@ -700,6 +705,33 @@ module shell_top (
 {% endif %}
 {% endif %}
 
+{% if cnfg.en_external_dynamic_service_control %}
+    axil_address_splitter #(
+        .SHELL_BYTES(1024),
+        .SERVICE_BASE({{ cnfg.external_dynamic_service_control_base }}),
+        .SERVICE_BYTES({{ cnfg.external_dynamic_service_control_bytes }})
+    ) inst_shell_control_splitter (
+        .aclk(aclk),
+        .aresetn(aresetn),
+        .s_axi(axi_cnfg),
+        .m_axi_shell(axi_cnfg_shell),
+        .m_axi_service(axi_service_ctrl_aclk)
+    );
+
+{% if cnfg.en_uclk %}
+    axil_ccross inst_service_control_ccross (
+        .s_aclk(aclk),
+        .s_aresetn(aresetn),
+        .m_aclk(uclk),
+        .m_aresetn(uresetn),
+        .s_axi(axi_service_ctrl_aclk),
+        .m_axi(axi_service_ctrl)
+    );
+{% else %}
+    `AXIL_ASSIGN(axi_service_ctrl_aclk, axi_service_ctrl)
+{% endif %}
+{% endif %}
+
     shell_slave inst_shell_slave (
         .aclk(aclk),
         .aresetn(aresetn),
@@ -725,7 +757,11 @@ module shell_top (
   {% endif %}
 {% endif %}
         .m_decouple(decouple),
+{% if cnfg.en_external_dynamic_service_control %}
+        .s_axi_ctrl(axi_cnfg_shell)
+{% else %}
         .s_axi_ctrl(axi_cnfg)
+{% endif %}
     );
 
 {% if cnfg.en_net %}
@@ -1479,6 +1515,9 @@ module shell_top (
 
     design_dynamic_top inst_dynamic (
         .s_axi_ctrl(axi_ctrl[0+:{{ cnfg.n_reg }}]),
+{% if cnfg.en_external_dynamic_service_control %}
+        .s_axi_service_ctrl(axi_service_ctrl),
+{% endif %}
 {% if cnfg.en_avx %}
         .s_axim_ctrl(axim_ctrl[0+:{{ cnfg.n_reg }}]),
 {% endif %}

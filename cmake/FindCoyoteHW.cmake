@@ -297,11 +297,18 @@ set(LOAD_APPS 0 CACHE STRING "Load external apps")
 set(COYOTE_APP_INTERFACE_VERSION 1)
 set(COYOTE_AXI_DATA_BITS 512)
 set(EXTERNAL_DYNAMIC_SERVICE_INTERFACE_VERSION 1)
+set(EXTERNAL_DYNAMIC_SERVICE_CONTROL_INTERFACE_VERSION 1)
+set(EXTERNAL_DYNAMIC_SERVICE_CONTROL_BASE 4096)
+set(EXTERNAL_DYNAMIC_SERVICE_CONTROL_BYTES 4096)
+set(EXTERNAL_DYNAMIC_SERVICE_CONTROL_ADDR_BITS 12)
+set(EXTERNAL_DYNAMIC_SERVICE_CONTROL_DATA_BITS 64)
 set(EN_EXTERNAL_DYNAMIC_SERVICE 0)
+set(EN_EXTERNAL_DYNAMIC_SERVICE_CONTROL 0)
 set(EXTERNAL_DYNAMIC_SERVICE_REGISTERED 0)
 set(EXTERNAL_DYNAMIC_SERVICE_NAME "none")
 set(EXTERNAL_DYNAMIC_SERVICE_TOP "none")
 set(EXTERNAL_DYNAMIC_SERVICE_ABI "none")
+set(EXTERNAL_DYNAMIC_SERVICE_CONTROL_ABI "none")
 set(EXTERNAL_DYNAMIC_SERVICE_SOURCES "")
 set(EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS "")
 set(EXTERNAL_DYNAMIC_SERVICE_INIT_TCL "")
@@ -355,7 +362,7 @@ function(register_dynamic_service)
     cmake_parse_arguments(
         "SERVICE"
         ""
-        "NAME;TOP;ABI;INIT_TCL"
+        "NAME;TOP;ABI;CONTROL_ABI;INIT_TCL"
         "SOURCES;INCLUDE_DIRS"
         ${ARGN}
     )
@@ -382,6 +389,10 @@ function(register_dynamic_service)
     endif()
     if(NOT SERVICE_ABI MATCHES "^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
         message(FATAL_ERROR "Dynamic service ABI must contain only letters, digits, '.', '_', '+', or '-'")
+    endif()
+    if(DEFINED SERVICE_CONTROL_ABI AND NOT SERVICE_CONTROL_ABI STREQUAL "" AND
+       NOT SERVICE_CONTROL_ABI MATCHES "^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
+        message(FATAL_ERROR "Dynamic service CONTROL_ABI must contain only letters, digits, '.', '_', '+', or '-'")
     endif()
 
     set(normalized_sources "")
@@ -412,19 +423,53 @@ function(register_dynamic_service)
         endif()
     endif()
 
+    set(control_enabled 0)
+    set(control_abi "none")
+    if(DEFINED SERVICE_CONTROL_ABI AND NOT SERVICE_CONTROL_ABI STREQUAL "")
+        set(control_enabled 1)
+        set(control_abi "${SERVICE_CONTROL_ABI}")
+    endif()
+
     set(EN_EXTERNAL_DYNAMIC_SERVICE 1 PARENT_SCOPE)
+    set(EN_EXTERNAL_DYNAMIC_SERVICE_CONTROL ${control_enabled} PARENT_SCOPE)
     set(EXTERNAL_DYNAMIC_SERVICE_REGISTERED 1 PARENT_SCOPE)
     set(EXTERNAL_DYNAMIC_SERVICE_NAME "${SERVICE_NAME}" PARENT_SCOPE)
     set(EXTERNAL_DYNAMIC_SERVICE_TOP "${SERVICE_TOP}" PARENT_SCOPE)
     set(EXTERNAL_DYNAMIC_SERVICE_ABI "${SERVICE_ABI}" PARENT_SCOPE)
+    set(EXTERNAL_DYNAMIC_SERVICE_CONTROL_ABI "${control_abi}" PARENT_SCOPE)
     set(EXTERNAL_DYNAMIC_SERVICE_SOURCES "${normalized_sources}" PARENT_SCOPE)
     set(EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS "${normalized_include_dirs}" PARENT_SCOPE)
     set(EXTERNAL_DYNAMIC_SERVICE_INIT_TCL "${init_tcl}" PARENT_SCOPE)
 
-    message("** External dynamic service ${SERVICE_NAME} (ABI ${SERVICE_ABI})")
+    if(control_enabled)
+        message("** External dynamic service ${SERVICE_NAME} (ABI ${SERVICE_ABI}, control ABI ${control_abi})")
+    else()
+        message("** External dynamic service ${SERVICE_NAME} (ABI ${SERVICE_ABI}, stream-only)")
+    endif()
 endfunction()
 
 macro(_validate_external_dynamic_service)
+    if(EN_EXTERNAL_DYNAMIC_SERVICE_CONTROL AND NOT EN_EXTERNAL_DYNAMIC_SERVICE)
+        message(FATAL_ERROR "External dynamic service control requires an external dynamic service")
+    endif()
+    if(EN_EXTERNAL_DYNAMIC_SERVICE_CONTROL)
+        foreach(required EXTERNAL_DYNAMIC_SERVICE_CONTROL_ABI EXTERNAL_DYNAMIC_SERVICE_CONTROL_INTERFACE_VERSION EXTERNAL_DYNAMIC_SERVICE_CONTROL_BASE EXTERNAL_DYNAMIC_SERVICE_CONTROL_BYTES EXTERNAL_DYNAMIC_SERVICE_CONTROL_ADDR_BITS EXTERNAL_DYNAMIC_SERVICE_CONTROL_DATA_BITS)
+            if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
+                message(FATAL_ERROR "External dynamic service control is missing ${required}")
+            endif()
+        endforeach()
+        if(EXTERNAL_DYNAMIC_SERVICE_CONTROL_ABI STREQUAL "none")
+            message(FATAL_ERROR "External dynamic service control requires a non-empty CONTROL_ABI")
+        endif()
+        if(NOT EXTERNAL_DYNAMIC_SERVICE_CONTROL_INTERFACE_VERSION EQUAL 1 OR
+           NOT EXTERNAL_DYNAMIC_SERVICE_CONTROL_BASE EQUAL 4096 OR
+           NOT EXTERNAL_DYNAMIC_SERVICE_CONTROL_BYTES EQUAL 4096 OR
+           NOT EXTERNAL_DYNAMIC_SERVICE_CONTROL_ADDR_BITS EQUAL 12 OR
+           NOT EXTERNAL_DYNAMIC_SERVICE_CONTROL_DATA_BITS EQUAL 64)
+            message(FATAL_ERROR "Unsupported external dynamic service control interface dimensions")
+        endif()
+    endif()
+
     if(EN_EXTERNAL_DYNAMIC_SERVICE)
         if(NOT EN_STRM)
             message(FATAL_ERROR "External dynamic services require EN_STRM=1")

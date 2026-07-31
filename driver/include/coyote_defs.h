@@ -77,6 +77,7 @@
 #include <asm/page.h>
 #include <linux/migrate.h>
 #include <linux/uaccess.h>
+#include <linux/capability.h>
 #include <linux/dma-buf.h>
 #include <linux/dma-direct.h>
 #include <linux/dma-resv.h>
@@ -415,6 +416,24 @@ extern bool en_hmm;
 #define IOCTL_SET_NOTIFICATION_PROCESSED _IOR('F', 18, unsigned long)
 #define IOCTL_GET_NOTIFICATION_VALUE _IOR('F', 19, unsigned long)
 
+// Generic resident-service control batches. Offsets are relative to the
+// advertised service window; bit zero of flags selects a write operation.
+#define SERVICE_CTRL_INTERFACE_VERSION 1
+#define SERVICE_CTRL_MAX_OPS 64
+#define SERVICE_CTRL_OP_WRITE 0x1
+
+struct cyt_service_ctrl_op {
+    uint32_t offset;
+    uint32_t flags;
+    uint64_t value;
+} __packed;
+
+struct cyt_service_ctrl_batch {
+    uint32_t interface_version;
+    uint32_t count;
+    struct cyt_service_ctrl_op ops[SERVICE_CTRL_MAX_OPS];
+} __packed;
+
 // Reconfiguration IOCTL calls; see reconfig_ops.c for more details
 #define IOCTL_ALLOC_HOST_RECONFIG_MEM _IOW('P', 1, unsigned long)
 #define IOCTL_FREE_HOST_RECONFIG_MEM _IOW('P', 2, unsigned long) 
@@ -422,6 +441,7 @@ extern bool en_hmm;
 #define IOCTL_RECONFIGURE_SHELL _IOW('P', 4, unsigned long)
 #define IOCTL_PR_CNFG _IOR('P', 5, unsigned long)
 #define IOCTL_PR_WB_STATS _IOR('P', 6, unsigned long)
+#define IOCTL_SERVICE_CTRL_BATCH _IOWR('P', 7, struct cyt_service_ctrl_batch)
 
 // Sizes of hash tables
 #define USER_HASH_TABLE_ORDER 8
@@ -550,7 +570,9 @@ struct cyt_shell_cnfg_regs {
     uint64_t tcp_cnfg; 
     uint64_t reconfig_dcpl_app_set;
     uint64_t reconfig_dcpl_app_clr;
-    uint64_t reserved_0[21];
+    uint64_t service_ctrl_cnfg;
+    uint64_t service_ctrl_base;
+    uint64_t reserved_0[19];
     uint64_t net_ip;
     uint64_t net_mac; 
     uint64_t tcp_offs; 
