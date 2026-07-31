@@ -125,6 +125,9 @@ module tb_user;
     AXI4S axis_host_out_user[N_REGIONS](.*);
     AXI4S axis_host_out_shell[N_REGIONS](.*);
     AXI4L service_ctrl(.*);
+`ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_SLOT_STATUS
+    logic [N_REGIONS-1:0] slot_decoupled = '0;
+`endif
 
     initial service_ctrl.tie_off_m();
 
@@ -154,12 +157,28 @@ module tb_user;
     assign axis_host_send[0].tid = '0;
     assign axis_host_out_shell[0].tready = axis_host_send[0].tready;
 
+    for (genvar region = 1; region < N_REGIONS; region++) begin
+        assign axis_host_in_shell[region].tdata = '0;
+        assign axis_host_in_shell[region].tkeep = '0;
+        assign axis_host_in_shell[region].tlast = 1'b0;
+        assign axis_host_in_shell[region].tvalid = 1'b0;
+        assign axis_host_in_user[region].tready = 1'b1;
+        assign axis_host_out_user[region].tdata = '0;
+        assign axis_host_out_user[region].tkeep = '0;
+        assign axis_host_out_user[region].tlast = 1'b0;
+        assign axis_host_out_user[region].tvalid = 1'b0;
+        assign axis_host_out_shell[region].tready = 1'b1;
+    end
+
     design_dynamic_service_sim inst_dynamic_service (
         .s_axis_host_in(axis_host_in_shell),
         .m_axis_host_in(axis_host_in_user),
         .s_axis_host_out(axis_host_out_user),
         .m_axis_host_out(axis_host_out_shell),
         .s_axi_ctrl(service_ctrl),
+`ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_SLOT_STATUS
+        .s_slot_decoupled(slot_decoupled),
+`endif
         .aclk(aclk),
         .aresetn(aresetn)
     );

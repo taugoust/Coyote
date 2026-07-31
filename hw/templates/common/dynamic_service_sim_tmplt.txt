@@ -36,6 +36,9 @@ module design_dynamic_service_sim (
     AXI4S.s                     s_axis_host_out [N_REGIONS],
     AXI4S.m                     m_axis_host_out [N_REGIONS],
     AXI4L.s                     s_axi_ctrl,
+{% if cnfg.en_external_dynamic_service_slot_status %}
+    input logic [N_REGIONS-1:0] s_slot_decoupled,
+{% endif %}
     input logic                 aclk,
     input logic                 aresetn
 );
@@ -43,6 +46,9 @@ module design_dynamic_service_sim (
     {{ cnfg.external_dynamic_service_top }} inst_external_dynamic_service (
 {% if cnfg.en_external_dynamic_service_control %}
         .s_axi_ctrl(s_axi_ctrl),
+{% endif %}
+{% if cnfg.en_external_dynamic_service_slot_status %}
+        .s_slot_decoupled(s_slot_decoupled),
 {% endif %}
         .aclk(aclk),
         .aresetn(aresetn),

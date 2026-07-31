@@ -320,6 +320,9 @@ module design_dynamic_top #(
 {% if cnfg.en_external_dynamic_service_control %}
         .s_axi_ctrl(s_axi_service_ctrl),
 {% endif %}
+{% if cnfg.en_external_dynamic_service_slot_status %}
+        .s_slot_decoupled(decouple_uclk),
+{% endif %}
 {% if cnfg.en_uclk %}
         .aclk(uclk),
         .aresetn(uresetn),

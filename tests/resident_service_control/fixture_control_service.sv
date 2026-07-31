@@ -10,6 +10,7 @@ module fixture_control_service (
     AXI4S.m m_axis_host_in [N_REGIONS],
     AXI4S.s s_axis_host_out [N_REGIONS],
     AXI4S.m m_axis_host_out [N_REGIONS],
+    input logic [N_REGIONS-1:0] s_slot_decoupled,
     input logic aclk,
     input logic aresetn
 );

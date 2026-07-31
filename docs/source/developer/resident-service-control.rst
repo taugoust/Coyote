@@ -28,6 +28,30 @@ When the service clock differs from the shell AXI-Lite clock, Coyote inserts the
 clock-domain crossing. Stream-only registrations retain their previous module
 contract.
 
+Optional per-region slot status
+-------------------------------
+
+A resident service that manages application lifecycle may request the generic
+``SLOT_STATUS`` registration option::
+
+   register_dynamic_service(
+       NAME example-service
+       TOP example_service
+       ABI example-stream-v1
+       SLOT_STATUS
+       SOURCES example_service.sv
+   )
+
+The registered top then receives ``input logic [N_REGIONS-1:0]
+s_slot_decoupled`` in the same clock domain as its stream ports. Each bit is
+the synchronized physical application-decoupler state for the corresponding
+Coyote region. Coyote assigns no availability, health, endpoint, or generation
+semantics to this vector; those remain service policy. Services that omit the
+option retain their previous module contract.
+
+The shell export records both ``N_REGIONS`` and whether slot status is present.
+Application builds import those values from the exact shell export.
+
 Discovery and compatibility
 ---------------------------
 
