@@ -138,6 +138,7 @@ module coprocessor_port_gateway_tb;
     logic [MMIO_ADDR_BITS-1:0] app_awaddr;
     logic [MMIO_DATA_BITS-1:0] app_wdata;
     logic [MMIO_DATA_BITS-1:0] app_registers [0:15];
+    logic [31:0] backpressure_lfsr;
 
     assign application_mmio_awready = app_allow_aw && !app_aw_seen;
     assign application_mmio_wready = app_allow_w && !app_w_seen;
@@ -240,6 +241,40 @@ module coprocessor_port_gateway_tb;
             provider_send_tlast[expected_provider] !== last) begin
             $fatal(1, "application packet routed incorrectly");
         end
+    endtask
+
+    task automatic send_application_backpressured(
+        input logic [STREAM_DATA_BITS-1:0] data,
+        input logic last,
+        input integer expected_provider
+    );
+        integer stall_cycles;
+        @(negedge aclk);
+        provider_send_tready[expected_provider] = 1'b0;
+        application_send_tdata = data;
+        application_send_tkeep = '1;
+        application_send_tid = 4'h6;
+        application_send_tlast = last;
+        application_send_tvalid = 1'b1;
+        do @(posedge aclk); while (!application_send_tready);
+        @(negedge aclk);
+        application_send_tvalid = 1'b0;
+        stall_cycles = 0;
+        while (provider_send_tvalid[expected_provider]) begin
+            if (provider_send_tdata[expected_provider] !== data ||
+                provider_send_tlast[expected_provider] !== last ||
+                provider_send_tid[expected_provider] !== 4'h6) begin
+                $fatal(1, "backpressured packet changed or reordered");
+            end
+            backpressure_lfsr = {backpressure_lfsr[30:0],
+                                 backpressure_lfsr[31] ^ backpressure_lfsr[21] ^
+                                 backpressure_lfsr[1] ^ backpressure_lfsr[0]};
+            provider_send_tready[expected_provider] = backpressure_lfsr[0] || stall_cycles == 7;
+            stall_cycles = stall_cycles + 1;
+            @(posedge aclk);
+            @(negedge aclk);
+        end
+        provider_send_tready[expected_provider] = 1'b1;
     endtask
 
     task automatic send_provider_beat(
@@ -351,6 +386,7 @@ module coprocessor_port_gateway_tb;
         application_send_tvalid = 1'b0;
         application_recv_tready = 1'b1;
         provider_send_tready = '1;
+        backpressure_lfsr = 32'h1ace_b00c;
         provider_recv_tdata = '0;
         provider_recv_tkeep = '0;
         provider_recv_tid = '0;
@@ -416,6 +452,15 @@ module coprocessor_port_gateway_tb;
             $fatal(1, "R5-like provider binding invalid");
         end
 
+        for (integer packet = 0; packet < 12; packet = packet + 1) begin
+            for (integer beat = 0; beat < (packet % 4) + 1; beat = beat + 1) begin
+                send_application_backpressured(
+                    64'h1000_0000 + STREAM_DATA_BITS'(packet * 16 + beat),
+                    beat == (packet % 4),
+                    0);
+            end
+        end
+
         send_application_beat(64'h100, 1'b0, 0);
         issue_command(3'd2, 0, 8'd1, 0, 4'd0);
         if (binding_state != 2) begin
@@ -430,6 +475,14 @@ module coprocessor_port_gateway_tb;
         issue_command(3'd1, 8'd2, 0, 8'd1, 4'd0);
         if (binding_generation != 2 || provider_selected != 2'b10) begin
             $fatal(1, "A72-like provider binding invalid");
+        end
+        for (integer packet = 0; packet < 12; packet = packet + 1) begin
+            for (integer beat = 0; beat < (packet % 4) + 1; beat = beat + 1) begin
+                send_application_backpressured(
+                    64'h1000_0000 + STREAM_DATA_BITS'(packet * 16 + beat),
+                    beat == (packet % 4),
+                    1);
+            end
         end
 
         send_provider_beat(0, 8'd1, 64'hdead, 1'b1, 1'b0);
