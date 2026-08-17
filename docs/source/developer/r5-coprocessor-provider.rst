@@ -20,7 +20,8 @@ R5 reaches the backend through a 64-KiB window at ``0x80010000``. The static
 block design converts CIPS ``M_AXI_LPD`` to 32-bit AXI-Lite and exports it
 across the static/shell boundary. A second shell clock converter moves the
 register path from the static ``xclk`` domain to the co-processor gateway's
-``aclk`` domain.
+``aclk`` domain. Both crossings use Versal-supported SmartConnect CDC rather
+than the unsupported discrete AXI Clock Converter IP.
 
 The shell-resident backend owns four complete-packet slots in each direction.
 Packets contain one to 64 canonical beats and retain every ``tdata``, ``tkeep``,

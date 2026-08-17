@@ -66,11 +66,13 @@ if {[catch {
         }
         require_equal "R5 interconnect outputs" \
             [get_property CONFIG.NUM_MI [get_bd_cells r5_scratch_interconnect]] 2
+        require_equal "provider CDC clock count" \
+            [get_property CONFIG.NUM_CLKS [get_bd_cells r5_provider_clock_converter]] 2
         require_equal "provider source clock" \
-            [get_bd_nets -of_objects [get_bd_pins r5_provider_clock_converter/s_axi_aclk]] \
+            [get_bd_nets -of_objects [get_bd_pins r5_provider_clock_converter/aclk]] \
             [get_bd_nets -of_objects [get_bd_pins versal_cips_0/pl0_ref_clk]]
         require_equal "provider destination clock" \
-            [get_bd_nets -of_objects [get_bd_pins r5_provider_clock_converter/m_axi_aclk]] \
+            [get_bd_nets -of_objects [get_bd_pins r5_provider_clock_converter/aclk1]] \
             [get_bd_nets -of_objects [get_bd_pins clk_wiz_0/clk_out1]]
         set provider_segments [get_bd_addr_segs -quiet -of_objects $lpd_space -filter {NAME =~ "*SEG_r5_provider_Reg"}]
         if {[llength $provider_segments] ne 1} {

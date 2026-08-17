@@ -59,11 +59,6 @@ proc cr_bd_design_static { parentCell } {
         xilinx.com:ip:axi_bram_ctrl:4.1\
         xilinx.com:ip:emb_mem_gen:1.0\
       "
-      if {$r5_provider_enabled} {
-        append list_check_ips " \
-          xilinx.com:ip:axi_clock_converter:2.1\
-        "
-      }
     }
 
     set list_ips_missing ""
@@ -425,11 +420,14 @@ proc cr_bd_design_static { parentCell } {
     set_property CONFIG.NUM_SI {1} $r5_scratch_interconnect
     set_property CONFIG.NUM_MI [expr {$r5_provider_enabled ? 2 : 1}] $r5_scratch_interconnect
     if {$r5_provider_enabled} {
-      set r5_provider_clock_converter [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_clock_converter:2.1 r5_provider_clock_converter ]
+      # Versal does not support the discrete AXI Clock Converter IP. Use the
+      # architecture's supported two-clock SmartConnect CDC, keeping width and
+      # protocol conversion at the AXI-Lite external boundary.
+      set r5_provider_clock_converter [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 r5_provider_clock_converter ]
       set_property -dict [list \
-        CONFIG.ADDR_WIDTH {32} \
-        CONFIG.DATA_WIDTH {32} \
-        CONFIG.PROTOCOL {AXI4LITE} \
+        CONFIG.NUM_SI {1} \
+        CONFIG.NUM_MI {1} \
+        CONFIG.NUM_CLKS {2} \
       ] $r5_provider_clock_converter
     }
     set r5_scratch_ctrl [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 r5_scratch_ctrl ]
@@ -624,8 +622,8 @@ proc cr_bd_design_static { parentCell } {
     connect_bd_intf_net [get_bd_intf_pins r5_scratch_interconnect/M00_AXI] [get_bd_intf_pins r5_scratch_ctrl/S_AXI]
     connect_bd_intf_net [get_bd_intf_pins r5_scratch_ctrl/BRAM_PORTA] [get_bd_intf_pins r5_scratch_mem/BRAM_PORTA]
     if {$r5_provider_enabled} {
-      connect_bd_intf_net [get_bd_intf_pins r5_scratch_interconnect/M01_AXI] [get_bd_intf_pins r5_provider_clock_converter/S_AXI]
-      connect_bd_intf_net [get_bd_intf_pins r5_provider_clock_converter/M_AXI] [get_bd_intf_ports r5_provider]
+      connect_bd_intf_net [get_bd_intf_pins r5_scratch_interconnect/M01_AXI] [get_bd_intf_pins r5_provider_clock_converter/S00_AXI]
+      connect_bd_intf_net [get_bd_intf_pins r5_provider_clock_converter/M00_AXI] [get_bd_intf_ports r5_provider]
     }
   }
 ########################################################################################################
@@ -684,10 +682,9 @@ proc cr_bd_design_static { parentCell } {
     connect_bd_net [get_bd_pins proc_sys_reset_r5/peripheral_aresetn] [get_bd_pins r5_scratch_interconnect/aresetn]
     connect_bd_net [get_bd_pins proc_sys_reset_r5/peripheral_aresetn] [get_bd_pins r5_scratch_ctrl/s_axi_aresetn]
     if {$r5_provider_enabled} {
-      connect_bd_net [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins r5_provider_clock_converter/s_axi_aclk]
-      connect_bd_net [get_bd_pins proc_sys_reset_r5/peripheral_aresetn] [get_bd_pins r5_provider_clock_converter/s_axi_aresetn]
-      connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins r5_provider_clock_converter/m_axi_aclk]
-      connect_bd_net [get_bd_pins proc_sys_reset_x/peripheral_aresetn] [get_bd_pins r5_provider_clock_converter/m_axi_aresetn]
+      connect_bd_net [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins r5_provider_clock_converter/aclk]
+      connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins r5_provider_clock_converter/aclk1]
+      connect_bd_net [get_bd_pins proc_sys_reset_r5/peripheral_aresetn] [get_bd_pins r5_provider_clock_converter/aresetn]
     }
   }
   
