@@ -8,6 +8,7 @@ Developer Guide
 
    resident-service-control
    coprocessor-ports
+   v80-r5-platform
 
 Contributing
 -----------------------

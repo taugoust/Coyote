@@ -209,6 +209,20 @@ set(SCLK_F 250 CACHE STRING "Static layer clock frequency")
 # Additionally, using PCIe Gen5x8 leaves room for one more QDMA core at Gen5x8, therefore up to 64 Gb/s
 set(PCIE_GEN 4 CACHE STRING "Versal PCIe configuration: Gen4x16 or Gen5x8")
 
+# Enable the V80 R5-0 hardware-platform slice in the persistent static layer.
+# This only exposes the processor and a bounded LPD scratch target; it does not
+# register R5 as a logical co-processor provider.
+set(EN_V80_R5_PLATFORM 0 CACHE STRING "Enable the V80 R5-0 static platform")
+set(V80_R5_PROCESSOR "psv_cortexr5_0")
+set(V80_R5_LPD_DATA_BITS 32)
+set(V80_R5_LPD_CLOCK_HZ 33333333)
+set(V80_R5_SCRATCH_BASE 2147483648) # 0x80000000
+set(V80_R5_SCRATCH_BYTES 4096)
+set(V80_R5_ATCM_BASE 0)
+set(V80_R5_ATCM_BYTES 65536)
+set(V80_R5_BTCM_BASE 131072) # 0x00020000
+set(V80_R5_BTCM_BYTES 65536)
+
 # Clock uncertainty for HLS synthesis; default 27% since HLS estimates can be different from the actual PnR
 # Therefore, HLS synthesis should always be performed conservatively, with a higher clock uncertainty
 set(HLS_CLOCK_UNCERTAINTY "27" CACHE STRING "HLS synthesis clock uncertainty [%]")
@@ -703,6 +717,21 @@ macro(validation_checks_hw)
 
     if(NOT NN EQUAL 1)
         message(FATAL_ERROR "Choose one build flow.")
+    endif()
+
+    if(NOT EN_V80_R5_PLATFORM MATCHES "^[01]$")
+        message(FATAL_ERROR "EN_V80_R5_PLATFORM must be 0 or 1")
+    endif()
+    if(EN_V80_R5_PLATFORM)
+        if(NOT FDEV_NAME STREQUAL "v80")
+            message(FATAL_ERROR "The R5 hardware platform is available only on V80")
+        endif()
+        if(NOT BUILD_STATIC)
+            message(FATAL_ERROR "The R5 hardware platform changes CIPS and requires BUILD_STATIC=1")
+        endif()
+        if(EN_PR)
+            message(FATAL_ERROR "Static R5 platform builds do not support EN_PR=1")
+        endif()
     endif()
 
     if(BUILD_SHELL OR BUILD_STATIC)
@@ -1300,8 +1329,14 @@ macro(gen_scripts)
     configure_file(${CYT_DIR}/scripts/cr_prjcts/write_hdl.py.in ${CMAKE_BINARY_DIR}/write_hdl.py)
     configure_file(${CYT_DIR}/scripts/impl/fix_bif.py.in ${CMAKE_BINARY_DIR}/fix_bif.py)
 
-    # Base script
+    # Base script. Keep disabled generation byte-equivalent by appending the
+    # processor-platform fragment only when the static R5 option is enabled.
     configure_file(${CYT_DIR}/scripts/base.tcl.in ${CMAKE_BINARY_DIR}/base.tcl)
+    if(EN_V80_R5_PLATFORM)
+        configure_file(${CYT_DIR}/scripts/v80-r5-platform-base.tcl.in ${CMAKE_BINARY_DIR}/v80-r5-platform-base.tcl)
+        file(READ ${CMAKE_BINARY_DIR}/v80-r5-platform-base.tcl v80_r5_platform_base)
+        file(APPEND ${CMAKE_BINARY_DIR}/base.tcl "\n${v80_r5_platform_base}")
+    endif()
 
     # HLS & SpinalHDL scripts
     configure_file(${CYT_DIR}/scripts/apps/comp_hls.tcl.in ${CMAKE_BINARY_DIR}/comp_hls.tcl)
@@ -1326,6 +1361,10 @@ macro(gen_scripts)
 
     # Place-and-Route scripts
     configure_file(${CYT_DIR}/scripts/impl/pnr_shell.tcl.in ${CMAKE_BINARY_DIR}/pnr_shell.tcl)
+    if(EN_V80_R5_PLATFORM)
+        configure_file(${CYT_DIR}/scripts/impl/export_platform.tcl.in ${CMAKE_BINARY_DIR}/export_platform.tcl)
+        configure_file(${CYT_DIR}/scripts/checks/check_v80_r5_platform.tcl.in ${CMAKE_BINARY_DIR}/check_v80_r5_platform.tcl)
+    endif()
 
     # Dynamic and app scripts
     if (FPGA_ARCH STREQUAL "versal")
@@ -1347,6 +1386,11 @@ macro(gen_scripts)
         configure_file(${CYT_DIR}/scripts/coprocessor-export.cmake.in ${CMAKE_BINARY_DIR}/coprocessor-export.cmake)
         file(READ ${CMAKE_BINARY_DIR}/coprocessor-export.cmake coprocessor_export)
         file(APPEND ${CMAKE_BINARY_DIR}/export.cmake "\n${coprocessor_export}")
+    endif()
+    if(EN_V80_R5_PLATFORM)
+        configure_file(${CYT_DIR}/scripts/v80-r5-platform-export.cmake.in ${CMAKE_BINARY_DIR}/v80-r5-platform-export.cmake)
+        file(READ ${CMAKE_BINARY_DIR}/v80-r5-platform-export.cmake v80_r5_platform_export)
+        file(APPEND ${CMAKE_BINARY_DIR}/export.cmake "\n${v80_r5_platform_export}")
     endif()
 endmacro()
 
@@ -1497,6 +1541,10 @@ macro(gen_targets)
     set(APP_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/flow_app.tcl -notrace)
     
     set(BGEN_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/bitgen.tcl -notrace)
+    if(EN_V80_R5_PLATFORM)
+        set(PLATFORM_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/export_platform.tcl -notrace)
+        set(PLATFORM_CHECK_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/check_v80_r5_platform.tcl -notrace)
+    endif()
 
     # Dependencies
     gen_dep_lists()
@@ -1607,6 +1655,20 @@ macro(gen_targets)
                 DEPENDS ${DEP_DCP_LIST_LINK}
             )
         endif()
+    endif()
+
+    # Fixed hardware platform
+    # -----------------------------------
+    if(EN_V80_R5_PLATFORM)
+        set(V80_R5_PLATFORM_XSA ${CMAKE_BINARY_DIR}/platform/cyt_top.xsa)
+        add_custom_target(platform-design-check ${PLATFORM_CHECK_CMD})
+        add_dependencies(platform-design-check project)
+        add_custom_target(platform DEPENDS ${V80_R5_PLATFORM_XSA})
+        add_custom_command(
+            OUTPUT ${V80_R5_PLATFORM_XSA}
+            ${PLATFORM_CMD}
+            DEPENDS ${CMAKE_BINARY_DIR}/checkpoints/shell_routed.dcp
+        )
     endif()
 
     # Bitgen
