@@ -206,8 +206,12 @@ proc cr_bd_design_static { parentCell } {
 
   # Main clock
   set xclk [ create_bd_port -dir O -type clk xclk ]
+  set xclk_busifs {m_axis_h2c:s_axis_c2h:axi_cnfg:axi_main:axi_debug_hub}
+  if {$r5_provider_enabled} {
+    append xclk_busifs {:r5_provider}
+  }
   set_property -dict [ list \
-    CONFIG.ASSOCIATED_BUSIF {m_axis_h2c:s_axis_c2h:axi_cnfg:axi_main:axi_debug_hub} \
+    CONFIG.ASSOCIATED_BUSIF $xclk_busifs \
     CONFIG.ASSOCIATED_RESET {xresetn:sresetn:eos_resetn} \
   ] $xclk
 

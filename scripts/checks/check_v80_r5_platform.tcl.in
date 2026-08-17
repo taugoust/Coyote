@@ -68,6 +68,10 @@ if {[catch {
             [get_property CONFIG.NUM_MI [get_bd_cells r5_scratch_interconnect]] 2
         require_equal "provider CDC clock count" \
             [get_property CONFIG.NUM_CLKS [get_bd_cells r5_provider_clock_converter]] 2
+        set xclk_busifs [split [get_property CONFIG.ASSOCIATED_BUSIF [get_bd_ports xclk]] {:}]
+        if {[lsearch -exact $xclk_busifs r5_provider] < 0} {
+            error "R5 provider external interface is not associated with xclk"
+        }
         require_equal "provider source clock" \
             [get_bd_nets -of_objects [get_bd_pins r5_provider_clock_converter/aclk]] \
             [get_bd_nets -of_objects [get_bd_pins versal_cips_0/pl0_ref_clk]]
