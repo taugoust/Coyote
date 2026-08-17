@@ -130,6 +130,9 @@ if {$cfg(fpga_arch) eq "ultrascale_plus"} {
     }
 
     create_axil_clock_converter_bd_versal axil_clock_converter 64 64
+    if {[info exists cfg(en_v80_r5_provider)] && $cfg(en_v80_r5_provider) eq 1} {
+        create_axil_clock_converter_bd_versal axil_clock_converter_32 32 32
+    }
 } else {
     puts "ERROR: Unsupported FPGA architecture: $cfg(fpga_arch)"
     exit 1

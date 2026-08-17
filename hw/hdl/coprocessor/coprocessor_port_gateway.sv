@@ -440,9 +440,12 @@ module coprocessor_port_gateway #(
                                       1'b1 : application_send_tvalid;
         end
 
+        // A provider may have several complete responses committed before the
+        // quiesce fence. Let those packets start and drain while quiescing;
+        // provider_idle remains low until the backend has fenced new commits
+        // and emptied its pre-fence queue.
         if (selected_valid && !binding_fault_event && !application_decoupled &&
-            (binding_state == STATE_READY ||
-             (binding_state == STATE_QUIESCING && provider_recv_open)) &&
+            (binding_state == STATE_READY || binding_state == STATE_QUIESCING) &&
             !recv_buffer_valid &&
             provider_recv_generation[selected_index] ==
                 (provider_recv_open ? provider_packet_generation : binding_generation)) begin

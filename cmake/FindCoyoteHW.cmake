@@ -223,6 +223,17 @@ set(V80_R5_ATCM_BYTES 65536)
 set(V80_R5_BTCM_BASE 131072) # 0x00020000
 set(V80_R5_BTCM_BYTES 65536)
 
+# Bind the V80 R5-0 platform to one processor-neutral logical port through the
+# shell-resident bounded polling backend. Static and shell builds must enable
+# this independently so their checkpoint boundary is identical.
+set(EN_V80_R5_PROVIDER 0 CACHE STRING "Enable the V80 R5-0 co-processor provider")
+set(V80_R5_PROVIDER_BASE 2147549184) # 0x80010000
+set(V80_R5_PROVIDER_BYTES 65536)
+set(V80_R5_PROVIDER_QUEUE_DEPTH 4)
+set(V80_R5_PROVIDER_ENDPOINT_ID 1)
+set(V80_R5_PROVIDER_RUNTIME_ABI "baremetal")
+set(V80_R5_PROVIDER_FIRMWARE_ABI "coyote-r5-provider-mmio-v1")
+
 # Clock uncertainty for HLS synthesis; default 27% since HLS estimates can be different from the actual PnR
 # Therefore, HLS synthesis should always be performed conservatively, with a higher clock uncertainty
 set(HLS_CLOCK_UNCERTAINTY "27" CACHE STRING "HLS synthesis clock uncertainty [%]")
@@ -731,6 +742,30 @@ macro(validation_checks_hw)
         endif()
         if(EN_PR)
             message(FATAL_ERROR "Static R5 platform builds do not support EN_PR=1")
+        endif()
+    endif()
+
+    if(NOT EN_V80_R5_PROVIDER MATCHES "^[01]$")
+        message(FATAL_ERROR "EN_V80_R5_PROVIDER must be 0 or 1")
+    endif()
+    if(EN_V80_R5_PROVIDER)
+        if(NOT FDEV_NAME STREQUAL "v80")
+            message(FATAL_ERROR "The R5 co-processor provider is available only on V80")
+        endif()
+        if(BUILD_APP)
+            message(FATAL_ERROR "Applications request logical co-processor ports; EN_V80_R5_PROVIDER belongs to static/shell builds")
+        endif()
+        if(BUILD_STATIC AND NOT EN_V80_R5_PLATFORM)
+            message(FATAL_ERROR "Static R5 provider builds require EN_V80_R5_PLATFORM=1")
+        endif()
+        if(NOT N_REGIONS EQUAL 1 OR NOT N_COPROCESSOR_PORTS EQUAL 1)
+            message(FATAL_ERROR "The initial R5 provider requires one region and one logical co-processor port")
+        endif()
+        if(EN_UCLK)
+            message(FATAL_ERROR "The initial R5 provider requires EN_UCLK=0 so its logical interfaces share the shell clock")
+        endif()
+        if(NOT COPROCESSOR_PROVIDER_COUNT EQUAL 1)
+            message(FATAL_ERROR "The initial R5 provider requires exactly one registered endpoint descriptor")
         endif()
     endif()
 

@@ -55,6 +55,31 @@ if {[catch {
     require_equal "scratch offset" [get_property OFFSET $scratch_segments] 0x80000000
     require_equal "scratch range" [get_property RANGE $scratch_segments] 0x00001000
 
+    if {$cfg(en_v80_r5_provider) eq 1} {
+        foreach cell {r5_provider_clock_converter} {
+            if {[llength [get_bd_cells -quiet $cell]] ne 1} {
+                error "missing static R5 provider cell '$cell'"
+            }
+        }
+        if {[llength [get_bd_intf_ports -quiet r5_provider]] ne 1} {
+            error "missing exported R5 provider AXI-Lite interface"
+        }
+        require_equal "R5 interconnect outputs" \
+            [get_property CONFIG.NUM_MI [get_bd_cells r5_scratch_interconnect]] 2
+        require_equal "provider source clock" \
+            [get_bd_nets -of_objects [get_bd_pins r5_provider_clock_converter/s_axi_aclk]] \
+            [get_bd_nets -of_objects [get_bd_pins versal_cips_0/pl0_ref_clk]]
+        require_equal "provider destination clock" \
+            [get_bd_nets -of_objects [get_bd_pins r5_provider_clock_converter/m_axi_aclk]] \
+            [get_bd_nets -of_objects [get_bd_pins clk_wiz_0/clk_out1]]
+        set provider_segments [get_bd_addr_segs -quiet -of_objects $lpd_space -filter {NAME =~ "*SEG_r5_provider_Reg"}]
+        if {[llength $provider_segments] ne 1} {
+            error "expected exactly one R5 provider address segment"
+        }
+        require_equal "provider offset" [get_property OFFSET $provider_segments] 0x80010000
+        require_equal "provider range" [get_property RANGE $provider_segments] 0x00010000
+    }
+
     puts "V80_R5_PLATFORM_DESIGN_PASS"
     close_project
 } errorstring]} {

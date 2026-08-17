@@ -12,6 +12,7 @@ set(TEST_N_COPROCESSOR_PORTS 1 CACHE STRING "Logical co-processor port count")
 set(TEST_EN_PR 1 CACHE STRING "Enable application partial reconfiguration")
 option(TEST_REGISTER_PROVIDERS "Register mock physical provider descriptors" OFF)
 option(TEST_DUPLICATE_ENDPOINT "Register a duplicate endpoint ID" OFF)
+option(TEST_ENABLE_R5_PROVIDER "Register and instantiate the V80 R5 provider" OFF)
 
 set(EN_STRM 1)
 set(N_STRM_AXI 1)
@@ -32,7 +33,22 @@ else()
     message(FATAL_ERROR "Fixture supports only u280 and v80")
 endif()
 
-if(TEST_REGISTER_PROVIDERS)
+if(TEST_ENABLE_R5_PROVIDER)
+    set(EN_V80_R5_PROVIDER 1)
+    register_coprocessor_provider(
+        NAME v80-r5-0
+        TOP r5_packet_queue_provider
+        ENDPOINT_ID 1
+        PROCESSOR_CLASS r5
+        RUNTIME_ABI baremetal
+        FIRMWARE_ABI coyote-r5-provider-mmio-v1
+        STREAM_ABI 1
+        MMIO_ABI 1
+        SOURCES
+            "${CYT_DIR}/hw/hdl/coprocessor/r5_packet_queue_provider.sv"
+            "${CYT_DIR}/hw/hdl/coprocessor/coprocessor_port_gateway.sv"
+    )
+elseif(TEST_REGISTER_PROVIDERS)
     register_coprocessor_provider(
         NAME mock-r5
         TOP fixture_coprocessor_provider

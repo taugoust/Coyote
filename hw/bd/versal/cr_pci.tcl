@@ -32,6 +32,9 @@ proc cr_bd_design_static { parentCell } {
   set r5_platform_enabled [expr {
     [info exists cnfg(en_v80_r5_platform)] && $cnfg(en_v80_r5_platform) eq 1
   }]
+  set r5_provider_enabled [expr {
+    [info exists cnfg(en_v80_r5_provider)] && $cnfg(en_v80_r5_provider) eq 1
+  }]
 
   common::send_msg_id "BD_TCL-003" "INFO" "Currently there is no design <$design_name> in project, so creating one..."
 
@@ -56,6 +59,11 @@ proc cr_bd_design_static { parentCell } {
         xilinx.com:ip:axi_bram_ctrl:4.1\
         xilinx.com:ip:emb_mem_gen:1.0\
       "
+      if {$r5_provider_enabled} {
+        append list_check_ips " \
+          xilinx.com:ip:axi_clock_converter:2.1\
+        "
+      }
     }
 
     set list_ips_missing ""
@@ -141,6 +149,18 @@ proc cr_bd_design_static { parentCell } {
     CONFIG.DATA_WIDTH {32} \
     CONFIG.PROTOCOL {AXI4LITE} \
   ] $axi_cnfg
+
+  if {$r5_provider_enabled} {
+    # Clock-converted, bounded R5 provider register aperture exported to the
+    # persistent shell. SmartConnect strips full-AXI IDs and bursts.
+    set r5_provider [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 r5_provider ]
+    set_property -dict [ list \
+      CONFIG.ADDR_WIDTH {32} \
+      CONFIG.DATA_WIDTH {32} \
+      CONFIG.PROTOCOL {AXI4LITE} \
+      CONFIG.READ_WRITE_MODE {READ_WRITE} \
+    ] $r5_provider
+  }
 
   # Debug Hub IP control
   set axi_debug_hub [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 axi_debug_hub ]
@@ -403,7 +423,15 @@ proc cr_bd_design_static { parentCell } {
 
     set r5_scratch_interconnect [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 r5_scratch_interconnect ]
     set_property CONFIG.NUM_SI {1} $r5_scratch_interconnect
-    set_property CONFIG.NUM_MI {1} $r5_scratch_interconnect
+    set_property CONFIG.NUM_MI [expr {$r5_provider_enabled ? 2 : 1}] $r5_scratch_interconnect
+    if {$r5_provider_enabled} {
+      set r5_provider_clock_converter [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_clock_converter:2.1 r5_provider_clock_converter ]
+      set_property -dict [list \
+        CONFIG.ADDR_WIDTH {32} \
+        CONFIG.DATA_WIDTH {32} \
+        CONFIG.PROTOCOL {AXI4LITE} \
+      ] $r5_provider_clock_converter
+    }
     set r5_scratch_ctrl [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 r5_scratch_ctrl ]
     set_property -dict [list \
       CONFIG.DATA_WIDTH $cnfg(v80_r5_lpd_data_bits) \
@@ -595,6 +623,10 @@ proc cr_bd_design_static { parentCell } {
     connect_bd_intf_net [get_bd_intf_pins versal_cips_0/M_AXI_LPD] [get_bd_intf_pins r5_scratch_interconnect/S00_AXI]
     connect_bd_intf_net [get_bd_intf_pins r5_scratch_interconnect/M00_AXI] [get_bd_intf_pins r5_scratch_ctrl/S_AXI]
     connect_bd_intf_net [get_bd_intf_pins r5_scratch_ctrl/BRAM_PORTA] [get_bd_intf_pins r5_scratch_mem/BRAM_PORTA]
+    if {$r5_provider_enabled} {
+      connect_bd_intf_net [get_bd_intf_pins r5_scratch_interconnect/M01_AXI] [get_bd_intf_pins r5_provider_clock_converter/S_AXI]
+      connect_bd_intf_net [get_bd_intf_pins r5_provider_clock_converter/M_AXI] [get_bd_intf_ports r5_provider]
+    }
   }
 ########################################################################################################
 # Create port connections
@@ -651,6 +683,12 @@ proc cr_bd_design_static { parentCell } {
     connect_bd_net [get_bd_pins versal_cips_0/pl0_resetn] [get_bd_pins proc_sys_reset_r5/ext_reset_in]
     connect_bd_net [get_bd_pins proc_sys_reset_r5/peripheral_aresetn] [get_bd_pins r5_scratch_interconnect/aresetn]
     connect_bd_net [get_bd_pins proc_sys_reset_r5/peripheral_aresetn] [get_bd_pins r5_scratch_ctrl/s_axi_aresetn]
+    if {$r5_provider_enabled} {
+      connect_bd_net [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins r5_provider_clock_converter/s_axi_aclk]
+      connect_bd_net [get_bd_pins proc_sys_reset_r5/peripheral_aresetn] [get_bd_pins r5_provider_clock_converter/s_axi_aresetn]
+      connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins r5_provider_clock_converter/m_axi_aclk]
+      connect_bd_net [get_bd_pins proc_sys_reset_x/peripheral_aresetn] [get_bd_pins r5_provider_clock_converter/m_axi_aresetn]
+    }
   }
   
   # Main shell clock
@@ -722,6 +760,13 @@ proc cr_bd_design_static { parentCell } {
       -range $cnfg(v80_r5_scratch_bytes) \
       -target_address_space [get_bd_addr_spaces versal_cips_0/M_AXI_LPD] \
       [get_bd_addr_segs r5_scratch_ctrl/S_AXI/Mem0] -force
+    if {$r5_provider_enabled} {
+      assign_bd_address \
+        -offset $cnfg(v80_r5_provider_base) \
+        -range $cnfg(v80_r5_provider_bytes) \
+        -target_address_space [get_bd_addr_spaces versal_cips_0/M_AXI_LPD] \
+        [get_bd_addr_segs r5_provider/Reg] -force
+    }
   }
   
   # Restore current instance
