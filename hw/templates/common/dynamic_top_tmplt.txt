@@ -1119,6 +1119,30 @@ module design_dynamic_top #(
 	// ================-----------------------------------------------------------------
 	// USER 
 	// ================-----------------------------------------------------------------
+{% if cnfg.n_coprocessor_ports > 0 %}
+    AXI4SR #(
+        .AXI4S_DATA_BITS(COPROCESSOR_STREAM_DATA_BITS),
+        .AXI4S_ID_BITS(COPROCESSOR_STREAM_ID_BITS)
+    ) axis_coprocessor_recv [N_REGIONS*N_COPROCESSOR_PORTS] ();
+    AXI4SR #(
+        .AXI4S_DATA_BITS(COPROCESSOR_STREAM_DATA_BITS),
+        .AXI4S_ID_BITS(COPROCESSOR_STREAM_ID_BITS)
+    ) axis_coprocessor_send [N_REGIONS*N_COPROCESSOR_PORTS] ();
+    AXI4L #(
+        .AXI4L_ADDR_BITS(COPROCESSOR_MMIO_ADDR_BITS),
+        .AXI4L_DATA_BITS(COPROCESSOR_MMIO_DATA_BITS)
+    ) axi_coprocessor_mmio [N_REGIONS*N_COPROCESSOR_PORTS] ();
+    coprocessor_port_status_t coprocessor_status [N_REGIONS*N_COPROCESSOR_PORTS];
+
+    for (genvar coprocessor_index = 0;
+         coprocessor_index < N_REGIONS*N_COPROCESSOR_PORTS;
+         coprocessor_index++) begin
+        always_comb axis_coprocessor_recv[coprocessor_index].tie_off_m();
+        always_comb axis_coprocessor_send[coprocessor_index].tie_off_s();
+        always_comb axi_coprocessor_mmio[coprocessor_index].tie_off_m();
+        assign coprocessor_status[coprocessor_index] = '0;
+    end
+{% endif %}
 {% for i in range(0, cnfg.n_reg) %}
     design_user_wrapper_{{ i }} inst_user_wrapper_{{ i }} ( 
         
@@ -1179,6 +1203,43 @@ module design_dynamic_top #(
         .axis_host_src_tlast            (axis_host_out_ul[{{ i }}].tlast),
         .axis_host_src_tready           (axis_host_out_ul[{{ i }}].tready),
         .axis_host_src_tvalid           (axis_host_out_ul[{{ i }}].tvalid),
+{% endif %}
+{% if cnfg.n_coprocessor_ports > 0 %}
+        // LOGICAL CO-PROCESSOR PORTS
+    {% for j in range(0, cnfg.n_coprocessor_ports) %}
+        .coprocessor_{{j}}_recv_tdata(axis_coprocessor_recv[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tdata),
+        .coprocessor_{{j}}_recv_tkeep(axis_coprocessor_recv[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tkeep),
+        .coprocessor_{{j}}_recv_tid(axis_coprocessor_recv[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tid),
+        .coprocessor_{{j}}_recv_tlast(axis_coprocessor_recv[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tlast),
+        .coprocessor_{{j}}_recv_tready(axis_coprocessor_recv[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tready),
+        .coprocessor_{{j}}_recv_tvalid(axis_coprocessor_recv[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tvalid),
+        .coprocessor_{{j}}_send_tdata(axis_coprocessor_send[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tdata),
+        .coprocessor_{{j}}_send_tkeep(axis_coprocessor_send[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tkeep),
+        .coprocessor_{{j}}_send_tid(axis_coprocessor_send[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tid),
+        .coprocessor_{{j}}_send_tlast(axis_coprocessor_send[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tlast),
+        .coprocessor_{{j}}_send_tready(axis_coprocessor_send[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tready),
+        .coprocessor_{{j}}_send_tvalid(axis_coprocessor_send[{{i}}*N_COPROCESSOR_PORTS+{{j}}].tvalid),
+        .coprocessor_{{j}}_mmio_araddr(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].araddr),
+        .coprocessor_{{j}}_mmio_arprot(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].arprot),
+        .coprocessor_{{j}}_mmio_arready(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].arready),
+        .coprocessor_{{j}}_mmio_arvalid(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].arvalid),
+        .coprocessor_{{j}}_mmio_awaddr(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].awaddr),
+        .coprocessor_{{j}}_mmio_awprot(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].awprot),
+        .coprocessor_{{j}}_mmio_awready(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].awready),
+        .coprocessor_{{j}}_mmio_awvalid(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].awvalid),
+        .coprocessor_{{j}}_mmio_bready(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].bready),
+        .coprocessor_{{j}}_mmio_bresp(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].bresp),
+        .coprocessor_{{j}}_mmio_bvalid(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].bvalid),
+        .coprocessor_{{j}}_mmio_rdata(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].rdata),
+        .coprocessor_{{j}}_mmio_rready(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].rready),
+        .coprocessor_{{j}}_mmio_rresp(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].rresp),
+        .coprocessor_{{j}}_mmio_rvalid(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].rvalid),
+        .coprocessor_{{j}}_mmio_wdata(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].wdata),
+        .coprocessor_{{j}}_mmio_wready(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].wready),
+        .coprocessor_{{j}}_mmio_wstrb(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].wstrb),
+        .coprocessor_{{j}}_mmio_wvalid(axi_coprocessor_mmio[{{i}}*N_COPROCESSOR_PORTS+{{j}}].wvalid),
+        .coprocessor_{{j}}_status(coprocessor_status[{{i}}*N_COPROCESSOR_PORTS+{{j}}]),
+    {% endfor %}
 {% endif %}
 {% if cnfg.en_mem %}
         // CARD STREAMS

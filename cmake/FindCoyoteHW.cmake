@@ -77,6 +77,10 @@ set(EN_STRM 1 CACHE STRING "Enable host streams")
 # Number of parallel streams from host (per vFPGA)
 set(N_STRM_AXI 1 CACHE STRING "Number of host streams")
 
+# Number of processor-neutral logical co-processor ports per vFPGA. Physical
+# processor providers are registered independently and bind at runtime.
+set(N_COPROCESSOR_PORTS 0 CACHE STRING "Number of logical co-processor ports")
+
 # Enable streams from card memory (HBM/DDR)
 set(EN_MEM 0 CACHE STRING "Enable memory streams")
 
@@ -314,6 +318,26 @@ set(EXTERNAL_DYNAMIC_SERVICE_SOURCES "")
 set(EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS "")
 set(EXTERNAL_DYNAMIC_SERVICE_INIT_TCL "")
 
+# Processor-neutral co-processor application interface. These dimensions form
+# one shell/application compatibility contract and remain independent of any
+# physical R5/A72 provider backend.
+set(COPROCESSOR_INTERFACE_PRESENT 0)
+set(COPROCESSOR_INTERFACE_VERSION 1)
+set(COPROCESSOR_STREAM_ABI 1)
+set(COPROCESSOR_STREAM_DATA_BITS 512)
+set(COPROCESSOR_STREAM_ID_BITS 6)
+set(COPROCESSOR_MAX_PACKET_BYTES 4096)
+set(COPROCESSOR_MMIO_ABI 1)
+set(COPROCESSOR_MMIO_ADDR_BITS 12)
+set(COPROCESSOR_MMIO_DATA_BITS 64)
+set(COPROCESSOR_BINDING_GENERATION_BITS 32)
+set(COPROCESSOR_PROVIDER_COUNT 0)
+set(COPROCESSOR_PROVIDER_DESCRIPTORS "")
+set(COPROCESSOR_PROVIDER_TOPS "")
+set(COPROCESSOR_PROVIDER_SOURCES "")
+set(COPROCESSOR_PROVIDER_INCLUDE_DIRS "")
+set(COPROCESSOR_PROVIDER_INIT_TCL "")
+
 ############################################
 ##        SOFTWARE DEPENDENCIES           ##
 ############################################
@@ -457,6 +481,154 @@ function(register_dynamic_service)
     endif()
     message("** External dynamic service ${SERVICE_NAME} (${service_description})")
 endfunction()
+
+# Register a physical provider implementation without changing the logical
+# application interface. Provider-free configurations are valid and exercise
+# deterministic unbound behavior without a physical hard CPU.
+function(register_coprocessor_provider)
+    if(BUILD_APP)
+        message(FATAL_ERROR "register_coprocessor_provider() is only valid for shell/static builds")
+    endif()
+
+    cmake_parse_arguments(
+        "PROVIDER"
+        ""
+        "NAME;TOP;ENDPOINT_ID;PROCESSOR_CLASS;RUNTIME_ABI;FIRMWARE_ABI;STREAM_ABI;MMIO_ABI;CAPACITY;TIMING_NS;INIT_TCL"
+        "SOURCES;INCLUDE_DIRS"
+        ${ARGN}
+    )
+    if(PROVIDER_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "Unknown register_coprocessor_provider() arguments: ${PROVIDER_UNPARSED_ARGUMENTS}")
+    endif()
+    foreach(required NAME TOP ENDPOINT_ID PROCESSOR_CLASS RUNTIME_ABI FIRMWARE_ABI STREAM_ABI MMIO_ABI)
+        if(NOT DEFINED PROVIDER_${required} OR PROVIDER_${required} STREQUAL "")
+            message(FATAL_ERROR "register_coprocessor_provider() requires ${required}")
+        endif()
+    endforeach()
+    foreach(token NAME PROCESSOR_CLASS RUNTIME_ABI FIRMWARE_ABI)
+        if(NOT PROVIDER_${token} MATCHES "^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
+            message(FATAL_ERROR "Co-processor provider ${token} contains unsupported characters")
+        endif()
+    endforeach()
+    if(NOT PROVIDER_TOP MATCHES "^[A-Za-z_][A-Za-z0-9_]*$")
+        message(FATAL_ERROR "Co-processor provider TOP must be a simple SystemVerilog module identifier")
+    endif()
+    foreach(numeric ENDPOINT_ID STREAM_ABI MMIO_ABI)
+        if(NOT PROVIDER_${numeric} MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "Co-processor provider ${numeric} must be a positive integer")
+        endif()
+    endforeach()
+
+    if(PROVIDER_ENDPOINT_ID GREATER 65535)
+        message(FATAL_ERROR "Co-processor provider ENDPOINT_ID must fit the 16-bit public contract")
+    endif()
+    if(NOT DEFINED PROVIDER_CAPACITY OR PROVIDER_CAPACITY STREQUAL "")
+        set(PROVIDER_CAPACITY 1)
+    endif()
+    if(NOT DEFINED PROVIDER_TIMING_NS OR PROVIDER_TIMING_NS STREQUAL "")
+        set(PROVIDER_TIMING_NS 0)
+    endif()
+    foreach(numeric CAPACITY TIMING_NS)
+        if(NOT PROVIDER_${numeric} MATCHES "^[0-9]+$")
+            message(FATAL_ERROR "Co-processor provider ${numeric} must be a nonnegative integer")
+        endif()
+    endforeach()
+    if(NOT PROVIDER_CAPACITY EQUAL 1)
+        message(FATAL_ERROR "Initial co-processor providers are exclusive and require CAPACITY 1")
+    endif()
+
+    if(COPROCESSOR_PROVIDER_DESCRIPTORS MATCHES "(^|;)${PROVIDER_ENDPOINT_ID}\\|")
+        message(FATAL_ERROR "Duplicate co-processor provider endpoint ID ${PROVIDER_ENDPOINT_ID}")
+    endif()
+
+    set(normalized_sources "")
+    foreach(path IN LISTS PROVIDER_SOURCES)
+        get_filename_component(path_abs "${path}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(NOT EXISTS "${path_abs}" OR IS_DIRECTORY "${path_abs}")
+            message(FATAL_ERROR "Co-processor provider RTL source does not exist: ${path_abs}")
+        endif()
+        list(APPEND normalized_sources "${path_abs}")
+    endforeach()
+    list(REMOVE_DUPLICATES normalized_sources)
+
+    set(normalized_include_dirs "")
+    foreach(path IN LISTS PROVIDER_INCLUDE_DIRS)
+        get_filename_component(path_abs "${path}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(NOT IS_DIRECTORY "${path_abs}")
+            message(FATAL_ERROR "Co-processor provider include directory does not exist: ${path_abs}")
+        endif()
+        list(APPEND normalized_include_dirs "${path_abs}")
+    endforeach()
+    list(REMOVE_DUPLICATES normalized_include_dirs)
+
+    set(init_tcl "")
+    if(DEFINED PROVIDER_INIT_TCL AND NOT PROVIDER_INIT_TCL STREQUAL "")
+        get_filename_component(init_tcl "${PROVIDER_INIT_TCL}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(NOT EXISTS "${init_tcl}" OR IS_DIRECTORY "${init_tcl}")
+            message(FATAL_ERROR "Co-processor provider INIT_TCL does not exist: ${init_tcl}")
+        endif()
+    endif()
+
+    set(descriptor "${PROVIDER_ENDPOINT_ID}|${PROVIDER_NAME}|${PROVIDER_PROCESSOR_CLASS}|${PROVIDER_RUNTIME_ABI}|${PROVIDER_FIRMWARE_ABI}|${PROVIDER_STREAM_ABI}|${PROVIDER_MMIO_ABI}|1|${PROVIDER_CAPACITY}|${PROVIDER_TIMING_NS}")
+    set(descriptors ${COPROCESSOR_PROVIDER_DESCRIPTORS})
+    list(APPEND descriptors "${descriptor}")
+    set(tops ${COPROCESSOR_PROVIDER_TOPS})
+    list(APPEND tops "${PROVIDER_TOP}")
+    set(sources ${COPROCESSOR_PROVIDER_SOURCES})
+    list(APPEND sources ${normalized_sources})
+    list(REMOVE_DUPLICATES sources)
+    set(include_dirs ${COPROCESSOR_PROVIDER_INCLUDE_DIRS})
+    list(APPEND include_dirs ${normalized_include_dirs})
+    list(REMOVE_DUPLICATES include_dirs)
+    set(init_scripts ${COPROCESSOR_PROVIDER_INIT_TCL})
+    if(NOT init_tcl STREQUAL "")
+        list(APPEND init_scripts "${init_tcl}")
+    endif()
+    list(REMOVE_DUPLICATES init_scripts)
+    math(EXPR provider_count "${COPROCESSOR_PROVIDER_COUNT} + 1")
+
+    set(COPROCESSOR_PROVIDER_COUNT ${provider_count} PARENT_SCOPE)
+    set(COPROCESSOR_PROVIDER_DESCRIPTORS "${descriptors}" PARENT_SCOPE)
+    set(COPROCESSOR_PROVIDER_TOPS "${tops}" PARENT_SCOPE)
+    set(COPROCESSOR_PROVIDER_SOURCES "${sources}" PARENT_SCOPE)
+    set(COPROCESSOR_PROVIDER_INCLUDE_DIRS "${include_dirs}" PARENT_SCOPE)
+    set(COPROCESSOR_PROVIDER_INIT_TCL "${init_scripts}" PARENT_SCOPE)
+    message("** Co-processor provider ${PROVIDER_NAME} (endpoint ${PROVIDER_ENDPOINT_ID}, class ${PROVIDER_PROCESSOR_CLASS})")
+endfunction()
+
+macro(_validate_coprocessor_interface)
+    if(NOT N_COPROCESSOR_PORTS MATCHES "^[0-9]+$")
+        message(FATAL_ERROR "N_COPROCESSOR_PORTS must be a nonnegative integer")
+    endif()
+    if(N_COPROCESSOR_PORTS GREATER 8)
+        message(FATAL_ERROR "At most eight logical co-processor ports are supported")
+    endif()
+    if(COPROCESSOR_PROVIDER_COUNT GREATER 0 AND N_COPROCESSOR_PORTS EQUAL 0)
+        message(FATAL_ERROR "Physical co-processor providers require at least one logical port")
+    endif()
+    if(N_COPROCESSOR_PORTS GREATER 0)
+        if((BUILD_SHELL OR BUILD_STATIC) AND NOT BUILD_APP)
+            set(COPROCESSOR_INTERFACE_PRESENT 1)
+        endif()
+        foreach(abi COPROCESSOR_STREAM_ABI COPROCESSOR_MMIO_ABI)
+            if(NOT ${abi} MATCHES "^[1-9][0-9]*$")
+                message(FATAL_ERROR "${abi} must be a positive integer")
+            endif()
+        endforeach()
+        if(NOT COPROCESSOR_INTERFACE_PRESENT EQUAL 1)
+            message(FATAL_ERROR "Enabled logical co-processor ports require a complete exported interface contract")
+        endif()
+        if(NOT COPROCESSOR_INTERFACE_VERSION EQUAL 1 OR
+           NOT COPROCESSOR_STREAM_DATA_BITS EQUAL 512 OR
+           NOT COPROCESSOR_STREAM_ID_BITS EQUAL 6 OR
+           NOT COPROCESSOR_MAX_PACKET_BYTES EQUAL 4096 OR
+           NOT COPROCESSOR_MMIO_ADDR_BITS EQUAL 12 OR
+           NOT COPROCESSOR_MMIO_DATA_BITS EQUAL 64 OR
+           NOT COPROCESSOR_BINDING_GENERATION_BITS EQUAL 32)
+            message(FATAL_ERROR "Unsupported logical co-processor interface dimensions")
+        endif()
+    endif()
+endmacro()
 
 macro(_validate_external_dynamic_service)
     if(EN_EXTERNAL_DYNAMIC_SERVICE_SLOT_STATUS AND NOT EN_EXTERNAL_DYNAMIC_SERVICE)
@@ -980,7 +1152,52 @@ macro(validation_checks_hw)
             message(FATAL_ERROR "External shell path not provided.")
         endif()
 
+        set(COPROCESSOR_REQUESTED_PORTS ${N_COPROCESSOR_PORTS})
+        set(COPROCESSOR_REQUESTED_INTERFACE_VERSION ${COPROCESSOR_INTERFACE_VERSION})
+        set(COPROCESSOR_REQUESTED_STREAM_ABI ${COPROCESSOR_STREAM_ABI})
+        set(COPROCESSOR_REQUESTED_STREAM_DATA_BITS ${COPROCESSOR_STREAM_DATA_BITS})
+        set(COPROCESSOR_REQUESTED_STREAM_ID_BITS ${COPROCESSOR_STREAM_ID_BITS})
+        set(COPROCESSOR_REQUESTED_MAX_PACKET_BYTES ${COPROCESSOR_MAX_PACKET_BYTES})
+        set(COPROCESSOR_REQUESTED_MMIO_ABI ${COPROCESSOR_MMIO_ABI})
+        set(COPROCESSOR_REQUESTED_MMIO_ADDR_BITS ${COPROCESSOR_MMIO_ADDR_BITS})
+        set(COPROCESSOR_REQUESTED_MMIO_DATA_BITS ${COPROCESSOR_MMIO_DATA_BITS})
+        set(COPROCESSOR_REQUESTED_GENERATION_BITS ${COPROCESSOR_BINDING_GENERATION_BITS})
+
+        # Clear local defaults so an old or incomplete shell export cannot be
+        # mistaken for a compatible co-processor contract.
+        set(COPROCESSOR_INTERFACE_PRESENT 0)
+        set(N_COPROCESSOR_PORTS 0)
+        set(COPROCESSOR_INTERFACE_VERSION 0)
+        set(COPROCESSOR_STREAM_ABI 0)
+        set(COPROCESSOR_STREAM_DATA_BITS 0)
+        set(COPROCESSOR_STREAM_ID_BITS 0)
+        set(COPROCESSOR_MAX_PACKET_BYTES 0)
+        set(COPROCESSOR_MMIO_ABI 0)
+        set(COPROCESSOR_MMIO_ADDR_BITS 0)
+        set(COPROCESSOR_MMIO_DATA_BITS 0)
+        set(COPROCESSOR_BINDING_GENERATION_BITS 0)
+        set(COPROCESSOR_PROVIDER_COUNT 0)
+        set(COPROCESSOR_PROVIDER_DESCRIPTORS "")
         include("${SHELL_PATH}/export.cmake")
+
+        if(COPROCESSOR_REQUESTED_PORTS GREATER 0 AND NOT COPROCESSOR_INTERFACE_PRESENT EQUAL 1)
+            message(FATAL_ERROR "Application requires logical co-processor ports, but the shell exports no complete co-processor contract")
+        endif()
+        if(COPROCESSOR_REQUESTED_PORTS GREATER N_COPROCESSOR_PORTS)
+            message(FATAL_ERROR "Application requires ${COPROCESSOR_REQUESTED_PORTS} logical co-processor ports, but the shell exports ${N_COPROCESSOR_PORTS}")
+        endif()
+        if(COPROCESSOR_REQUESTED_PORTS GREATER 0 AND
+           (NOT COPROCESSOR_REQUESTED_INTERFACE_VERSION EQUAL COPROCESSOR_INTERFACE_VERSION OR
+            NOT COPROCESSOR_REQUESTED_STREAM_ABI EQUAL COPROCESSOR_STREAM_ABI OR
+            NOT COPROCESSOR_REQUESTED_STREAM_DATA_BITS EQUAL COPROCESSOR_STREAM_DATA_BITS OR
+            NOT COPROCESSOR_REQUESTED_STREAM_ID_BITS EQUAL COPROCESSOR_STREAM_ID_BITS OR
+            NOT COPROCESSOR_REQUESTED_MAX_PACKET_BYTES EQUAL COPROCESSOR_MAX_PACKET_BYTES OR
+            NOT COPROCESSOR_REQUESTED_MMIO_ABI EQUAL COPROCESSOR_MMIO_ABI OR
+            NOT COPROCESSOR_REQUESTED_MMIO_ADDR_BITS EQUAL COPROCESSOR_MMIO_ADDR_BITS OR
+            NOT COPROCESSOR_REQUESTED_MMIO_DATA_BITS EQUAL COPROCESSOR_MMIO_DATA_BITS OR
+            NOT COPROCESSOR_REQUESTED_GENERATION_BITS EQUAL COPROCESSOR_BINDING_GENERATION_BITS))
+            message(FATAL_ERROR "Application co-processor interface is incompatible with the exported shell")
+        endif()
 
         if(EN_PR EQUAL 0)
             message(FATAL_ERROR "PR not enabled in the shell.")
@@ -989,6 +1206,7 @@ macro(validation_checks_hw)
     endif()
 
     _validate_external_dynamic_service()
+    _validate_coprocessor_interface()
 endmacro()
 
 # Load applications
@@ -1074,6 +1292,9 @@ macro(gen_scripts)
     _coyote_paths_to_tcl(EXTERNAL_DYNAMIC_SERVICE_SOURCES_TCL ${EXTERNAL_DYNAMIC_SERVICE_SOURCES})
     _coyote_paths_to_tcl(EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS_TCL ${EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS})
     _coyote_paths_to_tcl(EXTERNAL_DYNAMIC_SERVICE_INIT_TCL_TCL ${EXTERNAL_DYNAMIC_SERVICE_INIT_TCL})
+    _coyote_paths_to_tcl(COPROCESSOR_PROVIDER_SOURCES_TCL ${COPROCESSOR_PROVIDER_SOURCES})
+    _coyote_paths_to_tcl(COPROCESSOR_PROVIDER_INCLUDE_DIRS_TCL ${COPROCESSOR_PROVIDER_INCLUDE_DIRS})
+    _coyote_paths_to_tcl(COPROCESSOR_PROVIDER_INIT_TCL_TCL ${COPROCESSOR_PROVIDER_INIT_TCL})
 
     # Python
     configure_file(${CYT_DIR}/scripts/cr_prjcts/write_hdl.py.in ${CMAKE_BINARY_DIR}/write_hdl.py)
@@ -1119,8 +1340,14 @@ macro(gen_scripts)
     # Bitgen
     configure_file(${CYT_DIR}/scripts/impl/bitgen.tcl.in ${CMAKE_BINARY_DIR}/bitgen.tcl)
 
-    # Export CMake config
+    # Export CMake config. Keep the disabled output byte-identical; the logical
+    # co-processor contract is appended only when ports are present.
     configure_file(${CYT_DIR}/scripts/export.cmake.in ${CMAKE_BINARY_DIR}/export.cmake)
+    if(N_COPROCESSOR_PORTS GREATER 0)
+        configure_file(${CYT_DIR}/scripts/coprocessor-export.cmake.in ${CMAKE_BINARY_DIR}/coprocessor-export.cmake)
+        file(READ ${CMAKE_BINARY_DIR}/coprocessor-export.cmake coprocessor_export)
+        file(APPEND ${CMAKE_BINARY_DIR}/export.cmake "\n${coprocessor_export}")
+    endif()
 endmacro()
 
 # Generate dependency lists

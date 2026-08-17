@@ -7,6 +7,7 @@ Developer Guide
    :maxdepth: 2
 
    resident-service-control
+   coprocessor-ports
 
 Contributing
 -----------------------

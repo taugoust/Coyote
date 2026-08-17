@@ -40,6 +40,9 @@ source "${CMAKE_BINARY_DIR}/base.tcl"
 set external_dynamic_service_sources [list ${EXTERNAL_DYNAMIC_SERVICE_SOURCES_TCL}]
 set external_dynamic_service_include_dirs [list ${EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS_TCL}]
 set external_dynamic_service_init_tcl [lindex [list ${EXTERNAL_DYNAMIC_SERVICE_INIT_TCL_TCL}] 0]
+set coprocessor_provider_sources [list ${COPROCESSOR_PROVIDER_SOURCES_TCL}]
+set coprocessor_provider_include_dirs [list ${COPROCESSOR_PROVIDER_INCLUDE_DIRS_TCL}]
+set coprocessor_provider_init_tcl [list ${COPROCESSOR_PROVIDER_INIT_TCL_TCL}]
 
 ########################################################################################################
 # CREATE PROJECT
@@ -92,6 +95,9 @@ add_files "$hw_dir/hdl/pkg"
 add_files "$hw_dir/hdl/shell"
 add_files "$hw_dir/hdl/mmu"
 add_files "$hw_dir/hdl/common"
+if {$cfg(n_coprocessor_ports) > 0} {
+    add_files "$hw_dir/hdl/coprocessor"
+}
 if {$cfg(en_card) eq 1} {
     add_files "$hw_dir/hdl/stripe"
     add_files "$hw_dir/hdl/cdma/cdma_u"
@@ -113,6 +119,14 @@ if {$cfg(en_external_dynamic_service) eq 1} {
     if {[llength $external_dynamic_service_include_dirs] > 0} {
         set_property include_dirs \
             [concat [get_property include_dirs [current_fileset]] $external_dynamic_service_include_dirs] \
+            [current_fileset]
+    }
+}
+if {$cfg(coprocessor_provider_count) > 0} {
+    add_files -norecurse $coprocessor_provider_sources
+    if {[llength $coprocessor_provider_include_dirs] > 0} {
+        set_property include_dirs \
+            [concat [get_property include_dirs [current_fileset]] $coprocessor_provider_include_dirs] \
             [current_fileset]
     }
 }
@@ -145,6 +159,9 @@ if {$cfg(en_net) eq 1} {
 }
 if {$cfg(en_external_dynamic_service) eq 1 && $external_dynamic_service_init_tcl ne ""} {
     source $external_dynamic_service_init_tcl
+}
+foreach provider_init $coprocessor_provider_init_tcl {
+    source $provider_init
 }
 
 ########################################################################################################
