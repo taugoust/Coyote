@@ -78,6 +78,12 @@ if {[catch {
         require_equal "provider destination clock" \
             [get_bd_nets -of_objects [get_bd_pins r5_provider_clock_converter/aclk1]] \
             [get_bd_nets -of_objects [get_bd_pins clk_wiz_0/clk_out1]]
+        require_equal "provider external clock frequency" \
+            [get_property CONFIG.FREQ_HZ [get_bd_intf_ports r5_provider]] \
+            [get_property CONFIG.FREQ_HZ [get_bd_ports xclk]]
+        require_equal "provider CDC output frequency" \
+            [get_property CONFIG.FREQ_HZ [get_bd_intf_pins r5_provider_clock_converter/M00_AXI]] \
+            [get_property CONFIG.FREQ_HZ [get_bd_intf_ports r5_provider]]
         set provider_segments [get_bd_addr_segs -quiet -of_objects $lpd_space -filter {NAME =~ "*SEG_r5_provider_Reg"}]
         if {[llength $provider_segments] ne 1} {
             error "expected exactly one R5 provider address segment"

@@ -37,16 +37,13 @@ if(TEST_ENABLE_R5_PROVIDER)
     set(EN_V80_R5_PROVIDER 1)
     register_coprocessor_provider(
         NAME v80-r5-0
-        TOP r5_packet_queue_provider
+        TOP r5_coprocessor_provider_stack
         ENDPOINT_ID 1
         PROCESSOR_CLASS r5
         RUNTIME_ABI baremetal
         FIRMWARE_ABI coyote-r5-provider-mmio-v1
         STREAM_ABI 1
         MMIO_ABI 1
-        SOURCES
-            "${CYT_DIR}/hw/hdl/coprocessor/r5_packet_queue_provider.sv"
-            "${CYT_DIR}/hw/hdl/coprocessor/coprocessor_port_gateway.sv"
     )
 elseif(TEST_REGISTER_PROVIDERS)
     register_coprocessor_provider(

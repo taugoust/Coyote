@@ -62,11 +62,19 @@ Build flow
 The static and shell builds must render the same provider boundary:
 
 #. Build a custom static checkpoint with ``BUILD_STATIC=1``,
-   ``EN_V80_R5_PLATFORM=1``, and ``EN_V80_R5_PROVIDER=1``.
+   ``EN_V80_R5_PLATFORM=1``, ``EN_V80_R5_PROVIDER=1``, and the same static
+   boundary clock used by the later shell (``SCLK_F=333`` for the V80 PR
+   flow).
 #. Point a separate V80 ``BUILD_SHELL=1``, ``EN_PR=1`` invocation at that
    custom static checkpoint and set ``EN_V80_R5_PROVIDER=1``.
 #. Build applications separately from the routed shell export. Applications
    request only ``N_COPROCESSOR_PORTS=1``.
+
+Before synthesis, generate the static/shell/application projects and run the
+``platform-design-check`` and ``provider-project-design-check`` targets. These
+validate CIPS, address ranges, interface widths, clock associations and
+frequencies, supported CDC IP, generated source inventory, and block-design
+DRCs without implementing hardware.
 
 The provider source includes device-free executable models, full-width
 Verilator queue/AXI tests, strict render checks, and a freestanding polling

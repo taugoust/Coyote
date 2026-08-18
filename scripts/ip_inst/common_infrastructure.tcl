@@ -63,9 +63,7 @@ if {$cfg(fpga_arch) eq "ultrascale_plus"} {
     set_property -dict [list CONFIG.PROTOCOL {AXI4LITE} CONFIG.ADDR_WIDTH {64} CONFIG.DATA_WIDTH {64} CONFIG.ID_WIDTH {0} CONFIG.AWUSER_WIDTH {0} CONFIG.ARUSER_WIDTH {0} CONFIG.RUSER_WIDTH {0} CONFIG.WUSER_WIDTH {0} CONFIG.BUSER_WIDTH {0}] [get_ips axil_clock_converter]
 } elseif {$cfg(fpga_arch) eq "versal"} {
     # On Versal devices, a SmartConnect IP is used; however, it must be instantiated inside a BD
-    proc create_axil_clock_converter_bd_versal {bd_name addr_width data_width} {
-        upvar #0 cfg cnfg
-
+    proc create_axil_clock_converter_bd_versal {bd_name addr_width data_width s_clock_mhz m_clock_mhz} {
         create_bd_design $bd_name
         current_bd_design $bd_name
 
@@ -92,14 +90,14 @@ if {$cfg(fpga_arch) eq "ultrascale_plus"} {
         create_bd_port -dir I -type rst s_axi_aresetn
         create_bd_port -dir I -type rst m_axi_aresetn
 
-        set s_axi_frequency [expr {$cnfg(aclk_f) * 1000000}]
+        set s_axi_frequency [expr {$s_clock_mhz * 1000000}]
         set s_axi_aclk [ create_bd_port -dir I -type clk -freq_hz $s_axi_frequency s_axi_aclk ]
         set_property -dict [ list \
             CONFIG.ASSOCIATED_BUSIF {s_axi} \
             CONFIG.ASSOCIATED_RESET {s_axi_aresetn} \
         ] $s_axi_aclk
 
-        set m_axi_frequency [expr {$cnfg(uclk_f) * 1000000}]
+        set m_axi_frequency [expr {$m_clock_mhz * 1000000}]
         set m_axi_aclk [ create_bd_port -dir I -type clk -freq_hz $m_axi_frequency m_axi_aclk ]
         set_property -dict [ list \
             CONFIG.ASSOCIATED_BUSIF {m_axi} \
@@ -128,9 +126,9 @@ if {$cfg(fpga_arch) eq "ultrascale_plus"} {
         save_bd_design
     }
 
-    create_axil_clock_converter_bd_versal axil_clock_converter 64 64
+    create_axil_clock_converter_bd_versal axil_clock_converter 64 64 $cfg(aclk_f) $cfg(uclk_f)
     if {[info exists cfg(en_v80_r5_provider)] && $cfg(en_v80_r5_provider) eq 1} {
-        create_axil_clock_converter_bd_versal axil_clock_converter_32 32 32
+        create_axil_clock_converter_bd_versal axil_clock_converter_32 32 32 $cfg(sclk_f) $cfg(aclk_f)
     }
 } else {
     puts "ERROR: Unsupported FPGA architecture: $cfg(fpga_arch)"

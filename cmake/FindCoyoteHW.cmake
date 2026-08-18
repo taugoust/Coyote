@@ -1400,6 +1400,9 @@ macro(gen_scripts)
         configure_file(${CYT_DIR}/scripts/impl/export_platform.tcl.in ${CMAKE_BINARY_DIR}/export_platform.tcl)
         configure_file(${CYT_DIR}/scripts/checks/check_v80_r5_platform.tcl.in ${CMAKE_BINARY_DIR}/check_v80_r5_platform.tcl)
     endif()
+    if(EN_V80_R5_PROVIDER)
+        configure_file(${CYT_DIR}/scripts/checks/check_v80_r5_provider_project.tcl.in ${CMAKE_BINARY_DIR}/check_v80_r5_provider_project.tcl)
+    endif()
 
     # Dynamic and app scripts
     if (FPGA_ARCH STREQUAL "versal")
@@ -1580,6 +1583,9 @@ macro(gen_targets)
         set(PLATFORM_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/export_platform.tcl -notrace)
         set(PLATFORM_CHECK_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/check_v80_r5_platform.tcl -notrace)
     endif()
+    if(EN_V80_R5_PROVIDER)
+        set(PROVIDER_PROJECT_CHECK_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/check_v80_r5_provider_project.tcl -notrace)
+    endif()
 
     # Dependencies
     gen_dep_lists()
@@ -1694,6 +1700,10 @@ macro(gen_targets)
 
     # Fixed hardware platform
     # -----------------------------------
+    if(EN_V80_R5_PROVIDER)
+        add_custom_target(provider-project-design-check ${PROVIDER_PROJECT_CHECK_CMD})
+        add_dependencies(provider-project-design-check project)
+    endif()
     if(EN_V80_R5_PLATFORM)
         set(V80_R5_PLATFORM_XSA ${CMAKE_BINARY_DIR}/platform/cyt_top.xsa)
         add_custom_target(platform-design-check ${PLATFORM_CHECK_CMD})
