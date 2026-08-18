@@ -92,21 +92,19 @@ if {$cfg(fpga_arch) eq "ultrascale_plus"} {
         create_bd_port -dir I -type rst s_axi_aresetn
         create_bd_port -dir I -type rst m_axi_aresetn
 
-        set cmd "set s_axi_aclk \[ create_bd_port -dir I -type clk s_axi_aclk ]
-        set_property -dict \[ list \
+        set s_axi_frequency [expr {$cnfg(aclk_f) * 1000000}]
+        set s_axi_aclk [ create_bd_port -dir I -type clk -freq_hz $s_axi_frequency s_axi_aclk ]
+        set_property -dict [ list \
             CONFIG.ASSOCIATED_BUSIF {s_axi} \
             CONFIG.ASSOCIATED_RESET {s_axi_aresetn} \
-            CONFIG.FREQ_HZ {$cnfg(aclk_f)000000} \
-        ] \$s_axi_aclk"
-        eval $cmd
+        ] $s_axi_aclk
 
-        set cmd "set m_axi_aclk \[ create_bd_port -dir I -type clk m_axi_aclk ]
-        set_property -dict \[ list \
+        set m_axi_frequency [expr {$cnfg(uclk_f) * 1000000}]
+        set m_axi_aclk [ create_bd_port -dir I -type clk -freq_hz $m_axi_frequency m_axi_aclk ]
+        set_property -dict [ list \
             CONFIG.ASSOCIATED_BUSIF {m_axi} \
             CONFIG.ASSOCIATED_RESET {m_axi_aresetn} \
-            CONFIG.FREQ_HZ {$cnfg(uclk_f)000000} \
-        ] \$m_axi_aclk"
-        eval $cmd
+        ] $m_axi_aclk
 
         set smartconnect_cdc [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_0]
 
@@ -123,7 +121,8 @@ if {$cfg(fpga_arch) eq "ultrascale_plus"} {
         connect_bd_net [get_bd_ports m_axi_aclk]   [get_bd_pins $smartconnect_cdc/aclk1]
         connect_bd_net [get_bd_ports s_axi_aresetn] [get_bd_pins $smartconnect_cdc/aresetn]
 
-        assign_bd_address -offset 0x0 -range 16E -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs m_axi/Reg]
+        set address_range [expr {$addr_width <= 32 ? "4G" : "16E"}]
+        assign_bd_address -offset 0x0 -range $address_range -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs m_axi/Reg]
 
         validate_bd_design
         save_bd_design
