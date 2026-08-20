@@ -1,6 +1,8 @@
 #include <coyote/cCoprocessor.hpp>
 
 #include <algorithm>
+#include <iomanip>
+#include <sstream>
 
 namespace coyote {
 
@@ -298,6 +300,151 @@ const CoprocessorProvider& CoprocessorBindingModel::provider(
         throw std::out_of_range("co-processor endpoint id");
     }
     return *found;
+}
+
+namespace {
+constexpr std::uint32_t control_magic = 0x54435043;
+
+CoprocessorState decodeState(std::uint64_t value) {
+    const auto state = static_cast<std::uint8_t>(value & 0x7);
+    if (state > static_cast<std::uint8_t>(CoprocessorState::faulted)) {
+        throw std::runtime_error("co-processor binding state readback is invalid");
+    }
+    return static_cast<CoprocessorState>(state);
+}
+} // namespace
+
+RegisterCoprocessorControlIo::RegisterCoprocessorControlIo(
+    CoprocessorRegisterIo& registers,
+    CoprocessorProvider descriptor,
+    std::size_t poll_limit)
+    : registers_(registers), descriptor_(std::move(descriptor)),
+      poll_limit_(poll_limit) {
+    if (poll_limit_ == 0 || descriptor_.endpoint_id == 0 ||
+        descriptor_.name.empty() || descriptor_.processor_class.empty() ||
+        descriptor_.runtime_abi.empty() || descriptor_.firmware_abi.empty() ||
+        descriptor_.stream_abi == 0 || descriptor_.mmio_abi == 0 ||
+        descriptor_.maximum_packet_beats == 0) {
+        throw std::invalid_argument("co-processor control descriptor is incomplete");
+    }
+}
+
+void RegisterCoprocessorControlIo::validateInfo() {
+    const auto info = registers_.read(0x000);
+    if (static_cast<std::uint32_t>(info) != control_magic ||
+        static_cast<std::uint32_t>(info >> 32) != 0x00010000) {
+        throw std::runtime_error("co-processor control ABI mismatch");
+    }
+}
+
+CoprocessorProvider RegisterCoprocessorControlIo::readProvider() {
+    const auto status = registers_.read(0x008);
+    auto provider = descriptor_;
+    provider.endpoint_id = static_cast<std::uint16_t>(status >> 48);
+    provider.stream_abi = static_cast<std::uint16_t>(status >> 32);
+    provider.mmio_abi = static_cast<std::uint16_t>(status >> 16);
+    provider.available = (status & 0x1) != 0;
+    provider.healthy = (status & 0x4) != 0;
+    provider.fault = (status & 0x8) != 0;
+    provider.generation = static_cast<std::uint32_t>(registers_.read(0x010));
+    const auto firmware = registers_.read(0x058);
+    provider.live_firmware_abi = static_cast<std::uint16_t>(firmware);
+    provider.live_runtime_abi = static_cast<std::uint16_t>(firmware >> 16);
+
+    std::ostringstream identity;
+    identity << std::hex << std::setfill('0');
+    for (std::uint32_t offset = 0x060; offset <= 0x078; offset += 8) {
+        const auto value = registers_.read(offset);
+        identity << std::setw(8) << static_cast<std::uint32_t>(value)
+                 << std::setw(8) << static_cast<std::uint32_t>(value >> 32);
+    }
+    provider.image_identity = identity.str();
+    return provider;
+}
+
+CoprocessorBinding RegisterCoprocessorControlIo::readBinding() {
+    const auto status = registers_.read(0x008);
+    const auto value = registers_.read(0x018);
+    const auto completion = registers_.read(0x048);
+    CoprocessorBinding binding;
+    binding.state = decodeState(value);
+    const auto endpoint = static_cast<std::uint16_t>(value >> 16);
+    if (endpoint != 0) {
+        binding.endpoint_id = endpoint;
+        binding.endpoint_generation =
+            static_cast<std::uint32_t>(registers_.read(0x010));
+    }
+    binding.binding_generation =
+        static_cast<std::uint32_t>(registers_.read(0x020));
+    binding.application_decoupled = (value & 0x8) != 0;
+    binding.streams_idle = (completion & (std::uint64_t{1} << 7)) != 0;
+    binding.mmio_idle = (completion & (std::uint64_t{1} << 8)) != 0;
+    binding.provider_idle = (status & 0x2) != 0;
+    return binding;
+}
+
+CoprocessorResult RegisterCoprocessorControlIo::execute(
+    const CoprocessorControlCommand& command) {
+    const auto opcode = static_cast<std::uint8_t>(command.opcode);
+    if (opcode < static_cast<std::uint8_t>(CoprocessorControlCommand::Opcode::bind) ||
+        opcode > static_cast<std::uint8_t>(CoprocessorControlCommand::Opcode::recover)) {
+        throw std::invalid_argument("co-processor command is not executable");
+    }
+    const auto token = static_cast<std::uint32_t>(registers_.read(0x040));
+    if (token == 0 || command.port != 0) {
+        return command.port == 0 ? CoprocessorResult::bad_state
+                                 : CoprocessorResult::invalid_port;
+    }
+    registers_.write(0x028, static_cast<std::uint64_t>(opcode) |
+                                (static_cast<std::uint64_t>(command.endpoint_id) << 16));
+    registers_.write(0x030, command.binding_generation);
+    registers_.write(0x038, command.endpoint_generation);
+    registers_.write(0x040, token);
+    for (std::size_t poll = 0; poll < poll_limit_; ++poll) {
+        const auto status = registers_.read(0x048);
+        if ((status & (std::uint64_t{1} << 5)) != 0 &&
+            static_cast<std::uint32_t>(status >> 32) == token) {
+            const auto result = static_cast<std::uint8_t>(status & 0xf);
+            registers_.write(0x050, token);
+            if (result > static_cast<std::uint8_t>(CoprocessorResult::occupied)) {
+                throw std::runtime_error("co-processor command result is invalid");
+            }
+            return static_cast<CoprocessorResult>(result);
+        }
+    }
+    throw std::runtime_error("co-processor command exceeded the poll bound");
+}
+
+CoprocessorControlResponse RegisterCoprocessorControlIo::transact(
+    const CoprocessorControlCommand& command) {
+    validateInfo();
+    CoprocessorControlResponse response;
+    response.port_count = 1;
+    response.provider_count = 1;
+    switch (command.opcode) {
+    case CoprocessorControlCommand::Opcode::get_info:
+        break;
+    case CoprocessorControlCommand::Opcode::get_provider:
+        if (command.endpoint_id != 0) {
+            response.result = CoprocessorResult::endpoint_not_found;
+            return response;
+        }
+        response.provider = readProvider();
+        break;
+    case CoprocessorControlCommand::Opcode::read_binding:
+        if (command.port != 0) {
+            response.result = CoprocessorResult::invalid_port;
+            return response;
+        }
+        response.binding = readBinding();
+        break;
+    default:
+        response.result = execute(command);
+        response.binding = readBinding();
+        response.provider = readProvider();
+        break;
+    }
+    return response;
 }
 
 CoprocessorControlResponse cCoprocessorControl::invoke(CoprocessorControlCommand command) {

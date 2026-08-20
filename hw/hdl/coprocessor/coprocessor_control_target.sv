@@ -19,6 +19,7 @@ module coprocessor_control_target #(
     input logic [2:0] binding_state,
     input logic [15:0] binding_endpoint,
     input logic [31:0] binding_generation,
+    input logic application_decoupled,
     input logic streams_idle,
     input logic mmio_idle,
     input logic stale_response_fault,
@@ -184,7 +185,8 @@ module coprocessor_control_target #(
                                               12'd0, provider_fault, provider_idle,
                                               provider_healthy, provider_available};
                     12'h010: s_axi_rdata <= provider_generation;
-                    12'h018: s_axi_rdata <= {32'd0, binding_endpoint, 13'd0, binding_state};
+                    12'h018: s_axi_rdata <= {32'd0, binding_endpoint, 12'd0,
+                                                   application_decoupled, binding_state};
                     12'h020: s_axi_rdata <= binding_generation;
                     12'h040: s_axi_rdata <= command_token;
                     12'h048: s_axi_rdata <= {completion_token, 22'd0, stale_response_fault,

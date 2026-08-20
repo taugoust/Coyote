@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 using namespace coyote;
@@ -30,6 +31,50 @@ CoprocessorProvider provider(
     value.generation = 1;
     return value;
 }
+
+class FakeRegisters final : public CoprocessorRegisterIo {
+public:
+    FakeRegisters() {
+        values[0x000] = (std::uint64_t{0x00010000} << 32) | 0x54435043;
+        values[0x008] = (std::uint64_t{1} << 48) | (std::uint64_t{7} << 32) |
+                        (std::uint64_t{9} << 16) | 0x7;
+        values[0x010] = 3;
+        values[0x018] = 0;
+        values[0x020] = 5;
+        values[0x040] = 11;
+        values[0x048] = (std::uint64_t{1} << 7) | (std::uint64_t{1} << 8);
+        values[0x058] = (std::uint64_t{1} << 16) | 1;
+        values[0x060] = 0x89abcdef01234567ULL;
+        values[0x068] = 0x76543210fedcba98ULL;
+        values[0x070] = 0x55555555aaaaaaaaULL;
+        values[0x078] = 0x2222222211111111ULL;
+    }
+
+    std::uint64_t read(std::uint32_t offset) override { return values.at(offset); }
+
+    void write(std::uint32_t offset, std::uint64_t value) override {
+        values[offset] = value;
+        if (offset == 0x040) {
+            const auto command = values.at(0x028);
+            const auto opcode = static_cast<std::uint8_t>(command);
+            if (opcode == 1) {
+                values[0x018] = ((command >> 16) << 16) | 1;
+                values[0x020] += 1;
+            } else if (opcode == 2) {
+                values[0x018] = (values[0x018] & ~std::uint64_t{7}) | 3;
+            } else if (opcode == 3 || opcode == 4) {
+                values[0x018] = 0;
+            }
+            values[0x048] = (value << 32) | (std::uint64_t{1} << 5) |
+                            (std::uint64_t{1} << 7) | (std::uint64_t{1} << 8);
+        } else if (offset == 0x050) {
+            values[0x048] &= ~(std::uint64_t{1} << 5);
+            values[0x040] += 1;
+        }
+    }
+
+    std::unordered_map<std::uint32_t, std::uint64_t> values;
+};
 
 class FakeIo final : public CoprocessorControlIo {
 public:
@@ -105,6 +150,33 @@ int main() {
         duplicate_rejected = true;
     }
     assert(duplicate_rejected);
+
+    auto descriptor = provider(1, "r5");
+    descriptor.maximum_packet_beats = 4;
+    FakeRegisters registers;
+    RegisterCoprocessorControlIo register_io(registers, descriptor, 4);
+    cCoprocessorControl register_control(register_io);
+    const auto live = register_control.provider(0);
+    assert(live.result == CoprocessorResult::ok);
+    assert(live.provider->endpoint_id == 1);
+    assert(live.provider->generation == 3);
+    assert(live.provider->live_runtime_abi == 1);
+    assert(live.provider->live_firmware_abi == 1);
+    assert(live.provider->image_identity ==
+           "0123456789abcdeffedcba9876543210aaaaaaaa555555551111111122222222");
+    const auto initial = register_control.binding(0);
+    assert(initial.binding.state == CoprocessorState::unbound);
+    assert(initial.binding.binding_generation == 5);
+    registers.values[0x018] = 8;
+    assert(register_control.binding(0).binding.application_decoupled);
+    registers.values[0x018] = 0;
+    const auto registered = register_control.bind(0, 1, 3);
+    assert(registered.result == CoprocessorResult::ok);
+    assert(registered.binding.state == CoprocessorState::ready);
+    assert(registered.binding.binding_generation == 6);
+    assert(registered.binding.endpoint_generation == 3);
+    assert(register_control.quiesce(0, 6).binding.state == CoprocessorState::quiesced);
+    assert(register_control.unbind(0, 6).binding.state == CoprocessorState::unbound);
 
     FakeIo io;
     cCoprocessorControl control(io);

@@ -43,7 +43,13 @@ Lifecycle
 
 Management explicitly binds endpoint 1 through the co-processor control window
 at shell offset ``0x2000``. The stream pair and MMIO aperture move together.
-The provider cannot auto-bind itself.
+The provider cannot auto-bind itself. ``RegisterCoprocessorControlIo`` implements
+the typed command/token protocol with a fixed polling bound. Its production
+``ResidentServiceCoprocessorRegisterIo`` backend uses the kernel-validated
+``cResidentServiceControl`` aperture; tests inject the same bounded register
+interface without a device. Provider reads combine the static shell descriptor
+with live availability, health, endpoint/binding generations, decouple/idle
+state, firmware ABI IDs, and the complete 256-bit firmware image identity.
 
 A generation change, decouple, abort, or provider reset discards private state,
 flushes stale committed entries, terminates selected-application MMIO, and

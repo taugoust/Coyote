@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -9,6 +10,8 @@
 #include <vector>
 
 namespace coyote {
+
+class cResidentServiceControl;
 
 enum class CoprocessorState : std::uint8_t {
     unbound = 0,
@@ -44,6 +47,10 @@ struct CoprocessorProvider {
     std::uint32_t generation = 1;
     std::uint32_t capacity = 1;
     std::uint64_t timing_ns = 0;
+    std::uint32_t maximum_packet_beats = 0;
+    std::uint16_t live_runtime_abi = 0;
+    std::uint16_t live_firmware_abi = 0;
+    std::string image_identity;
     bool available = true;
     bool healthy = true;
     bool fault = false;
@@ -137,6 +144,52 @@ class CoprocessorControlIo {
 public:
     virtual ~CoprocessorControlIo() = default;
     virtual CoprocessorControlResponse transact(const CoprocessorControlCommand& command) = 0;
+};
+
+class CoprocessorRegisterIo {
+public:
+    virtual ~CoprocessorRegisterIo() = default;
+    virtual std::uint64_t read(std::uint32_t offset) = 0;
+    virtual void write(std::uint32_t offset, std::uint64_t value) = 0;
+};
+
+class ResidentServiceCoprocessorRegisterIo final : public CoprocessorRegisterIo {
+public:
+    explicit ResidentServiceCoprocessorRegisterIo(
+        cResidentServiceControl& control,
+        std::uint32_t window_offset = 0x2000)
+        : control_(control), window_offset_(window_offset) {}
+
+    std::uint64_t read(std::uint32_t offset) override;
+    void write(std::uint32_t offset, std::uint64_t value) override;
+
+private:
+    cResidentServiceControl& control_;
+    std::uint32_t window_offset_;
+};
+
+// Typed, bounded implementation of the logical co-processor management
+// protocol. Static descriptor strings come from shell metadata; health,
+// generations, binding state, and firmware identity are always live readback.
+class RegisterCoprocessorControlIo final : public CoprocessorControlIo {
+public:
+    RegisterCoprocessorControlIo(
+        CoprocessorRegisterIo& registers,
+        CoprocessorProvider descriptor,
+        std::size_t poll_limit = 64);
+
+    CoprocessorControlResponse transact(
+        const CoprocessorControlCommand& command) override;
+
+private:
+    CoprocessorRegisterIo& registers_;
+    CoprocessorProvider descriptor_;
+    std::size_t poll_limit_;
+
+    void validateInfo();
+    CoprocessorProvider readProvider();
+    CoprocessorBinding readBinding();
+    CoprocessorResult execute(const CoprocessorControlCommand& command);
 };
 
 class cCoprocessorControl {

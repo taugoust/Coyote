@@ -265,7 +265,7 @@ module r5_coprocessor_provider_stack (
         .firmware_runtime_abi(firmware_runtime_abi), .firmware_abi_id(firmware_abi_id),
         .firmware_image_identity(firmware_image_identity), .binding_state(status_state),
         .binding_endpoint(status_endpoint), .binding_generation(status_generation),
-        .streams_idle(streams_idle), .mmio_idle(mmio_idle),
+        .application_decoupled(application_decoupled), .streams_idle(streams_idle), .mmio_idle(mmio_idle),
         .stale_response_fault(stale_response_fault),
         .command_valid(command_valid), .command_ready(command_ready),
         .command_opcode(command_opcode), .command_endpoint(command_endpoint),
