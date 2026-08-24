@@ -33,11 +33,12 @@ import sim_pkg::*;
 
 class scoreboard;
     enum bit[7:0] {
-        GET_CSR,         // Result of cThread.getCSR()
-        HOST_WRITE,      // Host write through axis_host_send
-        IRQ,             // Interrupt through notify interface
-        CHECK_COMPLETED, // Result of cThread.checkCompleted()
-        HOST_READ         // Host read through sq_rd
+        GET_CSR = 0,         // Result of cThread.getCSR()
+        HOST_WRITE = 1,      // Host write through axis_host_send
+        IRQ = 2,             // Interrupt through notify interface
+        CHECK_COMPLETED = 3, // Result of cThread.checkCompleted()
+        HOST_READ = 4,       // Host read through sq_rd
+        SERVICE_GET_CSR = 5  // Result of a resident-service control read
     } op_type_t;
 
     int fd;
@@ -87,11 +88,11 @@ class scoreboard;
         lock.put(1);
     endtask
 
-    task writeCTRL(input bit[AXIL_DATA_BITS-1:0] data);
-        writeOpCode(GET_CSR);
+    task writeCTRL(input bit[AXIL_DATA_BITS-1:0] data, input bit resident_service);
+        writeOpCode(resident_service ? SERVICE_GET_CSR : GET_CSR);
         writeLong(data);
         flush();
-        `VERBOSE(("Write CTRL, %0d", data))
+        `VERBOSE(("Write %sCTRL, %0d", resident_service ? "service " : "", data))
     endtask
 
     task writeHostMemHeader(vaddr_t vaddr, vaddr_t len);
