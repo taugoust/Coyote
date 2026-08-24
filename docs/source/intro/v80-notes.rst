@@ -246,7 +246,9 @@ Specifically, on the V80, one can configure:
 
 .. note:: Set ``EN_TIMING_CHECK=1`` for a sign-off build that must reject negative setup or hold slack. Versal optimized DFX builds also run a final routing repair after post-route physical optimization and reject bitstream-check DRC errors before exporting the checkpoint.
 
-Before committing to the full V80 route, ``make timing_oracle`` provides an earlier predictive screen for ``BUILD_SHELL=1``, ``EN_PR=1`` designs. It links the real configuration 0, runs post-opt QoR Assessment, skips placement for scores below the configured rejection threshold, and otherwise performs ``RuntimeOptimized`` placement with another assessment and estimated timing report. Inspect ``reports/timing_oracle/summary.json`` and the retained reports/CSV files. This does not replace final route, DRC, or timing closure.
+For a faster RTL check, ``make synthesis_analysis`` synthesizes only the resident shell and reports estimated setup/hold timing, critical paths, utilization, and high-fanout nets without linking DFX, optimizing, placing, or routing. Inspect ``reports/synthesis_analysis/summary.json`` and its companion reports. This tier can expose clearly excessive logic depth or fanout but cannot predict placement congestion.
+
+Before committing to the full V80 route, ``make timing_oracle`` provides the stronger predictive screen for ``BUILD_SHELL=1``, ``EN_PR=1`` designs. It links the real configuration 0, runs post-opt QoR Assessment, skips placement for scores below the configured rejection threshold, and otherwise performs ``RuntimeOptimized`` placement with another assessment and estimated timing report. Inspect ``reports/timing_oracle/summary.json`` and the retained reports/CSV files. This does not replace final route, DRC, or timing closure.
     
 .. tip:: In most cases, the shell and static layers should use the same clock frequency, as the bottleneck is typically on the lowest frequency path (unless there is data compression). As such, there is rarely advantages in setting one clock frequency higher than the other; in fact, it can lead to timing closure issues. 
 
