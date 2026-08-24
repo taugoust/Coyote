@@ -109,6 +109,7 @@ set cfg(qsfp)                   ${QSFP}
 set cfg(pmtu)                   ${PMTU_BYTES}
 set cfg(cores)                  ${COMP_CORES}
 set cfg(build_opt)              ${BUILD_OPT}
+set cfg(en_timing_check)        ${EN_TIMING_CHECK}
 set cfg(stat_probe)             ${STATIC_PROBE}
 set cfg(shell_probe)            ${SHELL_PROBE}
 set cfg(en_nclk)                ${EN_NCLK}

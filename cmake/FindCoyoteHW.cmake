@@ -233,6 +233,10 @@ set(COMP_CORES 8 CACHE STRING "Number of compilation cores")
 # Run implementation with optimization, can help close timing but significantly longer compilation time
 set(BUILD_OPT 0 CACHE STRING "Build optimizations (significantly longer compilation times)")
 
+# Reject routed checkpoints that retain negative setup or hold slack. This is
+# opt-in so exploratory Coyote builds can still emit implementation reports.
+set(EN_TIMING_CHECK 0 CACHE STRING "Require routed implementation timing closure")
+
 ##
 ## DESIGN CHECKPOINTS
 ##

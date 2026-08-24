@@ -243,6 +243,8 @@ Specifically, on the V80, one can configure:
     make project && make bitgen
 
 .. attention::  When BUILD_OPT is set to 1, Coyote will use advanced Vivado directives for better timing closure. However, starting with Vivado 2024.2 on Versal devices, ML-based placer directives (i.e. `Auto_*` directives) are no longer supported. Instead Coyote defaults to `AggressiveExplore` for placement. In case of timing closure issues, please refer to Vivado documentation for other placement directives to try and modify `scripts/impl/pnr_shell.tcl` accordingly.
+
+.. note:: Set ``EN_TIMING_CHECK=1`` for a sign-off build that must reject negative setup or hold slack. Versal optimized DFX builds also run a final routing repair after post-route physical optimization and reject bitstream-check DRC errors before exporting the checkpoint.
     
 .. tip:: In most cases, the shell and static layers should use the same clock frequency, as the bottleneck is typically on the lowest frequency path (unless there is data compression). As such, there is rarely advantages in setting one clock frequency higher than the other; in fact, it can lead to timing closure issues. 
 
