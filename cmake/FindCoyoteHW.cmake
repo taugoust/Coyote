@@ -273,6 +273,12 @@ set(TIMING_ORACLE_REJECT_RQA_BELOW 3 CACHE STRING "Reject timing-oracle candidat
 set(TIMING_ORACLE_PASS_RQA_AT_LEAST 4 CACHE STRING "Classify timing-oracle candidates at or above this QoR Assessment score as PASS")
 set(TIMING_ORACLE_MAX_PATHS 100 CACHE STRING "Maximum paths requested from each QoR Assessment report")
 
+# Fast, pre-placement evidence from the synthesized resident-shell checkpoint.
+# Classification policy is intentionally applied outside Vivado so changing a
+# threshold does not repeat synthesis or report collection.
+set(SYNTHESIS_ANALYSIS_MAX_PATHS 100 CACHE STRING "Maximum setup and hold paths retained by synthesis analysis")
+set(SYNTHESIS_ANALYSIS_MAX_FANOUT_NETS 100 CACHE STRING "Maximum high-fanout nets retained by synthesis analysis")
+
 if(TIMING_ORACLE_REJECT_RQA_BELOW LESS 1 OR TIMING_ORACLE_REJECT_RQA_BELOW GREATER 5)
     message(FATAL_ERROR "TIMING_ORACLE_REJECT_RQA_BELOW must be between 1 and 5")
 endif()
@@ -281,6 +287,12 @@ if(TIMING_ORACLE_PASS_RQA_AT_LEAST LESS TIMING_ORACLE_REJECT_RQA_BELOW OR TIMING
 endif()
 if(TIMING_ORACLE_MAX_PATHS LESS 1)
     message(FATAL_ERROR "TIMING_ORACLE_MAX_PATHS must be positive")
+endif()
+if(SYNTHESIS_ANALYSIS_MAX_PATHS LESS 1)
+    message(FATAL_ERROR "SYNTHESIS_ANALYSIS_MAX_PATHS must be positive")
+endif()
+if(SYNTHESIS_ANALYSIS_MAX_FANOUT_NETS LESS 1)
+    message(FATAL_ERROR "SYNTHESIS_ANALYSIS_MAX_FANOUT_NETS must be positive")
 endif()
 
 ##
@@ -1434,6 +1446,7 @@ macro(gen_scripts)
         message(FATAL_ERROR "Unsupported FPGA architecture.")
     endif()
     configure_file(${CYT_DIR}/scripts/dyn/flow_app.tcl.in ${CMAKE_BINARY_DIR}/flow_app.tcl)
+    configure_file(${CYT_DIR}/scripts/dyn/synthesis_analysis.tcl.in ${CMAKE_BINARY_DIR}/synthesis_analysis.tcl)
     configure_file(${CYT_DIR}/scripts/dyn/timing_oracle.tcl.in ${CMAKE_BINARY_DIR}/timing_oracle.tcl)
 
     # Bitgen
@@ -1516,6 +1529,9 @@ macro(gen_dep_lists)
     foreach(i RANGE ${NN_CONFIG})
         list(APPEND DEP_DCP_LIST_DYN ${CMAKE_BINARY_DIR}/checkpoints/config_${i}/shell_routed_c${i}.dcp)
     endforeach()
+
+    # Fast synthesized-shell analysis
+    set(DEP_SYNTHESIS_ANALYSIS ${CMAKE_BINARY_DIR}/reports/synthesis_analysis/summary.json)
 
     # Timing oracle
     set(DEP_TIMING_ORACLE ${CMAKE_BINARY_DIR}/reports/timing_oracle/summary.json)
@@ -1607,6 +1623,7 @@ macro(gen_targets)
 
     set(DYN_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/flow_dyn.tcl -notrace)
     set(APP_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/flow_app.tcl -notrace)
+    set(SYNTHESIS_ANALYSIS_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/synthesis_analysis.tcl -notrace)
     set(TIMING_ORACLE_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/timing_oracle.tcl -notrace)
     
     set(BGEN_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/bitgen.tcl -notrace)
@@ -1744,6 +1761,22 @@ macro(gen_targets)
             OUTPUT ${V80_R5_PLATFORM_XSA}
             ${PLATFORM_CMD}
             DEPENDS ${CMAKE_BINARY_DIR}/checkpoints/shell_routed.dcp
+        )
+    endif()
+
+    # Fast resident-shell synthesis analysis
+    # -----------------------------------
+    if(BUILD_SHELL)
+        add_custom_target(synthesis_analysis
+            DEPENDS ${DEP_SYNTHESIS_ANALYSIS}
+        )
+        add_custom_command(
+            OUTPUT ${DEP_SYNTHESIS_ANALYSIS}
+            ${SYNTHESIS_ANALYSIS_CMD}
+            DEPENDS
+                ${DEP_DCP_LIST_SYNTH_SHELL}
+                ${CMAKE_BINARY_DIR}/base.tcl
+                ${CMAKE_BINARY_DIR}/synthesis_analysis.tcl
         )
     endif()
 

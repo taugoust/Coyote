@@ -235,7 +235,15 @@ The command consists of the following incremental steps:
     # Generate bitstreams
     make bitgen   
 
-For a ``BUILD_SHELL=1`` and ``EN_PR=1`` build, Coyote also provides an optional predictive timing oracle before full-quality implementation:
+A ``BUILD_SHELL=1`` build can collect fast pre-placement evidence directly from the synthesized resident-shell checkpoint:
+
+.. code-block:: bash
+
+    make synthesis_analysis
+
+This target synthesizes the resident shell when needed, then emits estimated setup/hold timing, critical paths, utilization, high-fanout diagnostics, and ``reports/synthesis_analysis/summary.json``. It does not synthesize the configuration-0 application, link DFX, optimize, place, route, or generate an image. The result is useful for rejecting clearly poor RTL quickly, but it does not assess placement or congestion.
+
+For a ``BUILD_SHELL=1`` and ``EN_PR=1`` build, Coyote also provides the stronger predictive timing oracle before full-quality implementation:
 
 .. code-block:: bash
 
