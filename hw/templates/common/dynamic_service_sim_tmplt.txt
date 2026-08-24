@@ -36,6 +36,12 @@ module design_dynamic_service_sim (
     AXI4S.s                     s_axis_host_out [N_REGIONS],
     AXI4S.m                     m_axis_host_out [N_REGIONS],
     AXI4L.s                     s_axi_ctrl,
+{% if cnfg.en_external_dynamic_service_peer_endpoints %}
+    AXI4SR.s                    s_axis_peer_recv [N_PEER_AXI],
+    AXI4SR.m                    m_axis_peer_send [N_PEER_AXI],
+    input logic [N_PEER_LINKS-1:0] peer_link_up,
+    input logic [(4*N_PEER_LINKS)-1:0] peer_lane_up,
+{% endif %}
 {% if cnfg.en_external_dynamic_service_slot_status %}
     input logic [N_REGIONS-1:0] s_slot_decoupled,
 {% endif %}
@@ -49,6 +55,12 @@ module design_dynamic_service_sim (
 {% endif %}
 {% if cnfg.en_external_dynamic_service_slot_status %}
         .s_slot_decoupled(s_slot_decoupled),
+{% endif %}
+{% if cnfg.en_external_dynamic_service_peer_endpoints %}
+        .s_axis_peer_recv(s_axis_peer_recv),
+        .m_axis_peer_send(m_axis_peer_send),
+        .peer_link_up(peer_link_up),
+        .peer_lane_up(peer_lane_up),
 {% endif %}
         .aclk(aclk),
         .aresetn(aresetn),

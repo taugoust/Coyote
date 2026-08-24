@@ -106,6 +106,10 @@ if {$cfg(en_net) eq 1} {
         add_files "$hw_dir/hdl/network/tcp"
     }
 }
+if {$cfg(peer_backend) eq "aurora_qsfp1"} {
+    add_files "$hw_dir/hdl/aurora"
+    add_files "$hw_dir/hdl/peer"
+}
 add_files "$proj_dir/hdl"
 
 if {$cfg(en_external_dynamic_service) eq 1} {
@@ -145,6 +149,9 @@ if {$cfg(en_net) eq 1} {
 }
 if {$cfg(en_external_dynamic_service) eq 1 && $external_dynamic_service_init_tcl ne ""} {
     source $external_dynamic_service_init_tcl
+}
+if {$cfg(peer_backend) eq "aurora_qsfp1"} {
+    source "$scripts_dir/ip_inst/aurora_infrastructure.tcl" -notrace
 }
 
 ########################################################################################################

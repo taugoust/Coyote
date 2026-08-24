@@ -114,12 +114,19 @@ module tb_user;
     AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_recv[N_STRM_AXI](.*);
     AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_send[N_STRM_AXI](.*);
 
+    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_recv_user[N_HOST_STRM_AXI](.*);
+    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_send_user[N_HOST_STRM_AXI](.*);
+
+`ifdef EN_PEER
+    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_peer_recv[N_PEER_AXI](.*);
+    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_peer_send[N_PEER_AXI](.*);
+    logic [N_PEER_LINKS-1:0] peer_link_up;
+    logic [(4*N_PEER_LINKS)-1:0] peer_lane_up;
+`endif
+
 `ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE
-    // The existing direct-user simulator exposes routed streams. For the
-    // single-region/single-stream integration mode, adapt stream zero to the
-    // aggregate host-stream cut used by the resident dynamic service.
-    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_recv_user[N_STRM_AXI](.*);
-    AXI4SR #(.AXI4S_DATA_BITS(AXI_DATA_BITS)) axis_host_send_user[N_STRM_AXI](.*);
+    // Adapt routed host stream zero to the aggregate resident-service cut.
+    // A peer-aware simulation reserves host stream one as its mock peer.
     AXI4S axis_host_in_shell[N_REGIONS](.*);
     AXI4S axis_host_in_user[N_REGIONS](.*);
     AXI4S axis_host_out_user[N_REGIONS](.*);
@@ -178,6 +185,12 @@ module tb_user;
         .s_axi_ctrl(service_ctrl),
 `ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_SLOT_STATUS
         .s_slot_decoupled(slot_decoupled),
+`endif
+`ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_PEER_ENDPOINTS
+        .s_axis_peer_recv(axis_peer_recv),
+        .m_axis_peer_send(axis_peer_send),
+        .peer_link_up(peer_link_up),
+        .peer_lane_up(peer_lane_up),
 `endif
         .aclk(aclk),
         .aresetn(aresetn)
@@ -240,12 +253,15 @@ module tb_user;
         .rq_wr(rq_wr),
     `endif
     `ifdef EN_STRM
-        `ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE
         .axis_host_recv(axis_host_recv_user),
         .axis_host_send(axis_host_send_user),
-        `else
-        .axis_host_recv(axis_host_recv),
-        .axis_host_send(axis_host_send),
+    `endif
+    `ifdef EN_PEER
+        `ifndef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_PEER_ENDPOINTS
+        .axis_peer_recv(axis_peer_recv),
+        .axis_peer_send(axis_peer_send),
+        .peer_link_up(peer_link_up),
+        .peer_lane_up(peer_lane_up),
         `endif
     `endif
     `ifdef EN_MEM
@@ -306,6 +322,64 @@ module tb_user;
             host_send_drv[i] = new(axis_host_send[i], i);
         end
     end
+
+`ifdef EN_STRM
+`ifndef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE
+    for (genvar i = 0; i < N_HOST_STRM_AXI; i++) begin
+        assign axis_host_recv_user[i].tdata = axis_host_recv[i].tdata;
+        assign axis_host_recv_user[i].tkeep = axis_host_recv[i].tkeep;
+        assign axis_host_recv_user[i].tlast = axis_host_recv[i].tlast;
+        assign axis_host_recv_user[i].tid = axis_host_recv[i].tid;
+        assign axis_host_recv_user[i].tvalid = axis_host_recv[i].tvalid;
+        assign axis_host_recv[i].tready = axis_host_recv_user[i].tready;
+
+        assign axis_host_send[i].tdata = axis_host_send_user[i].tdata;
+        assign axis_host_send[i].tkeep = axis_host_send_user[i].tkeep;
+        assign axis_host_send[i].tlast = axis_host_send_user[i].tlast;
+        assign axis_host_send[i].tid = axis_host_send_user[i].tid;
+        assign axis_host_send[i].tvalid = axis_host_send_user[i].tvalid;
+        assign axis_host_send_user[i].tready = axis_host_send[i].tready;
+    end
+`endif
+`endif
+
+`ifdef EN_PEER
+    assign peer_link_up = {N_PEER_LINKS{1'b1}};
+    assign peer_lane_up = {N_PEER_LINKS{4'hf}};
+
+`ifdef PEER_BACKEND_HOST_STREAM
+    for (genvar i = 0; i < N_PEER_AXI; i++) begin
+        assign axis_peer_recv[i].tdata = axis_host_recv[N_HOST_STRM_AXI + i].tdata;
+        assign axis_peer_recv[i].tkeep = axis_host_recv[N_HOST_STRM_AXI + i].tkeep;
+        assign axis_peer_recv[i].tlast = axis_host_recv[N_HOST_STRM_AXI + i].tlast;
+        assign axis_peer_recv[i].tid = axis_host_recv[N_HOST_STRM_AXI + i].tid;
+        assign axis_peer_recv[i].tvalid = axis_host_recv[N_HOST_STRM_AXI + i].tvalid;
+        assign axis_host_recv[N_HOST_STRM_AXI + i].tready = axis_peer_recv[i].tready;
+
+        assign axis_host_send[N_HOST_STRM_AXI + i].tdata = axis_peer_send[i].tdata;
+        assign axis_host_send[N_HOST_STRM_AXI + i].tkeep = axis_peer_send[i].tkeep;
+        assign axis_host_send[N_HOST_STRM_AXI + i].tlast = axis_peer_send[i].tlast;
+        assign axis_host_send[N_HOST_STRM_AXI + i].tid = axis_peer_send[i].tid;
+        assign axis_host_send[N_HOST_STRM_AXI + i].tvalid = axis_peer_send[i].tvalid;
+        assign axis_peer_send[i].tready = axis_host_send[N_HOST_STRM_AXI + i].tready;
+    end
+`elsif PEER_BACKEND_AURORA_QSFP1
+    // XSim does not model the physical Aurora link. For peer-facing user logic
+    // simulation, model the remote FPGA as a direct peer loopback. This validates
+    // the backend-independent peer contract while full Aurora/QSFP behavior is
+    // left for hardware bring-up.
+    for (genvar i = 0; i < N_PEER_AXI; i++) begin
+        assign axis_peer_recv[i].tdata = axis_peer_send[i].tdata;
+        assign axis_peer_recv[i].tkeep = axis_peer_send[i].tkeep;
+        assign axis_peer_recv[i].tlast = axis_peer_send[i].tlast;
+        assign axis_peer_recv[i].tid = axis_peer_send[i].tid;
+        assign axis_peer_recv[i].tvalid = axis_peer_send[i].tvalid;
+        assign axis_peer_send[i].tready = axis_peer_recv[i].tready;
+    end
+`else
+    initial $fatal(1, "EN_PEER simulation requires a supported peer backend model.");
+`endif
+`endif
 
 `ifdef EN_MEM
     for (genvar i = 0; i < N_CARD_AXI; i++) begin

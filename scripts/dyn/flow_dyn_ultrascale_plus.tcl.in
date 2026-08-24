@@ -71,8 +71,20 @@ create_project -in_memory -part $part
 # Config 0 - init impl
 add_file "$dcp_dir/shell_subdivided.dcp"
 
+proc add_dynamic_impl_constraints {} {
+    global hw_dir cfg
+    set dyn_impl_dir "$hw_dir/constraints/$cfg(fdev)/dynamic/impl"
+    foreach xdc [glob -nocomplain "$dyn_impl_dir/*.xdc"] {
+        set xdc_name [file tail $xdc]
+        if {$cfg(peer_backend) ne "aurora_qsfp1" && [string match "*zaurora*" $xdc_name]} {
+            continue
+        }
+        add_files -fileset [get_filesets constrs_1] $xdc
+    }
+}
+
 add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/shell/impl"
-add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/dynamic/impl"
+add_dynamic_impl_constraints
 add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/fplan"
 if {$cfg(fplan_path) != "0"} {
     add_files -fileset [get_filesets constrs_1] "$cfg(fplan_path)"
@@ -162,7 +174,7 @@ for {set i 1}  {$i < $cfg(n_config)} {incr i} {
         set cmd "set_property SCOPED_TO_CELLS { inst_shell/inst_dynamic/inst_user_wrapper_$j } \[get_files \"$dcp_dir/config_$i/user_synthed_c$i\_$j.dcp\"]"
         eval $cmd
     }
-    add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/dynamic/impl"
+    add_dynamic_impl_constraints
 
     # Link design
     set cmd "link_design -mode default -reconfig_partitions { "

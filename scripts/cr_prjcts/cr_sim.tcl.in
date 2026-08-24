@@ -124,6 +124,9 @@ if {$cfg(sim_external_dynamic_service) eq 1} {
         if {$cfg(en_external_dynamic_service_slot_status) eq 1} {
             lappend sim_defines COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_SLOT_STATUS
         }
+        if {$cfg(en_external_dynamic_service_peer_endpoints) eq 1} {
+            lappend sim_defines COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_PEER_ENDPOINTS
+        }
         set_property verilog_define $sim_defines $define_fileset
     }
 }

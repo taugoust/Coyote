@@ -76,6 +76,12 @@ set cfg(en_cred_local)          ${EN_CRED_LOCAL}
 set cfg(en_cred_remote)         ${EN_CRED_REMOTE}
 set cfg(n_reg)                  ${N_REGIONS}
 set cfg(en_strm)                ${EN_STRM}
+set cfg(en_peer)                ${EN_PEER}
+set cfg(peer_backend)           ${PEER_BACKEND}
+set cfg(peer_interface_version) ${COYOTE_PEER_INTERFACE_VERSION}
+set cfg(n_peer_links)           ${N_PEER_LINKS}
+set cfg(n_peer_axi)             ${N_PEER_AXI}
+set cfg(n_host_strm_axi)        ${N_HOST_STRM_AXI}
 set cfg(en_mem)                 ${EN_MEM}
 set cfg(mem_offset)             ${MEM_OFFSET}
 set cfg(ddr_size)               ${DDR_SIZE}
@@ -186,6 +192,8 @@ set cfg(external_dynamic_service_abi) ${EXTERNAL_DYNAMIC_SERVICE_ABI}
 set cfg(external_dynamic_service_interface_version) ${EXTERNAL_DYNAMIC_SERVICE_INTERFACE_VERSION}
 set cfg(en_external_dynamic_service_control) ${EN_EXTERNAL_DYNAMIC_SERVICE_CONTROL}
 set cfg(en_external_dynamic_service_slot_status) ${EN_EXTERNAL_DYNAMIC_SERVICE_SLOT_STATUS}
+set cfg(en_external_dynamic_service_peer_endpoints) ${EN_EXTERNAL_DYNAMIC_SERVICE_PEER_ENDPOINTS}
+set cfg(external_dynamic_service_peer_interface_version) ${EXTERNAL_DYNAMIC_SERVICE_PEER_INTERFACE_VERSION}
 set cfg(external_dynamic_service_control_abi) ${EXTERNAL_DYNAMIC_SERVICE_CONTROL_ABI}
 set cfg(external_dynamic_service_control_interface_version) ${EXTERNAL_DYNAMIC_SERVICE_CONTROL_INTERFACE_VERSION}
 set cfg(external_dynamic_service_control_base) ${EXTERNAL_DYNAMIC_SERVICE_CONTROL_BASE}

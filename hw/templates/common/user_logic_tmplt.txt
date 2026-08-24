@@ -56,8 +56,16 @@ module design_user_logic_c{{ c_cnfg }}_{{ c_reg }} (
 
 {% if cnfg.en_strm %}
     // HOST DATA STREAMS
-    AXI4SR.s                    axis_host_recv [N_STRM_AXI],
-    AXI4SR.m                    axis_host_send [N_STRM_AXI],
+    AXI4SR.s                    axis_host_recv [N_HOST_STRM_AXI],
+    AXI4SR.m                    axis_host_send [N_HOST_STRM_AXI],
+
+{% endif %}
+{% if cnfg.en_peer and not cnfg.en_external_dynamic_service_peer_endpoints %}
+    // PEER DATA STREAMS
+    AXI4SR.s                    axis_peer_recv [N_PEER_AXI],
+    AXI4SR.m                    axis_peer_send [N_PEER_AXI],
+    input  wire[N_PEER_LINKS-1:0] peer_link_up,
+    input  wire[(4*N_PEER_LINKS)-1:0] peer_lane_up,
 
 {% endif %}
 {% if cnfg.en_mem %}
@@ -108,9 +116,15 @@ module design_user_logic_c{{ c_cnfg }}_{{ c_reg }} (
 //always_comb rq_wr.tie_off_s();
 {% endif %}
 {% if cnfg.en_strm %}
-{% for i in range(0, cnfg.n_strm_axi) %}
+{% for i in range(0, cnfg.n_host_strm_axi) %}
 //always_comb axis_host_recv[{{i}}].tie_off_s();
 //always_comb axis_host_send[{{i}}].tie_off_m();
+{% endfor %}
+{% endif %}
+{% if cnfg.en_peer and not cnfg.en_external_dynamic_service_peer_endpoints %}
+{% for i in range(0, cnfg.n_peer_axi) %}
+//always_comb axis_peer_recv[{{i}}].tie_off_s();
+//always_comb axis_peer_send[{{i}}].tie_off_m();
 {% endfor %}
 {% endif %}
 {% if cnfg.en_mem %}

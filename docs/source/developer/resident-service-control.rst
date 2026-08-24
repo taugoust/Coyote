@@ -52,6 +52,36 @@ option retain their previous module contract.
 The shell export records both ``N_REGIONS`` and whether slot status is present.
 Application builds import those values from the exact shell export.
 
+Optional resident peer endpoints
+--------------------------------
+
+A resident service may request ownership of configured peer streams with the
+``PEER_ENDPOINTS`` registration option. The service top then receives the
+``s_axis_peer_recv`` and ``m_axis_peer_send`` ``AXI4SR`` arrays plus
+``peer_link_up`` and ``peer_lane_up`` status. Peer ownership is exclusive: when
+the resident service requests the endpoints, Coyote does not also expose them
+to reconfigurable application logic.
+
+The U280 ``aurora_qsfp1`` backend is the physically proven peer
+transport. Its Aurora receive interface is push-only and is bridged by a finite
+1,024-beat CDC FIFO. The existing POC keeps the consumer ready; a prolonged
+resident-service stall can therefore exceed the FIFO. This limitation does not
+prevent integration, but packages and users must not claim arbitrary
+backpressure tolerance until the transport is separately bounded or gains flow
+control.
+
+The ``host_stream`` backend reserves one host stream as a deterministic peer
+endpoint in service-aware simulation. With one host and one peer endpoint, set
+``N_STRM_AXI=2`` and ``N_PEER_AXI=1``. It is rejected outside that simulation
+flow. Peer endpoints currently require ``EN_UCLK=0``; application-owned peers
+also require ``EN_PR=0`` until their application boundary has explicit clock
+crossing and decoupling.
+
+The shell export records the generic peer-interface version, backend, connector,
+flow-control mode, endpoint/link counts, host-visible stream count, and owner.
+Peer-enabled application builds reject exports that omit or mismatch this
+versioned contract.
+
 Discovery and compatibility
 ---------------------------
 
