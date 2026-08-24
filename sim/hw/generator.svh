@@ -49,18 +49,20 @@ class generator;
     } check_completed_t;
 
     enum {
-        SET_CSR,           // cThread.setCSR
-        GET_CSR,           // cThread.getCSR
-        USER_MAP,          // cThread.userMap
-        MEM_WRITE,         // Memory writes mem[i] = ...
-        INVOKE,            // cThread.invoke
-        SLEEP,             // Sleep for a certain duration before processing the next command
-        CHECK_COMPLETED,   // Poll until a certain number of operations is completed
-        CLEAR_COMPLETED,   // cThread.clearCompleted
-        USER_UNMAP,        // cThread.userUnmap
-        RDMA_REMOTE_INIT,  // Write data at given position in remote RDMA memory
-        RDMA_LOCAL_READ,   // Simulate a RDMA read request coming from remote to the local vFGPA
-        RDMA_LOCAL_WRITE   // Simulate a RDMA write request coming from remote to the local vFGPA
+        SET_CSR = 0,           // cThread.setCSR
+        GET_CSR = 1,           // cThread.getCSR
+        USER_MAP = 2,          // cThread.userMap
+        MEM_WRITE = 3,         // Memory writes mem[i] = ...
+        INVOKE = 4,            // cThread.invoke
+        SLEEP = 5,             // Sleep for a certain duration before processing the next command
+        CHECK_COMPLETED = 6,   // Poll until a certain number of operations is completed
+        CLEAR_COMPLETED = 7,   // cThread.clearCompleted
+        USER_UNMAP = 8,        // cThread.userUnmap
+        RDMA_REMOTE_INIT = 9,  // Write data at given position in remote RDMA memory
+        RDMA_LOCAL_READ = 10,  // Simulate a RDMA read request coming from remote to the local vFGPA
+        RDMA_LOCAL_WRITE = 11, // Simulate a RDMA write request coming from remote to the local vFGPA
+        SERVICE_SET_CSR = 12,  // Write a resident dynamic-service control register
+        SERVICE_GET_CSR = 13   // Read a resident dynamic-service control register
     } op_type_t;
     int op_type_size[] = {
         trs_ctrl::SET_BYTES,
@@ -74,12 +76,15 @@ class generator;
         $bits(longint) / 8,
         $bits(vaddr_size_t) / 8,
         $bits(vaddr_size_t) / 8,
-        $bits(vaddr_size_t) / 8
+        $bits(vaddr_size_t) / 8,
+        trs_ctrl::SET_BYTES,
+        trs_ctrl::GET_BYTES
     };
 
-    mailbox #(trs_ctrl)  ctrl_mbx;
-
-    event csr_polling_done;
+    mailbox #(trs_ctrl) ctrl_mbx;
+    mailbox #(trs_ctrl) service_ctrl_mbx;
+    mailbox #(bit) ctrl_completion_mbx;
+    mailbox #(bit) service_ctrl_completion_mbx;
 
     memory_simulation mem_sim;
     scoreboard scb;
@@ -89,14 +94,17 @@ class generator;
 
     function new(
         mailbox #(trs_ctrl) ctrl_mbx,
-        input event csr_polling_done,
+        mailbox #(trs_ctrl) service_ctrl_mbx,
+        mailbox #(bit) ctrl_completion_mbx,
+        mailbox #(bit) service_ctrl_completion_mbx,
         input string input_file_name,
         memory_simulation mem_sim,
         scoreboard scb
     );
         this.ctrl_mbx = ctrl_mbx;
-
-        this.csr_polling_done = csr_polling_done;
+        this.service_ctrl_mbx = service_ctrl_mbx;
+        this.ctrl_completion_mbx = ctrl_completion_mbx;
+        this.service_ctrl_completion_mbx = service_ctrl_completion_mbx;
 
         this.file_name = input_file_name;
 
@@ -158,21 +166,53 @@ class generator;
             case(op_type)
                 SET_CSR: begin
                     trs_ctrl trs = new();
+                    bit completed;
                     trs.initializeSet(data);
                     ctrl_mbx.put(trs);
+                    ctrl_completion_mbx.get(completed);
                     `VERBOSE(("setCSR %0d to address %x with value %0d", trs.is_write, trs.addr, trs.data))
                 end
                 GET_CSR: begin
                     trs_ctrl trs = new();
+                    bit completed;
                     trs.initializeGet(data);
                     ctrl_mbx.put(trs);
-                    if (trs.do_polling) begin
+                    if (trs.do_polling)
                         `DEBUG(("Polling until CSR register at address %x has value %0d...", trs.addr, trs.data))
-                        @(csr_polling_done);
+                    ctrl_completion_mbx.get(completed);
+                    if (trs.do_polling)
                         `DEBUG(("Polling CSR completed"))
-                    end else begin
+                    else
                         `VERBOSE(("getCSR %0d to address %x with value %0d", trs.is_write, trs.addr, trs.data))
-                    end
+                end
+                SERVICE_SET_CSR: begin
+`ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_CONTROL
+                    trs_ctrl trs = new();
+                    bit completed;
+                    trs.initializeSet(data);
+                    service_ctrl_mbx.put(trs);
+                    service_ctrl_completion_mbx.get(completed);
+                    `VERBOSE(("setServiceCSR %0d to address %x with value %0d", trs.is_write, trs.addr, trs.data))
+`else
+                    `FATAL(("Resident-service CSR write requires a controlled external dynamic service"))
+`endif
+                end
+                SERVICE_GET_CSR: begin
+`ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_CONTROL
+                    trs_ctrl trs = new();
+                    bit completed;
+                    trs.initializeGet(data);
+                    service_ctrl_mbx.put(trs);
+                    if (trs.do_polling)
+                        `DEBUG(("Polling until resident-service CSR register at address %x has value %0d...", trs.addr, trs.data))
+                    service_ctrl_completion_mbx.get(completed);
+                    if (trs.do_polling)
+                        `DEBUG(("Polling resident-service CSR completed"))
+                    else
+                        `VERBOSE(("getServiceCSR %0d from address %x with value %0d", trs.is_write, trs.addr, trs.data))
+`else
+                    `FATAL(("Resident-service CSR read requires a controlled external dynamic service"))
+`endif
                 end
                 USER_MAP: begin
                     vaddr_size_t trs = data[$bits(vaddr_size_t) - 1:0];

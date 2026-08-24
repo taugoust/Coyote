@@ -109,6 +109,10 @@ set cfg(qsfp)                   ${QSFP}
 set cfg(pmtu)                   ${PMTU_BYTES}
 set cfg(cores)                  ${COMP_CORES}
 set cfg(build_opt)              ${BUILD_OPT}
+set cfg(en_timing_check)        ${EN_TIMING_CHECK}
+set cfg(timing_oracle_reject_rqa_below) ${TIMING_ORACLE_REJECT_RQA_BELOW}
+set cfg(timing_oracle_pass_rqa_at_least) ${TIMING_ORACLE_PASS_RQA_AT_LEAST}
+set cfg(timing_oracle_max_paths) ${TIMING_ORACLE_MAX_PATHS}
 set cfg(stat_probe)             ${STATIC_PROBE}
 set cfg(shell_probe)            ${SHELL_PROBE}
 set cfg(en_nclk)                ${EN_NCLK}

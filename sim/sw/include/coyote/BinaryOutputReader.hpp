@@ -55,20 +55,30 @@ private:
     } irq_t;
 
     enum OutputOperations {
-        GET_CSR,         // Result of cThread.getCSR()
-        HOST_WRITE,      // Host write through axis_host_send
-        IRQ,             // Interrupt through notify interface
-        CHECK_COMPLETED, // Result of cThread.checkCompleted()
-        HOST_READ        // Host read through sq_rd
+        GET_CSR = 0,         // Result of cThread.getCSR()
+        HOST_WRITE = 1,      // Host write through axis_host_send
+        IRQ = 2,             // Interrupt through notify interface
+        CHECK_COMPLETED = 3, // Result of cThread.checkCompleted()
+        HOST_READ = 4,       // Host read through sq_rd
+        SERVICE_GET_CSR = 5  // Result of a resident-service control read
     };
 
-    size_t op_type_size[5] = {sizeof(uint64_t), sizeof(vaddr_size_t), sizeof(irq_t), sizeof(uint32_t), sizeof(vaddr_size_t)};
+    static constexpr size_t OUTPUT_OPERATION_COUNT = 6;
+    size_t op_type_size[OUTPUT_OPERATION_COUNT] = {
+        sizeof(uint64_t),
+        sizeof(vaddr_size_t),
+        sizeof(irq_t),
+        sizeof(uint32_t),
+        sizeof(vaddr_size_t),
+        sizeof(uint64_t)
+    };
 
     std::unordered_map<void *, uint32_t> *tlb_pages;
 
     FILE *fp;
 
     BlockingQueue<uint64_t> csr_queue;
+    BlockingQueue<uint64_t> service_csr_queue;
     BlockingQueue<uint32_t> completed_queue;
     BlockingQueue<uint32_t> irq_queue;
 
@@ -111,8 +121,12 @@ public:
     }
 
     int readUntilEOF() {
-        char op_type = getc(fp);
+        int op_type = getc(fp);
         while (op_type != EOF) {
+            if (op_type < 0 || static_cast<size_t>(op_type) >= OUTPUT_OPERATION_COUNT) {
+                FATAL("Unknown operator type " << op_type)
+                std::terminate();
+            }
             unsigned char data[op_type_size[op_type]];
             for (int i = 0; i < op_type_size[op_type]; i++)
                 data[i] = getc(fp);
@@ -156,6 +170,12 @@ public:
 
                     input_writer.writeMem(meta.vaddr, meta.size, reinterpret_cast<void *>(meta.vaddr));
                     break;}
+                case SERVICE_GET_CSR: {
+                    uint64_t result;
+                    std::memcpy(&result, data, sizeof(result));
+                    DEBUG("Return getServiceCSR(...) = " << result)
+                    service_csr_queue.push(result);
+                    break;}
                 default: 
                     FATAL("Unknown operator type " << (int) op_type)
                     std::terminate();
@@ -182,6 +202,12 @@ public:
      * was sent to the simulation is put into the csr_queue by the constantly running readUnitlEOF() 
      * function.
      */
+    uint64_t getServiceCSRResult() {
+        uint64_t result;
+        service_csr_queue.pop(result);
+        return result;
+    }
+
     uint32_t checkCompletedResult() {
         uint32_t result;
         completed_queue.pop(result);
