@@ -233,6 +233,27 @@ set(COMP_CORES 8 CACHE STRING "Number of compilation cores")
 # Run implementation with optimization, can help close timing but significantly longer compilation time
 set(BUILD_OPT 0 CACHE STRING "Build optimizations (significantly longer compilation times)")
 
+# Reject routed checkpoints that retain negative setup or hold slack. This is
+# opt-in so exploratory Coyote builds can still emit implementation reports.
+set(EN_TIMING_CHECK 0 CACHE STRING "Require routed implementation timing closure")
+
+# Early predictive implementation-quality screening. The timing_oracle target
+# links configuration 0, assesses the optimized design, and uses cheap placement
+# only for candidates not rejected by the post-opt score.
+set(TIMING_ORACLE_REJECT_RQA_BELOW 3 CACHE STRING "Reject timing-oracle candidates with a lower QoR Assessment score")
+set(TIMING_ORACLE_PASS_RQA_AT_LEAST 4 CACHE STRING "Classify timing-oracle candidates at or above this QoR Assessment score as PASS")
+set(TIMING_ORACLE_MAX_PATHS 100 CACHE STRING "Maximum paths requested from each QoR Assessment report")
+
+if(TIMING_ORACLE_REJECT_RQA_BELOW LESS 1 OR TIMING_ORACLE_REJECT_RQA_BELOW GREATER 5)
+    message(FATAL_ERROR "TIMING_ORACLE_REJECT_RQA_BELOW must be between 1 and 5")
+endif()
+if(TIMING_ORACLE_PASS_RQA_AT_LEAST LESS TIMING_ORACLE_REJECT_RQA_BELOW OR TIMING_ORACLE_PASS_RQA_AT_LEAST GREATER 5)
+    message(FATAL_ERROR "TIMING_ORACLE_PASS_RQA_AT_LEAST must be between TIMING_ORACLE_REJECT_RQA_BELOW and 5")
+endif()
+if(TIMING_ORACLE_MAX_PATHS LESS 1)
+    message(FATAL_ERROR "TIMING_ORACLE_MAX_PATHS must be positive")
+endif()
+
 ##
 ## DESIGN CHECKPOINTS
 ##
@@ -1115,6 +1136,7 @@ macro(gen_scripts)
         message(FATAL_ERROR "Unsupported FPGA architecture.")
     endif()
     configure_file(${CYT_DIR}/scripts/dyn/flow_app.tcl.in ${CMAKE_BINARY_DIR}/flow_app.tcl)
+    configure_file(${CYT_DIR}/scripts/dyn/timing_oracle.tcl.in ${CMAKE_BINARY_DIR}/timing_oracle.tcl)
 
     # Bitgen
     configure_file(${CYT_DIR}/scripts/impl/bitgen.tcl.in ${CMAKE_BINARY_DIR}/bitgen.tcl)
@@ -1185,6 +1207,14 @@ macro(gen_dep_lists)
     foreach(i RANGE ${NN_CONFIG})
         list(APPEND DEP_DCP_LIST_DYN ${CMAKE_BINARY_DIR}/checkpoints/config_${i}/shell_routed_c${i}.dcp)
     endforeach()
+
+    # Timing oracle
+    set(DEP_TIMING_ORACLE ${CMAKE_BINARY_DIR}/reports/timing_oracle/summary.json)
+    if(FPGA_ARCH STREQUAL "versal")
+        set(DEP_TIMING_ORACLE_INPUTS ${DEP_DCP_LIST_SYNTH_USER})
+    else()
+        set(DEP_TIMING_ORACLE_INPUTS ${DEP_DCP_LIST_LINK})
+    endif()
 
     # Bitgen
     if(BUILD_STATIC)
@@ -1268,6 +1298,7 @@ macro(gen_targets)
 
     set(DYN_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/flow_dyn.tcl -notrace)
     set(APP_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/flow_app.tcl -notrace)
+    set(TIMING_ORACLE_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/timing_oracle.tcl -notrace)
     
     set(BGEN_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/bitgen.tcl -notrace)
 
@@ -1380,6 +1411,22 @@ macro(gen_targets)
                 DEPENDS ${DEP_DCP_LIST_LINK}
             )
         endif()
+    endif()
+
+    # Predictive timing oracle
+    # -----------------------------------
+    if(BUILD_SHELL AND EN_PR)
+        add_custom_target(timing_oracle
+            DEPENDS ${DEP_TIMING_ORACLE}
+        )
+        add_custom_command(
+            OUTPUT ${DEP_TIMING_ORACLE}
+            ${TIMING_ORACLE_CMD}
+            DEPENDS
+                ${DEP_TIMING_ORACLE_INPUTS}
+                ${CMAKE_BINARY_DIR}/base.tcl
+                ${CMAKE_BINARY_DIR}/timing_oracle.tcl
+        )
     endif()
 
     # Bitgen
