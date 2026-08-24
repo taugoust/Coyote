@@ -36,13 +36,21 @@ class ctrl_simulation;
     mailbox #(trs_ctrl) mbx;
     c_axil drv;
     scoreboard scb;
+    mailbox #(bit) completion_mbx;
+    bit resident_service;
 
-    event polling_done;
-
-    function new(mailbox #(trs_ctrl) ctrl_mbx, c_axil axi_drv, scoreboard scb);
+    function new(
+        mailbox #(trs_ctrl) ctrl_mbx,
+        mailbox #(bit) completion_mbx,
+        c_axil axi_drv,
+        scoreboard scb,
+        input bit resident_service
+    );
         this.mbx = ctrl_mbx;
+        this.completion_mbx = completion_mbx;
         this.drv = axi_drv;
         this.scb = scb;
+        this.resident_service = resident_service;
     endfunction
 
     task initialize();
@@ -83,7 +91,6 @@ class ctrl_simulation;
                     while (read_data != trs.data) begin
                         drv.read(trs.addr, read_data, resp);
                     end
-                    -> polling_done;
                 end
 
                 `ifdef EN_RANDOMIZATION // Read burst which happens in real hardware
@@ -92,9 +99,13 @@ class ctrl_simulation;
                         `ASSERT(resp == 2'b00, ("Read status has to be 2'b00 (OK) but is 2'b%b.", resp))
                     end
                 `endif
-                scb.writeCTRL(read_data);
+                scb.writeCTRL(read_data, resident_service);
                 `DEBUG(("Read register: %x, data: %0d", trs.addr, read_data))
             end
+
+            // Keep generator ordering synchronous and prevent EOF from closing
+            // the scoreboard while this transaction or its response is in flight.
+            completion_mbx.put(1'b1);
         end
     endtask
 endclass

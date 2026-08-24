@@ -57,7 +57,10 @@ module tb_user;
     // Mailboxes
     ////
 
-    mailbox #(trs_ctrl)  ctrl_mbx = new();
+    mailbox #(trs_ctrl) ctrl_mbx = new();
+    mailbox #(trs_ctrl) service_ctrl_mbx = new();
+    mailbox #(bit) ctrl_completion_mbx = new();
+    mailbox #(bit) service_ctrl_completion_mbx = new();
     mailbox #(c_trs_ack) ack_mbx = new();
 
     // Host memory streams
@@ -125,11 +128,17 @@ module tb_user;
     AXI4S axis_host_out_user[N_REGIONS](.*);
     AXI4S axis_host_out_shell[N_REGIONS](.*);
     AXI4L service_ctrl(.*);
+`ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_CONTROL
+    c_axil service_ctrl_drv = new(service_ctrl);
+    ctrl_simulation service_ctrl_sim;
+`endif
 `ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_SLOT_STATUS
     logic [N_REGIONS-1:0] slot_decoupled = '0;
 `endif
 
+`ifndef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_CONTROL
     initial service_ctrl.tie_off_m();
+`endif
 
     assign axis_host_in_shell[0].tdata = axis_host_recv[0].tdata;
     assign axis_host_in_shell[0].tkeep = axis_host_recv[0].tkeep;
@@ -269,6 +278,9 @@ module tb_user;
     task static env_threads();
         fork
             ctrl_sim.run();
+`ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_CONTROL
+            service_ctrl_sim.run();
+`endif
             notify_sim.run();
 
             mem_sim.run_sq_rd_recv();
@@ -352,7 +364,16 @@ module tb_user;
         scb = new(output_file_name);
 
         // CTRL & Notify
-        ctrl_sim = new(ctrl_mbx, axi_ctrl_drv, scb);
+        ctrl_sim = new(ctrl_mbx, ctrl_completion_mbx, axi_ctrl_drv, scb, 1'b0);
+`ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_CONTROL
+        service_ctrl_sim = new(
+            service_ctrl_mbx,
+            service_ctrl_completion_mbx,
+            service_ctrl_drv,
+            scb,
+            1'b1
+        );
+`endif
         notify_sim = new(notify_drv, scb);
 
         // Host memory
@@ -431,7 +452,9 @@ module tb_user;
         // Generator
         gen = new(
             ctrl_mbx,
-            ctrl_sim.polling_done,
+            service_ctrl_mbx,
+            ctrl_completion_mbx,
+            service_ctrl_completion_mbx,
             input_file_name,
             mem_sim,
             scb
@@ -441,6 +464,9 @@ module tb_user;
         mem_sim.initialize();
 
         ctrl_sim.initialize();
+`ifdef COYOTE_SIM_EXTERNAL_DYNAMIC_SERVICE_CONTROL
+        service_ctrl_sim.initialize();
+`endif
         notify_sim.initialize();
         host_mem_mock.initialize();
     `ifdef EN_MEM
