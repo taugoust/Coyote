@@ -40,15 +40,17 @@ namespace coyote {
  */
 class BinaryInputWriter {
     enum InputOperations {
-        SET_CSR,         // cThread.setCSR
-        GET_CSR,         // cThread.getCSR
-        USER_MAP,        // cThread.userMap
-        MEM_WRITE,       // Memory writes mem[i] = ...
-        INVOKE,          // cThread.invoke
-        SLEEP,           // Sleep for a certain duration before processing the next command
-        CHECK_COMPLETED, // Return how many requests have been completed for a given CoyoteOper
-        CLEAR_COMPLETED, // Clear completed counters
-        USER_UNMAP       // cThread.userUnmap
+        SET_CSR = 0,          // cThread.setCSR
+        GET_CSR = 1,          // cThread.getCSR
+        USER_MAP = 2,         // cThread.userMap
+        MEM_WRITE = 3,        // Memory writes mem[i] = ...
+        INVOKE = 4,           // cThread.invoke
+        SLEEP = 5,            // Sleep for a certain duration before processing the next command
+        CHECK_COMPLETED = 6,  // Return how many requests have been completed for a given CoyoteOper
+        CLEAR_COMPLETED = 7,  // Clear completed counters
+        USER_UNMAP = 8,       // cThread.userUnmap
+        SERVICE_SET_CSR = 12, // Resident dynamic-service control write
+        SERVICE_GET_CSR = 13  // Resident dynamic-service control read
     };
 
     typedef struct __attribute__((packed)) {
@@ -123,6 +125,18 @@ public:
         get_csr_op_t ctrl_op = {addr * 8, 0, 0};
         writeData(GET_CSR, sizeof(get_csr_op_t), &ctrl_op);
         DEBUG("Wrote getCSR(" << addr << ")")
+    }
+
+    void setServiceCSR(uint64_t byte_addr, uint64_t data) {
+        set_csr_op_t ctrl_op = {byte_addr, data};
+        writeData(SERVICE_SET_CSR, sizeof(set_csr_op_t), &ctrl_op);
+        DEBUG("Wrote setServiceCSR(" << byte_addr << ", " << data << ")")
+    }
+
+    void getServiceCSR(uint64_t byte_addr, uint64_t expected = 0, uint8_t do_polling = 0) {
+        get_csr_op_t ctrl_op = {byte_addr, expected, do_polling};
+        writeData(SERVICE_GET_CSR, sizeof(get_csr_op_t), &ctrl_op);
+        DEBUG("Wrote getServiceCSR(" << byte_addr << ", " << expected << ", " << (int) do_polling << ")")
     }
 
     void userMap(uint64_t vaddr, uint64_t size) {
