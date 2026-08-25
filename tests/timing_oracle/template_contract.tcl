@@ -15,10 +15,12 @@ if {![info complete $script]} {
 
 foreach required {
     report_qor_assessment
-    get_qor_assessment
+    get_assessment_score
     {place_design -directive RuntimeOptimized}
     predictiveOnly
     classification
+    {file delete -force "$oracle_report_dir/complete"}
+    {$oracle_report_dir/complete}
 } {
     if {[string first $required $script] < 0} {
         puts stderr "timing-oracle Tcl lacks required construct '$required': $path"

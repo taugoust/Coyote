@@ -34,6 +34,7 @@ if {[catch {
 
 # Config
 source "${CMAKE_BINARY_DIR}/base.tcl"
+file delete -force "$bit_dir/complete"
 
 ########################################################################################################
 # GENERATE BITSTREAMS
@@ -165,6 +166,10 @@ puts "[color $clr_cmplt "**"]"
 puts "[color $clr_cmplt "** Shell bitstreams generated"]"
 puts "[color $clr_cmplt "**"]"
 puts "" 
+
+set completion [open "$bit_dir/complete" w]
+puts $completion "bitstream generation complete"
+close $completion
 
 ########################################################################################################
 

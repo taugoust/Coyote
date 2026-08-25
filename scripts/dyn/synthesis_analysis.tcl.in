@@ -169,6 +169,7 @@ proc write_summary {path valid reasons setup_path hold_path setup_tns} {
 
 set analysis_report_dir "$rprt_dir/synthesis_analysis"
 file mkdir $analysis_report_dir
+file delete -force "$analysis_report_dir/complete"
 
 puts "** Starting resident-shell synthesis analysis ..."
 puts "**"
@@ -225,6 +226,21 @@ if {$valid} {
 write_summary "$analysis_report_dir/summary.json" $valid $reasons \
     $setup_path $hold_path $setup_tns
 close_project
+foreach artifact [list \
+    "$analysis_report_dir/summary.json" \
+    "$analysis_report_dir/check_timing.rpt" \
+    "$analysis_report_dir/utilization.rpt" \
+    "$analysis_report_dir/high_fanout_nets.rpt" \
+    "$analysis_report_dir/setup_paths.rpt" \
+    "$analysis_report_dir/hold_paths.rpt" \
+    "$analysis_report_dir/timing_summary.rpt"] {
+    if {![file exists $artifact] || [file size $artifact] == 0} {
+        error "Synthesis-analysis artifact is missing or empty: $artifact"
+    }
+}
+set completion [open "$analysis_report_dir/complete" w]
+puts $completion "synthesis analysis complete"
+close $completion
 
 puts ""
 puts "**"

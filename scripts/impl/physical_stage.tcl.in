@@ -1,0 +1,133 @@
+######################################################################################
+# Immutable physical implementation phase runner.
+######################################################################################
+
+if {[catch {
+    source "${CMAKE_BINARY_DIR}/base.tcl"
+
+    set phase "${IMPLEMENTATION_PHASE}"
+    set input_dcp "${IMPLEMENTATION_INPUT_DCP}"
+    set output_dcp "${IMPLEMENTATION_OUTPUT_DCP}"
+    set completion_path "${IMPLEMENTATION_COMPLETION_PATH}"
+    set report_dir "${IMPLEMENTATION_REPORT_DIR}"
+    set report_suffix "${IMPLEMENTATION_REPORT_SUFFIX}"
+    set label "${IMPLEMENTATION_LABEL}"
+    set drc_name "${IMPLEMENTATION_DRC_NAME}"
+    set validation_summary "${IMPLEMENTATION_VALIDATION_SUMMARY}"
+    set telemetry_path "${IMPLEMENTATION_TELEMETRY_PATH}"
+
+    if {$phase ni {opt place route validate}} {
+        error "Unsupported immutable implementation phase: $phase"
+    }
+    if {$input_dcp eq "" || $output_dcp eq "" || $completion_path eq "" ||
+        $report_dir eq "" || $telemetry_path eq ""} {
+        error "Immutable implementation phase requires explicit input, output, completion, report, and telemetry paths"
+    }
+
+    file delete -force $completion_path
+    file mkdir [file dirname $output_dcp]
+    file mkdir [file dirname $completion_path]
+    file mkdir $report_dir
+    set_param general.maxThreads $cfg(cores)
+    open_checkpoint $input_dcp
+
+    switch -- $phase {
+        opt {
+            set directive "${IMPLEMENTATION_OPT_DIRECTIVE}"
+            if {$directive eq "project"} {
+                set directive [expr {$cfg(build_opt) eq 1 ? "Explore" : ""}]
+            }
+            if {$directive ne ""} { opt_design -directive $directive } else { opt_design }
+        }
+        place {
+            set place_directive "${IMPLEMENTATION_PLACE_DIRECTIVE}"
+            if {$place_directive eq "project"} {
+                if {$cfg(build_opt) eq 1} {
+                    if {$cfg(fpga_arch) eq "versal" && \
+                        [package vcompare [version -short] "2024.2"] >= 0} {
+                        set place_directive AggressiveExplore
+                    } else {
+                        set place_directive Auto_1
+                    }
+                } else {
+                    set place_directive ""
+                }
+            }
+            if {$place_directive ne ""} { place_design -directive $place_directive } else { place_design }
+            set phys_directive "${IMPLEMENTATION_PHYS_OPT_DIRECTIVE}"
+            if {$phys_directive eq "project"} {
+                set phys_directive [expr {$cfg(build_opt) eq 1 ? "AggressiveExplore" : ""}]
+            }
+            if {$phys_directive ne ""} { phys_opt_design -directive $phys_directive } else { phys_opt_design }
+        }
+        route {
+            set route_directive "${IMPLEMENTATION_ROUTE_DIRECTIVE}"
+            if {$route_directive eq "project"} {
+                set route_directive [expr {$cfg(build_opt) eq 1 ? "AggressiveExplore" : ""}]
+            }
+            if {$route_directive ne ""} { route_design -directive $route_directive } else { route_design }
+            set post_directive "${IMPLEMENTATION_POST_ROUTE_PHYS_OPT_DIRECTIVE}"
+            if {$post_directive eq "project"} {
+                set post_directive [expr {$cfg(build_opt) eq 1 ? "AggressiveExplore" : ""}]
+            }
+            if {$post_directive ne ""} {
+                phys_opt_design -directive $post_directive
+                set final_directive "${IMPLEMENTATION_FINAL_ROUTE_DIRECTIVE}"
+                if {$final_directive eq "project"} { set final_directive "" }
+                if {$final_directive ne ""} { route_design -directive $final_directive } else { route_design }
+            }
+        }
+        validate {
+            if {$validation_summary eq ""} {
+                error "validate requires an explicit validation summary path"
+            }
+            report_bitstream_drc \
+                $drc_name "$report_dir/shell_drc_bitstream_checks${report_suffix}.rpt"
+            write_implementation_observations \
+                $phase $report_dir $report_suffix $telemetry_path $drc_name
+            set outcome accepted
+            set reasons {}
+            if {[catch {require_clean_bitstream_drc $drc_name} reason]} {
+                set outcome rejected
+                lappend reasons $reason
+            }
+            set enforce_timing "${IMPLEMENTATION_ENFORCE_TIMING}"
+            if {$enforce_timing eq "project"} { set enforce_timing $cfg(en_timing_check) }
+            if {$enforce_timing eq 1 && \
+                [catch {require_timing_closure $label} reason]} {
+                set outcome rejected
+                lappend reasons $reason
+            }
+            set escaped_reasons {}
+            foreach reason $reasons {
+                set escaped [string map [list \
+                    "\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t"] $reason]
+                lappend escaped_reasons "\"$escaped\""
+            }
+            file mkdir [file dirname $validation_summary]
+            set summary [open $validation_summary w]
+            puts $summary "{"
+            puts $summary "  \"schemaVersion\": 1,"
+            puts $summary "  \"outcome\": \"$outcome\","
+            puts $summary "  \"reasons\": \[[join $escaped_reasons {, }]\]"
+            puts $summary "}"
+            close $summary
+        }
+    }
+
+    if {$phase ne "validate"} {
+        write_implementation_observations \
+            $phase $report_dir $report_suffix $telemetry_path ""
+    }
+    write_checkpoint -force $output_dcp
+    close_project
+    set completion [open $completion_path w]
+    puts $completion "$phase complete"
+    close $completion
+} errorstring]} {
+    puts "[color $clr_error "** CERR: $errorstring"]"
+    puts "[color $clr_error "**"]"
+    exit 1
+}
+
+exit 0

@@ -36,31 +36,7 @@ if {[catch {
 
 # Config
 source "${CMAKE_BINARY_DIR}/base.tcl"
-
-proc require_clean_bitstream_drc {run_name report_path} {
-    report_drc -ruledeck bitstream_checks -name $run_name -file $report_path
-    set errors [get_drc_violations -name $run_name -filter {SEVERITY == Error}]
-    if {[llength $errors] != 0} {
-        set checks {}
-        foreach violation $errors {
-            lappend checks [get_property CHECK $violation]
-        }
-        error "Bitstream DRC failed ($run_name): [join [lsort -unique $checks] {, }]"
-    }
-}
-
-proc require_timing_closure {label} {
-    foreach delay_type {max min} {
-        set paths [get_timing_paths -delay_type $delay_type -max_paths 1 -nworst 1]
-        if {[llength $paths] == 0} {
-            error "No $delay_type timing path is available for $label"
-        }
-        set slack [get_property SLACK [lindex $paths 0]]
-        if {$slack < 0.0} {
-            error "$label has negative $delay_type slack: $slack ns"
-        }
-    }
-}
+file delete -force "$dcp_dir/dynamic_route_complete"
 
 ########################################################################################################
 # LINK, PLACE & ROUTE, CONFIG #0
@@ -161,31 +137,18 @@ if {$cfg(build_opt) eq 1} {
     route_design
 }
 
-if {$cfg(build_opt) eq 1} {
-    phys_opt_design -directive AggressiveExplore
-    # Post-route physical optimization may replicate or move routed logic.
-    # Re-run the router before exporting a DFX checkpoint so every resulting
-    # net has a finalized route rather than relying on bitgen to discover it.
-    route_design
-}
+finalize_post_route_optimization
 
+# Emit both the config-specific and legacy root reports before either gate can
+# reject the design, so failed builds retain the complete diagnostic aliases.
+report_routed_design "$rprt_dir/config_0" "_c0"
+report_bitstream_drc \
+    config_0_bitstream_gate "$rprt_dir/config_0/shell_drc_bitstream_checks_c0.rpt"
+report_and_validate_routed_design \
+    "routed shell" "$rprt_dir" "" shell_bitstream_gate
+require_clean_bitstream_drc config_0_bitstream_gate
 write_checkpoint -force "$dcp_dir/config_0/shell_routed_c0.dcp"
 write_checkpoint -force "$dcp_dir/shell_routed.dcp"
-
-report_utilization -file "$rprt_dir/config_0/shell_utilization_c0.rpt"
-report_route_status -file "$rprt_dir/config_0/shell_route_status_c0.rpt"
-report_timing_summary -file "$rprt_dir/config_0/shell_timing_summary_c0.rpt"
-require_clean_bitstream_drc config_0_bitstream_gate \
-    "$rprt_dir/config_0/shell_drc_bitstream_checks_c0.rpt"
-
-report_utilization -file "$rprt_dir/shell_utilization.rpt"
-report_route_status -file "$rprt_dir/shell_route_status.rpt"
-report_timing_summary -file "$rprt_dir/shell_timing_summary.rpt"
-require_clean_bitstream_drc shell_bitstream_gate \
-    "$rprt_dir/shell_drc_bitstream_checks.rpt"
-if {$cfg(en_timing_check) eq 1} {
-    require_timing_closure "config 0 routed shell"
-}
 
 ########################################################################################################
 # LOCK SHELL OF CONFIG #0
@@ -255,23 +218,17 @@ for {set i 1}  {$i < $cfg(n_config)} {incr i} {
         route_design
     }
 
-    if {$cfg(build_opt) eq 1} {
-        phys_opt_design -directive AggressiveExplore
-        route_design
-    }
+    finalize_post_route_optimization
 
+    report_and_validate_routed_design \
+        "config $i routed shell" "$rprt_dir/config_$i" "_c$i" config_${i}_bitstream_gate
     write_checkpoint -force "$dcp_dir/config_$i/shell_routed_c$i.dcp"
-
-    report_utilization -file "$rprt_dir/config_$i/shell_utilization_c$i.rpt"
-    report_route_status -file "$rprt_dir/config_$i/shell_route_status_c$i.rpt"
-    report_timing_summary -file "$rprt_dir/config_$i/shell_timing_summary_c$i.rpt"
-    require_clean_bitstream_drc config_${i}_bitstream_gate \
-        "$rprt_dir/config_$i/shell_drc_bitstream_checks_c$i.rpt"
-    if {$cfg(en_timing_check) eq 1} {
-        require_timing_closure "config $i routed shell"
-    }
     close_project
 }
+
+set completion [open "$dcp_dir/dynamic_route_complete" w]
+puts $completion "dynamic route complete"
+close $completion
 
 ########################################################################################################
 
