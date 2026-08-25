@@ -253,7 +253,7 @@ report_qor_assessment \
     -file "$oracle_report_dir/post_opt_qor_assessment.rpt" \
     -csv_output_dir "$oracle_report_dir/post_opt_csv" \
     -max_paths $cfg(timing_oracle_max_paths)
-set opt_rqa [expr {int([get_qor_assessment])}]
+set opt_rqa [expr {int([get_assessment_score])}]
 set placement_completed false
 
 if {$opt_rqa < $cfg(timing_oracle_reject_rqa_below)} {
@@ -267,7 +267,7 @@ if {$opt_rqa < $cfg(timing_oracle_reject_rqa_below)} {
         -file "$oracle_report_dir/post_place_qor_assessment.rpt" \
         -csv_output_dir "$oracle_report_dir/post_place_csv" \
         -max_paths $cfg(timing_oracle_max_paths)
-    set place_rqa [expr {int([get_qor_assessment])}]
+    set place_rqa [expr {int([get_assessment_score])}]
     report_utilization -file "$oracle_report_dir/post_place_utilization.rpt"
     set timing_summary [report_timing_summary -return_string]
     write_text_file "$oracle_report_dir/post_place_timing_summary.rpt" $timing_summary

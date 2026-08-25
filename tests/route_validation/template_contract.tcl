@@ -47,6 +47,10 @@ foreach required {
     {proc require_timing_closure}
     {foreach delay_type {max min}}
     {proc report_and_validate_routed_design}
+    {proc write_implementation_observations}
+    {proc implementation_timing_totals}
+    {proc implementation_route_count}
+    get_assessment_score
     report_route_status
     report_timing_summary
     require_clean_bitstream_drc
@@ -103,11 +107,12 @@ foreach required {
     {place_design}
     {phys_opt_design}
     {route_design}
-    {report_routed_design}
+    {write_implementation_observations}
     {report_bitstream_drc}
     {require_clean_bitstream_drc}
     {require_timing_closure}
     {set validation_summary "${IMPLEMENTATION_VALIDATION_SUMMARY}"}
+    {set telemetry_path "${IMPLEMENTATION_TELEMETRY_PATH}"}
     {set enforce_timing "${IMPLEMENTATION_ENFORCE_TIMING}"}
     {set outcome rejected}
     {write_checkpoint -force $output_dcp}
@@ -182,12 +187,17 @@ foreach required {
     DEP_SYNTH_GENERATION_INPUTS
     DEP_IMPLEMENTATION_INPUTS
     DEP_STATIC_CHECKPOINT_INPUTS
+    {set(_application_comp_cores "${COMP_CORES}")}
+    {set(COMP_CORES "${_application_comp_cores}")}
     {set(DEP_SYNTHESIS_ANALYSIS ${CMAKE_BINARY_DIR}/reports/synthesis_analysis/complete)}
     {set(DEP_TIMING_ORACLE ${CMAKE_BINARY_DIR}/reports/timing_oracle/complete)}
     {${CMAKE_BINARY_DIR}/CMakeCache.txt}
     {${CMAKE_BINARY_DIR}/pnr_shell.tcl}
     {${CMAKE_BINARY_DIR}/physical_stage.tcl}
     {add_custom_target(physical_stage DEPENDS ${IMPLEMENTATION_COMPLETION_PATH})}
+    {${IMPLEMENTATION_TELEMETRY_PATH}}
+    {${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_utilization${IMPLEMENTATION_REPORT_SUFFIX}.rpt}
+    {${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_timing_summary${IMPLEMENTATION_REPORT_SUFFIX}.rpt}
     {DEPENDS
                 ${IMPLEMENTATION_INPUT_DCP}}
     {${CMAKE_BINARY_DIR}/flow_dyn_link.tcl}

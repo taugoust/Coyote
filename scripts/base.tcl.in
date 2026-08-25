@@ -256,6 +256,177 @@ proc report_routed_design {report_dir report_suffix} {
     report_timing_summary -file "$report_dir/shell_timing_summary${report_suffix}.rpt"
 }
 
+proc implementation_json_escape {value} {
+    return [string map [list \\ \\\\ \" \\\" \n \\n \r \\r \t \\t] $value]
+}
+
+proc implementation_json_string {value} {
+    return "\"[implementation_json_escape $value]\""
+}
+
+proc implementation_json_number_or_null {value} {
+    if {$value eq "" || ![string is double -strict $value]} {
+        return "null"
+    }
+    return $value
+}
+
+proc implementation_worst_slack {delay_type} {
+    if {[catch {
+        set paths [get_timing_paths -delay_type $delay_type -max_paths 1 -nworst 1]
+    }]} {
+        return ""
+    }
+    if {[llength $paths] == 0} { return "" }
+    if {[catch {set slack [get_property SLACK [lindex $paths 0]]}]} { return "" }
+    return $slack
+}
+
+proc implementation_timing_totals {summary} {
+    set found_header false
+    set found_separator false
+    foreach line [split $summary "\n"] {
+        set trimmed [string trim $line]
+        if {!$found_header} {
+            if {[string first "WNS(ns)" $trimmed] >= 0 &&
+                [string first "TNS(ns)" $trimmed] >= 0 &&
+                [string first "WHS(ns)" $trimmed] >= 0 &&
+                [string first "THS(ns)" $trimmed] >= 0} {
+                set found_header true
+            }
+            continue
+        }
+        if {!$found_separator} {
+            if {[regexp {^-+[[:space:]]+-+} $trimmed]} { set found_separator true }
+            continue
+        }
+        set fields [regexp -all -inline {\S+} $trimmed]
+        if {[llength $fields] >= 6} {
+            set setup_tns [lindex $fields 1]
+            set hold_tns [lindex $fields 5]
+            if {![string is double -strict $setup_tns]} { set setup_tns "" }
+            if {![string is double -strict $hold_tns]} { set hold_tns "" }
+            return [list $setup_tns $hold_tns]
+        }
+    }
+    return [list "" ""]
+}
+
+proc implementation_route_count {route_type} {
+    if {[catch {
+        set nets [report_route_status -return_nets -route_type $route_type]
+    }]} {
+        return ""
+    }
+    return [llength $nets]
+}
+
+proc write_implementation_observations {phase report_dir report_suffix output_path drc_name} {
+    file mkdir $report_dir
+    file mkdir [file dirname $output_path]
+
+    if {$phase eq "validate"} {
+        set prefix "shell"
+    } else {
+        set prefix "shell_${phase}"
+    }
+    set utilization_path "$report_dir/${prefix}_utilization${report_suffix}.rpt"
+    set timing_path "$report_dir/${prefix}_timing_summary${report_suffix}.rpt"
+    report_utilization -file $utilization_path
+    report_timing_summary -file $timing_path
+    set timing_summary [report_timing_summary -return_string]
+    lassign [implementation_timing_totals $timing_summary] setup_tns hold_tns
+    set setup_wns [implementation_worst_slack max]
+    set hold_wns [implementation_worst_slack min]
+
+    set rqa ""
+    set rqa_report ""
+    if {$phase in {opt place}} {
+        set rqa_report "$report_dir/${prefix}_qor_assessment${report_suffix}.rpt"
+        if {![catch {
+            report_qor_assessment -file $rqa_report
+            set rqa [get_assessment_score]
+        }]} {
+            if {![string is integer -strict $rqa] || $rqa < 1 || $rqa > 5} { set rqa "" }
+        }
+    }
+
+    set unrouted ""
+    set partial ""
+    set conflicts ""
+    set route_errors ""
+    set route_report ""
+    if {$phase in {route validate}} {
+        set route_report "$report_dir/${prefix}_route_status${report_suffix}.rpt"
+        report_route_status -ignore_cache -file $route_report
+        set unrouted [implementation_route_count UNROUTED]
+        set partial [implementation_route_count PARTIAL]
+        set conflicts [implementation_route_count CONFLICTS]
+        if {![catch {set has_errors [report_route_status -boolean_check ERRORS_IN_ROUTES]}]} {
+            set route_errors [expr {$has_errors ? 1 : 0}]
+        }
+    }
+
+    set drc_errors ""
+    set drc_critical_warnings ""
+    set drc_warnings ""
+    if {$drc_name ne ""} {
+        foreach {severity variable} {
+            Error drc_errors
+            {Critical Warning} drc_critical_warnings
+            Warning drc_warnings
+        } {
+            if {![catch {
+                set violations [get_drc_violations -name $drc_name -filter "SEVERITY == {$severity}"]
+                set $variable [llength $violations]
+            }]} {}
+        }
+    }
+
+    if {$phase in {route validate}} {
+        set analysis_kind routed
+    } elseif {$phase in {opt place}} {
+        set analysis_kind estimated
+    } else {
+        set analysis_kind none
+    }
+
+    set fd [open $output_path w]
+    puts $fd "{"
+    puts $fd "  \"schemaVersion\": 1,"
+    puts $fd "  \"kind\": \"coyote-implementation-observations\","
+    puts $fd "  \"phase\": [implementation_json_string $phase],"
+    puts $fd "  \"vivadoVersion\": [implementation_json_string [version -short]],"
+    puts $fd "  \"vivadoFullVersion\": [implementation_json_string [version]],"
+    puts $fd "  \"analysisKind\": [implementation_json_string $analysis_kind],"
+    puts $fd "  \"timing\": {"
+    puts $fd "    \"setupWnsNs\": [implementation_json_number_or_null $setup_wns],"
+    puts $fd "    \"setupTnsNs\": [implementation_json_number_or_null $setup_tns],"
+    puts $fd "    \"holdWnsNs\": [implementation_json_number_or_null $hold_wns],"
+    puts $fd "    \"holdTnsNs\": [implementation_json_number_or_null $hold_tns]"
+    puts $fd "  },"
+    puts $fd "  \"qor\": { \"rqaScore\": [implementation_json_number_or_null $rqa] },"
+    puts $fd "  \"routing\": {"
+    puts $fd "    \"unroutedNets\": [implementation_json_number_or_null $unrouted],"
+    puts $fd "    \"partiallyRoutedNets\": [implementation_json_number_or_null $partial],"
+    puts $fd "    \"conflictedNets\": [implementation_json_number_or_null $conflicts],"
+    puts $fd "    \"hasRoutingErrors\": [implementation_json_number_or_null $route_errors]"
+    puts $fd "  },"
+    puts $fd "  \"drc\": {"
+    puts $fd "    \"errors\": [implementation_json_number_or_null $drc_errors],"
+    puts $fd "    \"criticalWarnings\": [implementation_json_number_or_null $drc_critical_warnings],"
+    puts $fd "    \"warnings\": [implementation_json_number_or_null $drc_warnings]"
+    puts $fd "  },"
+    puts $fd "  \"reports\": {"
+    puts $fd "    \"utilization\": [implementation_json_string [file tail $utilization_path]],"
+    puts $fd "    \"timingSummary\": [implementation_json_string [file tail $timing_path]],"
+    puts $fd "    \"qorAssessment\": [implementation_json_string [file tail $rqa_report]],"
+    puts $fd "    \"routeStatus\": [implementation_json_string [file tail $route_report]]"
+    puts $fd "  }"
+    puts $fd "}"
+    close $fd
+}
+
 proc report_and_validate_routed_design {label report_dir report_suffix drc_run_name} {
     upvar #0 cfg cnfg
     report_routed_design $report_dir $report_suffix

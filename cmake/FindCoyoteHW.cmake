@@ -250,6 +250,7 @@ set(IMPLEMENTATION_REPORT_SUFFIX "" CACHE STRING "Immutable validation report su
 set(IMPLEMENTATION_LABEL "routed_design" CACHE STRING "Immutable validation diagnostic label")
 set(IMPLEMENTATION_DRC_NAME "implementation_bitstream_gate" CACHE STRING "Immutable validation DRC run name")
 set(IMPLEMENTATION_VALIDATION_SUMMARY "" CACHE FILEPATH "Immutable validation machine-readable result")
+set(IMPLEMENTATION_TELEMETRY_PATH "" CACHE FILEPATH "Immutable phase machine-readable physical observations")
 set(IMPLEMENTATION_ENFORCE_TIMING "project" CACHE STRING "Immutable validation timing policy: project, 0, or 1")
 set(IMPLEMENTATION_OPT_DIRECTIVE "project" CACHE STRING "opt_design directive or project policy")
 set(IMPLEMENTATION_PLACE_DIRECTIVE "project" CACHE STRING "place_design directive or project policy")
@@ -267,9 +268,12 @@ if(IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$" AND
     IMPLEMENTATION_COMPLETION_PATH STREQUAL ""))
     message(FATAL_ERROR "IMPLEMENTATION_PHASE requires explicit input, output, and completion paths")
 endif()
-if(IMPLEMENTATION_PHASE STREQUAL "validate" AND
-   (IMPLEMENTATION_REPORT_DIR STREQUAL "" OR IMPLEMENTATION_VALIDATION_SUMMARY STREQUAL ""))
-    message(FATAL_ERROR "validate requires IMPLEMENTATION_REPORT_DIR and IMPLEMENTATION_VALIDATION_SUMMARY")
+if(IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$" AND
+   (IMPLEMENTATION_REPORT_DIR STREQUAL "" OR IMPLEMENTATION_TELEMETRY_PATH STREQUAL ""))
+    message(FATAL_ERROR "immutable physical phases require IMPLEMENTATION_REPORT_DIR and IMPLEMENTATION_TELEMETRY_PATH")
+endif()
+if(IMPLEMENTATION_PHASE STREQUAL "validate" AND IMPLEMENTATION_VALIDATION_SUMMARY STREQUAL "")
+    message(FATAL_ERROR "validate requires IMPLEMENTATION_VALIDATION_SUMMARY")
 endif()
 if(IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$")
     foreach(_implementation_token IN ITEMS
@@ -289,7 +293,7 @@ if(IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$")
     foreach(_implementation_path IN ITEMS
         IMPLEMENTATION_INPUT_DCP IMPLEMENTATION_OUTPUT_DCP
         IMPLEMENTATION_COMPLETION_PATH IMPLEMENTATION_REPORT_DIR
-        IMPLEMENTATION_VALIDATION_SUMMARY)
+        IMPLEMENTATION_VALIDATION_SUMMARY IMPLEMENTATION_TELEMETRY_PATH)
         if(NOT "${${_implementation_path}}" MATCHES "^[A-Za-z0-9_./:+-]*$")
             message(FATAL_ERROR "${_implementation_path} contains unsupported characters")
         endif()
@@ -297,7 +301,8 @@ if(IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$")
     set(_implementation_paths
         "${IMPLEMENTATION_INPUT_DCP}"
         "${IMPLEMENTATION_OUTPUT_DCP}"
-        "${IMPLEMENTATION_COMPLETION_PATH}")
+        "${IMPLEMENTATION_COMPLETION_PATH}"
+        "${IMPLEMENTATION_TELEMETRY_PATH}")
     if(IMPLEMENTATION_PHASE STREQUAL "validate")
         list(APPEND _implementation_paths "${IMPLEMENTATION_VALIDATION_SUMMARY}")
     endif()
@@ -305,7 +310,7 @@ if(IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$")
     list(REMOVE_DUPLICATES _implementation_paths)
     list(LENGTH _implementation_paths _implementation_unique_path_count)
     if(NOT _implementation_path_count EQUAL _implementation_unique_path_count)
-        message(FATAL_ERROR "Immutable implementation input, output, completion, and validation-summary paths must be distinct")
+        message(FATAL_ERROR "Immutable implementation input, output, completion, telemetry, and validation-summary paths must be distinct")
     endif()
 endif()
 
@@ -1103,7 +1108,11 @@ macro(validation_checks_hw)
             message(FATAL_ERROR "External shell path not provided.")
         endif()
 
+        # Application implementation resources belong to the current build,
+        # not to the historical shell-export recipe.
+        set(_application_comp_cores "${COMP_CORES}")
         include("${SHELL_PATH}/export.cmake")
+        set(COMP_CORES "${_application_comp_cores}")
 
         if(EN_PR EQUAL 0)
             message(FATAL_ERROR "PR not enabled in the shell.")
@@ -1809,13 +1818,28 @@ macro(gen_targets)
     # target can only reopen its one declared predecessor and execute one phase.
     if(IMMUTABLE_IMPLEMENTATION_STAGES AND IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$")
         add_custom_target(physical_stage DEPENDS ${IMPLEMENTATION_COMPLETION_PATH})
-        set(PHYSICAL_STAGE_BYPRODUCTS ${IMPLEMENTATION_OUTPUT_DCP})
+        set(PHYSICAL_STAGE_BYPRODUCTS
+            ${IMPLEMENTATION_OUTPUT_DCP}
+            ${IMPLEMENTATION_TELEMETRY_PATH})
+        if(IMPLEMENTATION_PHASE STREQUAL "validate")
+            set(_physical_report_prefix shell)
+        else()
+            set(_physical_report_prefix shell_${IMPLEMENTATION_PHASE})
+        endif()
+        list(APPEND PHYSICAL_STAGE_BYPRODUCTS
+            ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_utilization${IMPLEMENTATION_REPORT_SUFFIX}.rpt
+            ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_timing_summary${IMPLEMENTATION_REPORT_SUFFIX}.rpt)
+        if(IMPLEMENTATION_PHASE MATCHES "^(opt|place)$")
+            list(APPEND PHYSICAL_STAGE_BYPRODUCTS
+                ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_qor_assessment${IMPLEMENTATION_REPORT_SUFFIX}.rpt)
+        endif()
+        if(IMPLEMENTATION_PHASE MATCHES "^(route|validate)$")
+            list(APPEND PHYSICAL_STAGE_BYPRODUCTS
+                ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_route_status${IMPLEMENTATION_REPORT_SUFFIX}.rpt)
+        endif()
         if(IMPLEMENTATION_PHASE STREQUAL "validate")
             list(APPEND PHYSICAL_STAGE_BYPRODUCTS
                 ${IMPLEMENTATION_VALIDATION_SUMMARY}
-                ${IMPLEMENTATION_REPORT_DIR}/shell_utilization${IMPLEMENTATION_REPORT_SUFFIX}.rpt
-                ${IMPLEMENTATION_REPORT_DIR}/shell_route_status${IMPLEMENTATION_REPORT_SUFFIX}.rpt
-                ${IMPLEMENTATION_REPORT_DIR}/shell_timing_summary${IMPLEMENTATION_REPORT_SUFFIX}.rpt
                 ${IMPLEMENTATION_REPORT_DIR}/shell_drc_bitstream_checks${IMPLEMENTATION_REPORT_SUFFIX}.rpt)
         endif()
         add_custom_command(
