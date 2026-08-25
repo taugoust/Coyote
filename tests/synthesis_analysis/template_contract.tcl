@@ -24,6 +24,8 @@ foreach required {
     predictiveOnly
     setupWnsNs
     logicLevels
+    {file delete -force "$analysis_report_dir/complete"}
+    {$analysis_report_dir/complete}
 } {
     if {[string first $required $script] < 0} {
         puts stderr "synthesis-analysis Tcl lacks required construct '$required': $path"

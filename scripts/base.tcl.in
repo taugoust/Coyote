@@ -212,6 +212,61 @@ proc color {fore text} {
     }
 }
 
+# Post-route physical optimization can replicate or move routed logic. Finalize
+# routing again before any checkpoint is validated, locked, or used for images.
+proc finalize_post_route_optimization {} {
+    upvar #0 cfg cnfg
+    if {$cnfg(build_opt) eq 1} {
+        phys_opt_design -directive AggressiveExplore
+        route_design
+    }
+}
+
+proc report_bitstream_drc {run_name report_path} {
+    report_drc -ruledeck bitstream_checks -name $run_name -file $report_path
+}
+
+proc require_clean_bitstream_drc {run_name} {
+    set errors [get_drc_violations -name $run_name -filter {SEVERITY == Error}]
+    if {[llength $errors] != 0} {
+        set checks {}
+        foreach violation $errors {
+            lappend checks [get_property CHECK $violation]
+        }
+        error "Bitstream DRC failed ($run_name): [join [lsort -unique $checks] {, }]"
+    }
+}
+
+proc require_timing_closure {label} {
+    foreach delay_type {max min} {
+        set paths [get_timing_paths -delay_type $delay_type -max_paths 1 -nworst 1]
+        if {[llength $paths] == 0} {
+            error "No $delay_type timing path is available for $label"
+        }
+        set slack [get_property SLACK [lindex $paths 0]]
+        if {$slack < 0.0} {
+            error "$label has negative $delay_type slack: $slack ns"
+        }
+    }
+}
+
+proc report_routed_design {report_dir report_suffix} {
+    report_utilization -file "$report_dir/shell_utilization${report_suffix}.rpt"
+    report_route_status -file "$report_dir/shell_route_status${report_suffix}.rpt"
+    report_timing_summary -file "$report_dir/shell_timing_summary${report_suffix}.rpt"
+}
+
+proc report_and_validate_routed_design {label report_dir report_suffix drc_run_name} {
+    upvar #0 cfg cnfg
+    report_routed_design $report_dir $report_suffix
+    report_bitstream_drc \
+        $drc_run_name "$report_dir/shell_drc_bitstream_checks${report_suffix}.rpt"
+    require_clean_bitstream_drc $drc_run_name
+    if {$cnfg(en_timing_check) eq 1} {
+        require_timing_closure $label
+    }
+}
+
 set clr_flow 6
 set clr_cmplt 214
 set clr_error 9

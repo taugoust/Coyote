@@ -184,6 +184,7 @@ file mkdir $oracle_report_dir
 file mkdir $oracle_dcp_dir
 file mkdir "$oracle_report_dir/post_opt_csv"
 file mkdir "$oracle_report_dir/post_place_csv"
+file delete -force "$oracle_report_dir/complete"
 
 set_msg_config -suppress -id {[DRC RPBF-3] IO port buffering is incomplete}
 set_msg_config -suppress -id {[Constraints 18-4866] Site}
@@ -253,6 +254,7 @@ report_qor_assessment \
     -csv_output_dir "$oracle_report_dir/post_opt_csv" \
     -max_paths $cfg(timing_oracle_max_paths)
 set opt_rqa [expr {int([get_qor_assessment])}]
+set placement_completed false
 
 if {$opt_rqa < $cfg(timing_oracle_reject_rqa_below)} {
     set reason "post-opt RQA $opt_rqa is below rejection threshold $cfg(timing_oracle_reject_rqa_below)"
@@ -273,10 +275,18 @@ if {$opt_rqa < $cfg(timing_oracle_reject_rqa_below)} {
     set setup_path [worst_path max]
     set hold_path [worst_path min]
     set setup_tns [setup_tns_from_timing_summary $timing_summary]
+    set setup_slack [path_property_or_empty $setup_path SLACK]
+    set hold_slack [path_property_or_empty $hold_path SLACK]
+    set setup_start [object_name_or_empty [path_property_or_empty $setup_path STARTPOINT_PIN]]
+    set setup_end [object_name_or_empty [path_property_or_empty $setup_path ENDPOINT_PIN]]
+    set setup_group [object_name_or_empty [path_property_or_empty $setup_path PATH_GROUP]]
+    set setup_levels [path_property_or_empty $setup_path LOGIC_LEVELS]
     set reasons {}
-    if {$setup_path eq "" || $hold_path eq ""} {
+    if {$setup_path eq "" || $hold_path eq "" || $setup_tns eq "" ||
+        $setup_slack eq "" || $hold_slack eq "" || $setup_start eq "" ||
+        $setup_end eq "" || $setup_group eq "" || $setup_levels eq ""} {
         set classification FAIL
-        lappend reasons "post-place timing paths are incomplete"
+        lappend reasons "post-place timing paths or critical-path diagnostics are incomplete"
     } elseif {$place_rqa < $cfg(timing_oracle_reject_rqa_below)} {
         set classification FAIL
         lappend reasons "post-place RQA $place_rqa is below rejection threshold $cfg(timing_oracle_reject_rqa_below)"
@@ -290,8 +300,31 @@ if {$opt_rqa < $cfg(timing_oracle_reject_rqa_below)} {
 
     write_summary "$oracle_report_dir/summary.json" $classification $reasons \
         $opt_rqa true $place_rqa $setup_path $hold_path $setup_tns
+    set placement_completed true
     close_project
 }
+
+set required_artifacts [list \
+    "$oracle_report_dir/summary.json" \
+    "$oracle_dcp_dir/shell_linked.dcp" \
+    "$oracle_dcp_dir/shell_opted.dcp" \
+    "$oracle_report_dir/post_opt_qor_assessment.rpt"]
+if {$placement_completed} {
+    lappend required_artifacts \
+        "$oracle_dcp_dir/shell_placed_runtime_optimized.dcp" \
+        "$oracle_report_dir/post_place_qor_assessment.rpt" \
+        "$oracle_report_dir/post_place_utilization.rpt" \
+        "$oracle_report_dir/post_place_timing_summary.rpt"
+}
+foreach artifact $required_artifacts {
+    if {![file exists $artifact] || [file size $artifact] == 0} {
+        error "Timing-oracle artifact is missing or empty: $artifact"
+    }
+}
+
+set completion [open "$oracle_report_dir/complete" w]
+puts $completion "timing oracle complete"
+close $completion
 
 puts ""
 puts "**"
