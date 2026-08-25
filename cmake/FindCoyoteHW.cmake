@@ -237,6 +237,78 @@ set(BUILD_OPT 0 CACHE STRING "Build optimizations (significantly longer compilat
 # opt-in so exploratory Coyote builds can still emit implementation reports.
 set(EN_TIMING_CHECK 0 CACHE STRING "Require routed implementation timing closure")
 
+# Optional immutable physical phase invocation. These inputs are deliberately
+# explicit so a package can reopen one predecessor DCP without falling back to
+# synthesis or a later implementation phase.
+set(IMMUTABLE_IMPLEMENTATION_STAGES OFF CACHE BOOL "Expose immutable implementation stage targets instead of legacy aggregate implementation targets")
+set(IMPLEMENTATION_PHASE "" CACHE STRING "Immutable implementation phase: opt, place, route, or validate")
+set(IMPLEMENTATION_INPUT_DCP "" CACHE FILEPATH "Immutable implementation predecessor DCP")
+set(IMPLEMENTATION_OUTPUT_DCP "" CACHE FILEPATH "Immutable implementation output DCP")
+set(IMPLEMENTATION_COMPLETION_PATH "" CACHE FILEPATH "Immutable implementation completion marker")
+set(IMPLEMENTATION_REPORT_DIR "" CACHE PATH "Immutable validation report directory")
+set(IMPLEMENTATION_REPORT_SUFFIX "" CACHE STRING "Immutable validation report suffix")
+set(IMPLEMENTATION_LABEL "routed_design" CACHE STRING "Immutable validation diagnostic label")
+set(IMPLEMENTATION_DRC_NAME "implementation_bitstream_gate" CACHE STRING "Immutable validation DRC run name")
+set(IMPLEMENTATION_VALIDATION_SUMMARY "" CACHE FILEPATH "Immutable validation machine-readable result")
+set(IMPLEMENTATION_ENFORCE_TIMING "project" CACHE STRING "Immutable validation timing policy: project, 0, or 1")
+set(IMPLEMENTATION_OPT_DIRECTIVE "project" CACHE STRING "opt_design directive or project policy")
+set(IMPLEMENTATION_PLACE_DIRECTIVE "project" CACHE STRING "place_design directive or project policy")
+set(IMPLEMENTATION_PHYS_OPT_DIRECTIVE "project" CACHE STRING "pre-route phys_opt_design directive or project policy")
+set(IMPLEMENTATION_ROUTE_DIRECTIVE "project" CACHE STRING "route_design directive or project policy")
+set(IMPLEMENTATION_POST_ROUTE_PHYS_OPT_DIRECTIVE "project" CACHE STRING "post-route phys_opt_design directive or project policy")
+set(IMPLEMENTATION_FINAL_ROUTE_DIRECTIVE "project" CACHE STRING "final reroute directive or project policy")
+if(NOT IMPLEMENTATION_PHASE STREQUAL "" AND
+   NOT IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate|finalize)$")
+    message(FATAL_ERROR "IMPLEMENTATION_PHASE must be empty, opt, place, route, validate, or finalize")
+endif()
+if(IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$" AND
+   (IMPLEMENTATION_INPUT_DCP STREQUAL "" OR
+    IMPLEMENTATION_OUTPUT_DCP STREQUAL "" OR
+    IMPLEMENTATION_COMPLETION_PATH STREQUAL ""))
+    message(FATAL_ERROR "IMPLEMENTATION_PHASE requires explicit input, output, and completion paths")
+endif()
+if(IMPLEMENTATION_PHASE STREQUAL "validate" AND
+   (IMPLEMENTATION_REPORT_DIR STREQUAL "" OR IMPLEMENTATION_VALIDATION_SUMMARY STREQUAL ""))
+    message(FATAL_ERROR "validate requires IMPLEMENTATION_REPORT_DIR and IMPLEMENTATION_VALIDATION_SUMMARY")
+endif()
+if(IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$")
+    foreach(_implementation_token IN ITEMS
+        IMPLEMENTATION_PHASE IMPLEMENTATION_LABEL IMPLEMENTATION_DRC_NAME
+        IMPLEMENTATION_ENFORCE_TIMING
+        IMPLEMENTATION_REPORT_SUFFIX IMPLEMENTATION_OPT_DIRECTIVE
+        IMPLEMENTATION_PLACE_DIRECTIVE IMPLEMENTATION_PHYS_OPT_DIRECTIVE
+        IMPLEMENTATION_ROUTE_DIRECTIVE IMPLEMENTATION_POST_ROUTE_PHYS_OPT_DIRECTIVE
+        IMPLEMENTATION_FINAL_ROUTE_DIRECTIVE)
+        if(NOT "${${_implementation_token}}" MATCHES "^[A-Za-z0-9_.:+-]*$")
+            message(FATAL_ERROR "${_implementation_token} contains unsupported characters")
+        endif()
+    endforeach()
+    if(NOT IMPLEMENTATION_ENFORCE_TIMING MATCHES "^(project|0|1)$")
+        message(FATAL_ERROR "IMPLEMENTATION_ENFORCE_TIMING must be project, 0, or 1")
+    endif()
+    foreach(_implementation_path IN ITEMS
+        IMPLEMENTATION_INPUT_DCP IMPLEMENTATION_OUTPUT_DCP
+        IMPLEMENTATION_COMPLETION_PATH IMPLEMENTATION_REPORT_DIR
+        IMPLEMENTATION_VALIDATION_SUMMARY)
+        if(NOT "${${_implementation_path}}" MATCHES "^[A-Za-z0-9_./:+-]*$")
+            message(FATAL_ERROR "${_implementation_path} contains unsupported characters")
+        endif()
+    endforeach()
+    set(_implementation_paths
+        "${IMPLEMENTATION_INPUT_DCP}"
+        "${IMPLEMENTATION_OUTPUT_DCP}"
+        "${IMPLEMENTATION_COMPLETION_PATH}")
+    if(IMPLEMENTATION_PHASE STREQUAL "validate")
+        list(APPEND _implementation_paths "${IMPLEMENTATION_VALIDATION_SUMMARY}")
+    endif()
+    list(LENGTH _implementation_paths _implementation_path_count)
+    list(REMOVE_DUPLICATES _implementation_paths)
+    list(LENGTH _implementation_paths _implementation_unique_path_count)
+    if(NOT _implementation_path_count EQUAL _implementation_unique_path_count)
+        message(FATAL_ERROR "Immutable implementation input, output, completion, and validation-summary paths must be distinct")
+    endif()
+endif()
+
 # Early predictive implementation-quality screening. The timing_oracle target
 # links configuration 0, assesses the optimized design, and uses cheap placement
 # only for candidates not rejected by the post-opt score.
@@ -1162,15 +1234,20 @@ macro(gen_scripts)
 
     # Place-and-Route scripts
     configure_file(${CYT_DIR}/scripts/impl/pnr_shell.tcl.in ${CMAKE_BINARY_DIR}/pnr_shell.tcl)
+    configure_file(${CYT_DIR}/scripts/impl/physical_stage.tcl.in ${CMAKE_BINARY_DIR}/physical_stage.tcl)
 
     # Dynamic and app scripts
     if (FPGA_ARCH STREQUAL "versal")
         configure_file(${CYT_DIR}/scripts/dyn/flow_dyn_versal.tcl.in ${CMAKE_BINARY_DIR}/flow_dyn.tcl)
+        configure_file(${CYT_DIR}/scripts/dyn/flow_dyn_link_versal.tcl.in ${CMAKE_BINARY_DIR}/flow_dyn_link.tcl)
     elseif(FPGA_ARCH STREQUAL "ultrascale_plus")
         configure_file(${CYT_DIR}/scripts/dyn/flow_dyn_ultrascale_plus.tcl.in ${CMAKE_BINARY_DIR}/flow_dyn.tcl)
+        configure_file(${CYT_DIR}/scripts/dyn/flow_dyn_link_ultrascale_plus.tcl.in ${CMAKE_BINARY_DIR}/flow_dyn_link.tcl)
     else()
         message(FATAL_ERROR "Unsupported FPGA architecture.")
     endif()
+    configure_file(${CYT_DIR}/scripts/dyn/flow_dyn_finalize.tcl.in ${CMAKE_BINARY_DIR}/flow_dyn_finalize.tcl)
+    configure_file(${CYT_DIR}/scripts/dyn/flow_app_link.tcl.in ${CMAKE_BINARY_DIR}/flow_app_link.tcl)
     configure_file(${CYT_DIR}/scripts/dyn/flow_app.tcl.in ${CMAKE_BINARY_DIR}/flow_app.tcl)
     configure_file(${CYT_DIR}/scripts/dyn/synthesis_analysis.tcl.in ${CMAKE_BINARY_DIR}/synthesis_analysis.tcl)
     configure_file(${CYT_DIR}/scripts/dyn/timing_oracle.tcl.in ${CMAKE_BINARY_DIR}/timing_oracle.tcl)
@@ -1262,7 +1339,7 @@ macro(gen_dep_lists)
         ${FPLAN_PATH}
     )
     set(DEP_STATIC_CHECKPOINT_INPUTS "")
-    if(NOT BUILD_STATIC AND NOT BUILD_APP)
+    if(NOT BUILD_STATIC AND NOT BUILD_APP AND IMPLEMENTATION_PHASE STREQUAL "")
         if(FPGA_ARCH STREQUAL "versal" AND EN_PR)
             set(required_static_checkpoint
                 "${STATIC_PATH}/static_synthed_${FDEV_NAME}_gen${PCIE_GEN}.dcp")
@@ -1344,6 +1421,14 @@ macro(gen_dep_lists)
         list(APPEND DEP_DCP_LIST_DYN ${CMAKE_BINARY_DIR}/checkpoints/config_${i}/shell_routed_c${i}.dcp)
     endforeach()
     set(DEP_DCP_DYN_COMPLETION ${CMAKE_BINARY_DIR}/checkpoints/dynamic_route_complete)
+    set(DEP_DCP_LIST_APP_LINK "")
+    foreach(i RANGE ${NN_CONFIG})
+        list(APPEND DEP_DCP_LIST_APP_LINK
+            ${CMAKE_BINARY_DIR}/checkpoints/config_${i}/shell_linked_c${i}.dcp)
+    endforeach()
+    set(DEP_DCP_APP_LINK_COMPLETION ${CMAKE_BINARY_DIR}/checkpoints/app_link_complete)
+    set(DEP_DCP_DYN_LINK_COMPLETION ${CMAKE_BINARY_DIR}/checkpoints/dynamic_link_complete)
+    set(DEP_DCP_DYN_FINALIZE_COMPLETION ${CMAKE_BINARY_DIR}/checkpoints/dynamic_finalize_complete)
 
     # Fast synthesized-shell analysis
     set(DEP_SYNTHESIS_ANALYSIS ${CMAKE_BINARY_DIR}/reports/synthesis_analysis/complete)
@@ -1472,8 +1557,12 @@ macro(gen_targets)
     set(LINK_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/link.tcl -notrace)
 
     set(COMP_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/pnr_shell.tcl -notrace)
+    set(PHYSICAL_STAGE_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/physical_stage.tcl -notrace)
 
+    set(DYN_LINK_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/flow_dyn_link.tcl -notrace)
+    set(DYN_FINALIZE_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/flow_dyn_finalize.tcl -notrace)
     set(DYN_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/flow_dyn.tcl -notrace)
+    set(APP_LINK_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/flow_app_link.tcl -notrace)
     set(APP_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/flow_app.tcl -notrace)
     set(SYNTHESIS_ANALYSIS_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/synthesis_analysis.tcl -notrace)
     set(TIMING_ORACLE_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/timing_oracle.tcl -notrace)
@@ -1606,7 +1695,7 @@ macro(gen_targets)
         # Versal devices do not support nested DFX (shell subdivision and recombination);
         # therefore, the shell is not linked and routed with the default configuration (#0) when PR is enabled;
         # instead, we directly load synthesised DCPs and the floorplan, and run PnR for each configuration
-        if (NOT (EN_PR AND FPGA_ARCH STREQUAL "versal"))
+        if (NOT (EN_PR AND FPGA_ARCH STREQUAL "versal") AND NOT IMMUTABLE_IMPLEMENTATION_STAGES)
             # Linking
             # -----------------------------------
             add_custom_target(link 
@@ -1642,6 +1731,102 @@ macro(gen_targets)
                     ${CMAKE_BINARY_DIR}/pnr_shell.tcl
             )
         endif()
+    endif()
+
+    # Config-0 dynamic link/finalize boundaries used by immutable shell packages.
+    if(IMMUTABLE_IMPLEMENTATION_STAGES AND BUILD_SHELL AND EN_PR)
+      if(IMPLEMENTATION_PHASE STREQUAL "")
+        add_custom_target(dynamic_link DEPENDS ${DEP_DCP_DYN_LINK_COMPLETION})
+        if(FPGA_ARCH STREQUAL "ultrascale_plus")
+            set(DYNAMIC_LINK_INPUTS
+                ${CMAKE_BINARY_DIR}/checkpoints/shell_routed.dcp
+                ${DEP_DCP_LIST_SYNTH_SHELL}
+                ${DEP_DCP_LIST_SYNTH_USER}
+                ${DEP_IMPLEMENTATION_INPUTS})
+            set(DYNAMIC_LINK_BYPRODUCTS
+                ${CMAKE_BINARY_DIR}/checkpoints/shell_subdivided.dcp
+                ${CMAKE_BINARY_DIR}/checkpoints/config_0/shell_linked_c0.dcp)
+        else()
+            set(DYNAMIC_LINK_INPUTS
+                ${DEP_DCP_LIST_SYNTH_SHELL}
+                ${DEP_DCP_LIST_SYNTH_USER}
+                ${DEP_STATIC_CHECKPOINT_INPUTS}
+                ${DEP_IMPLEMENTATION_INPUTS})
+            set(DYNAMIC_LINK_BYPRODUCTS
+                ${CMAKE_BINARY_DIR}/checkpoints/config_0/shell_linked_c0.dcp)
+        endif()
+        add_custom_command(
+            OUTPUT ${DEP_DCP_DYN_LINK_COMPLETION}
+            BYPRODUCTS ${DYNAMIC_LINK_BYPRODUCTS}
+            ${DYN_LINK_CMD}
+            DEPENDS
+                ${DYNAMIC_LINK_INPUTS}
+                ${CMAKE_BINARY_DIR}/base.tcl
+                ${CMAKE_BINARY_DIR}/flow_dyn_link.tcl
+        )
+      endif()
+
+      if(IMPLEMENTATION_PHASE STREQUAL "finalize")
+        add_custom_target(dynamic_finalize DEPENDS ${DEP_DCP_DYN_FINALIZE_COMPLETION})
+        set(DYNAMIC_FINALIZE_BYPRODUCTS
+            ${CMAKE_BINARY_DIR}/checkpoints/shell_routed_locked.dcp)
+        if(FPGA_ARCH STREQUAL "ultrascale_plus")
+            list(APPEND DYNAMIC_FINALIZE_BYPRODUCTS
+                ${CMAKE_BINARY_DIR}/checkpoints/shell_recombined.dcp)
+        else()
+            list(APPEND DYNAMIC_FINALIZE_BYPRODUCTS
+                ${CMAKE_BINARY_DIR}/checkpoints/shell_routed.dcp)
+        endif()
+        add_custom_command(
+            OUTPUT ${DEP_DCP_DYN_FINALIZE_COMPLETION}
+            BYPRODUCTS ${DYNAMIC_FINALIZE_BYPRODUCTS}
+            ${DYN_FINALIZE_CMD}
+            DEPENDS
+                ${CMAKE_BINARY_DIR}/checkpoints/config_0/shell_routed_c0.dcp
+                ${CMAKE_BINARY_DIR}/base.tcl
+                ${CMAKE_BINARY_DIR}/flow_dyn_finalize.tcl
+        )
+      endif()
+    endif()
+
+    # BUILD_APP link-only boundary. This target never optimizes, places, routes,
+    # validates, or emits an image.
+    if(IMMUTABLE_IMPLEMENTATION_STAGES AND BUILD_APP AND IMPLEMENTATION_PHASE STREQUAL "")
+        add_custom_target(app_link DEPENDS ${DEP_DCP_APP_LINK_COMPLETION})
+        add_custom_command(
+            OUTPUT ${DEP_DCP_APP_LINK_COMPLETION}
+            BYPRODUCTS ${DEP_DCP_LIST_APP_LINK}
+            ${APP_LINK_CMD}
+            DEPENDS
+                ${DEP_DCP_LIST_COMP}
+                ${DEP_IMPLEMENTATION_INPUTS}
+                ${CMAKE_BINARY_DIR}/base.tcl
+                ${CMAKE_BINARY_DIR}/flow_app_link.tcl
+        )
+    endif()
+
+    # Immutable physical phase. Unlike aggregate compatibility targets, this
+    # target can only reopen its one declared predecessor and execute one phase.
+    if(IMMUTABLE_IMPLEMENTATION_STAGES AND IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$")
+        add_custom_target(physical_stage DEPENDS ${IMPLEMENTATION_COMPLETION_PATH})
+        set(PHYSICAL_STAGE_BYPRODUCTS ${IMPLEMENTATION_OUTPUT_DCP})
+        if(IMPLEMENTATION_PHASE STREQUAL "validate")
+            list(APPEND PHYSICAL_STAGE_BYPRODUCTS
+                ${IMPLEMENTATION_VALIDATION_SUMMARY}
+                ${IMPLEMENTATION_REPORT_DIR}/shell_utilization${IMPLEMENTATION_REPORT_SUFFIX}.rpt
+                ${IMPLEMENTATION_REPORT_DIR}/shell_route_status${IMPLEMENTATION_REPORT_SUFFIX}.rpt
+                ${IMPLEMENTATION_REPORT_DIR}/shell_timing_summary${IMPLEMENTATION_REPORT_SUFFIX}.rpt
+                ${IMPLEMENTATION_REPORT_DIR}/shell_drc_bitstream_checks${IMPLEMENTATION_REPORT_SUFFIX}.rpt)
+        endif()
+        add_custom_command(
+            OUTPUT ${IMPLEMENTATION_COMPLETION_PATH}
+            BYPRODUCTS ${PHYSICAL_STAGE_BYPRODUCTS}
+            ${PHYSICAL_STAGE_CMD}
+            DEPENDS
+                ${IMPLEMENTATION_INPUT_DCP}
+                ${CMAKE_BINARY_DIR}/base.tcl
+                ${CMAKE_BINARY_DIR}/physical_stage.tcl
+        )
     endif()
 
     # Fast resident-shell synthesis analysis
@@ -1711,6 +1896,7 @@ macro(gen_targets)
                 ${CMAKE_BINARY_DIR}/fix_bif.py
         )
 
+        if(NOT IMMUTABLE_IMPLEMENTATION_STAGES)
         add_custom_target(app
             DEPENDS ${DEP_DCP_DYN_COMPLETION}
         )
@@ -1762,6 +1948,7 @@ macro(gen_targets)
             else()
                 message(FATAL_ERROR "Unsupported FPGA architecture.")
             endif()
+        endif()
         endif()
     else()
         add_custom_command(

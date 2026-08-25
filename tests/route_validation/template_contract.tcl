@@ -1,5 +1,5 @@
-if {$argc != 7} {
-    puts stderr "usage: template_contract.tcl BASE.tcl PNR_SHELL.tcl FLOW_APP.tcl FLOW_DYN_ULTRASCALE.tcl FLOW_DYN_VERSAL.tcl BITGEN.tcl FindCoyoteHW.cmake"
+if {$argc != 12} {
+    puts stderr "usage: template_contract.tcl BASE.tcl PNR_SHELL.tcl PHYSICAL_STAGE.tcl FLOW_APP_LINK.tcl FLOW_DYN_LINK_ULTRASCALE.tcl FLOW_DYN_LINK_VERSAL.tcl FLOW_DYN_FINALIZE.tcl FLOW_APP.tcl FLOW_DYN_ULTRASCALE.tcl FLOW_DYN_VERSAL.tcl BITGEN.tcl FindCoyoteHW.cmake"
     exit 2
 }
 
@@ -34,7 +34,7 @@ proc count_text {source needle} {
     }
 }
 
-lassign $argv base_path pnr_path app_path ultrascale_path versal_path bitgen_path cmake_path
+lassign $argv base_path pnr_path physical_path app_link_path dyn_link_ultrascale_path dyn_link_versal_path dyn_finalize_path app_path ultrascale_path versal_path bitgen_path cmake_path
 set base [read_source $base_path]
 
 foreach required {
@@ -92,6 +92,78 @@ foreach spec [list \
         }
     }
 }
+set physical [read_source $physical_path]
+foreach required {
+    {set phase "${IMPLEMENTATION_PHASE}"}
+    {if {$phase ni {opt place route validate}}}
+    {set_param general.maxThreads $cfg(cores)}
+    {open_checkpoint $input_dcp}
+    {switch -- $phase}
+    {opt_design}
+    {place_design}
+    {phys_opt_design}
+    {route_design}
+    {report_routed_design}
+    {report_bitstream_drc}
+    {require_clean_bitstream_drc}
+    {require_timing_closure}
+    {set validation_summary "${IMPLEMENTATION_VALIDATION_SUMMARY}"}
+    {set enforce_timing "${IMPLEMENTATION_ENFORCE_TIMING}"}
+    {set outcome rejected}
+    {write_checkpoint -force $output_dcp}
+    {file delete -force $completion_path}
+} {
+    require_text $physical $required $physical_path
+}
+set validation_branch [string first "validate \{" $physical]
+if {$validation_branch < 0} {
+    puts stderr "$physical_path does not contain an explicit validate branch"
+    exit 1
+}
+foreach forbidden {link_design write_bitstream write_device_image} {
+    if {[string first $forbidden $physical] >= 0} {
+        puts stderr "$physical_path contains a forbidden cross-phase command: $forbidden"
+        exit 1
+    }
+}
+
+set app_link [read_source $app_link_path]
+foreach required {
+    link_design
+    {write_checkpoint -force}
+    {file delete -force "$dcp_dir/app_link_complete"}
+} {
+    require_text $app_link $required $app_link_path
+}
+foreach forbidden {opt_design place_design phys_opt_design route_design report_and_validate_routed_design write_bitstream write_device_image} {
+    if {[string first $forbidden $app_link] >= 0} {
+        puts stderr "$app_link_path contains a forbidden post-link command: $forbidden"
+        exit 1
+    }
+}
+
+foreach dyn_link_path [list $dyn_link_ultrascale_path $dyn_link_versal_path] {
+    set dyn_link [read_source $dyn_link_path]
+    require_text $dyn_link link_design $dyn_link_path
+    require_text $dyn_link {dynamic_link_complete} $dyn_link_path
+    foreach forbidden {opt_design place_design phys_opt_design route_design report_and_validate_routed_design write_bitstream write_device_image} {
+        if {[string first $forbidden $dyn_link] >= 0} {
+            puts stderr "$dyn_link_path contains a forbidden post-link command: $forbidden"
+            exit 1
+        }
+    }
+}
+set dyn_finalize [read_source $dyn_finalize_path]
+foreach required {update_design lock_design shell_routed_locked.dcp dynamic_finalize_complete} {
+    require_text $dyn_finalize $required $dyn_finalize_path
+}
+foreach forbidden {link_design opt_design place_design phys_opt_design route_design report_and_validate_routed_design write_bitstream write_device_image} {
+    if {[string first $forbidden $dyn_finalize] >= 0} {
+        puts stderr "$dyn_finalize_path contains a forbidden implementation command: $forbidden"
+        exit 1
+    }
+}
+
 require_text [read_source $pnr_path] {file delete -force "$dcp_dir/shell_route_complete"} $pnr_path
 foreach path [list $app_path $ultrascale_path $versal_path] {
     require_text [read_source $path] {file delete -force "$dcp_dir/dynamic_route_complete"} $path
@@ -114,6 +186,16 @@ foreach required {
     {set(DEP_TIMING_ORACLE ${CMAKE_BINARY_DIR}/reports/timing_oracle/complete)}
     {${CMAKE_BINARY_DIR}/CMakeCache.txt}
     {${CMAKE_BINARY_DIR}/pnr_shell.tcl}
+    {${CMAKE_BINARY_DIR}/physical_stage.tcl}
+    {add_custom_target(physical_stage DEPENDS ${IMPLEMENTATION_COMPLETION_PATH})}
+    {DEPENDS
+                ${IMPLEMENTATION_INPUT_DCP}}
+    {${CMAKE_BINARY_DIR}/flow_dyn_link.tcl}
+    {${CMAKE_BINARY_DIR}/flow_dyn_finalize.tcl}
+    {add_custom_target(dynamic_link DEPENDS ${DEP_DCP_DYN_LINK_COMPLETION})}
+    {add_custom_target(dynamic_finalize DEPENDS ${DEP_DCP_DYN_FINALIZE_COMPLETION})}
+    {${CMAKE_BINARY_DIR}/flow_app_link.tcl}
+    {add_custom_target(app_link DEPENDS ${DEP_DCP_APP_LINK_COMPLETION})}
     {${CMAKE_BINARY_DIR}/flow_app.tcl}
     {${CMAKE_BINARY_DIR}/flow_dyn.tcl}
     {${CMAKE_BINARY_DIR}/checkpoints/shell_route_complete}

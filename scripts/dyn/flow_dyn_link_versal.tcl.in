@@ -1,0 +1,53 @@
+######################################################################################
+# Immutable config-0 dynamic link for Versal application DFX.
+######################################################################################
+if {[catch {
+    source "${CMAKE_BINARY_DIR}/base.tcl"
+    file delete -force "$dcp_dir/dynamic_link_complete"
+    if {$cfg(n_config) != 1 || $cfg(n_reg) != 1} {
+        error "Immutable packaged dynamic flow currently requires one configuration and one region"
+    }
+    if {$cfg(en_shell_pblock) eq 1} {
+        error "Nested reconfiguration is not supported on Versal"
+    }
+    if {$cfg(fplan_path) eq "0"} {
+        error "Versal application DFX requires an explicit floorplan"
+    }
+
+    create_project -in_memory -part $part
+    if {[package vcompare [version -short] "2024.2"] < 0} {
+        error "V80 static checkpoints require Vivado 2024.2 or newer"
+    }
+    set static_dcp "$cfg(static_path)/static_synthed_$cfg(fdev)_gen$cfg(pcie_gen).dcp"
+    add_files $static_dcp
+    add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/static/impl"
+    set_property SCOPED_TO_CELLS {inst_static} [get_files $static_dcp]
+
+    set shell_dcp "$dcp_dir/shell/shell_synthed.dcp"
+    add_files $shell_dcp
+    set_property SCOPED_TO_CELLS {inst_shell} [get_files $shell_dcp]
+    add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/shell/impl"
+    add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/dynamic/impl"
+    add_files -fileset [get_filesets constrs_1] "$cfg(fplan_path)"
+    set_property PROCESSING_ORDER LATE [get_files [file tail $cfg(fplan_path)]]
+
+    set partitions {}
+    for {set j 0} {$j < $cfg(n_reg)} {incr j} {
+        set user_dcp "$dcp_dir/config_0/user_synthed_c0_$j.dcp"
+        add_files $user_dcp
+        set cell "inst_shell/inst_dynamic/inst_user_wrapper_$j"
+        set_property SCOPED_TO_CELLS $cell [get_files $user_dcp]
+        lappend partitions $cell
+    }
+    link_design -mode default -reconfig_partitions $partitions -part $part -top cyt_top
+    write_checkpoint -force "$dcp_dir/config_0/shell_linked_c0.dcp"
+    close_project
+
+    set completion [open "$dcp_dir/dynamic_link_complete" w]
+    puts $completion "dynamic link complete"
+    close $completion
+} errorstring]} {
+    puts "[color $clr_error "** CERR: $errorstring"]"
+    exit 1
+}
+exit 0
