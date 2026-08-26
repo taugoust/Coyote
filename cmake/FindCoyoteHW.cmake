@@ -2056,9 +2056,14 @@ macro(gen_targets)
         )
     endif()
 
-    # Fast resident-shell synthesis analysis
+    # Resident-shell synthesis checkpoint and fast read-only analysis
     # -----------------------------------
     if(BUILD_SHELL)
+        add_custom_target(shell_synthesis_checkpoint
+            DEPENDS ${DEP_DCP_LIST_SYNTH_SHELL}
+        )
+        add_dependencies(shell_synthesis_checkpoint project)
+
         add_custom_target(synthesis_analysis
             DEPENDS ${DEP_SYNTHESIS_ANALYSIS}
         )
