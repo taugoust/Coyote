@@ -26,7 +26,7 @@ By default, the simulation uses the top level of vFPGA #0 as the device under te
 
 ### Generator
 The generators main task is to generate mailbox messages to the different drivers according to work queue entries it reads. 
-The stimulus for the testbench is read from a binary file located in `<build_dir>/sim/input.sock` which consists of a arbitrary number of operations which always start with a Byte indicating the type of operation with one of the following values: `CSR = 1, USER_MAP = 2, MEM_WRITE = 3, INVOKE = 4, SLEEP = 5, CHECK_COMPLETED = 6, CLEAR_COMPLETED = 7, USER_UNMAP = 8`.
+The stimulus for the testbench is read from a binary file located in `<build_dir>/sim/input.bin` which consists of an arbitrary number of operations which always start with a byte indicating the type of operation. The operation values are append-only: `SET_CSR = 0`, `GET_CSR = 1`, `USER_MAP = 2`, `MEM_WRITE = 3`, `INVOKE = 4`, `SLEEP = 5`, `CHECK_COMPLETED = 6`, `CLEAR_COMPLETED = 7`, `USER_UNMAP = 8`, `RDMA_REMOTE_INIT = 9`, `RDMA_LOCAL_READ = 10`, `RDMA_LOCAL_WRITE = 11`, `SERVICE_SET_CSR = 12`, and `SERVICE_GET_CSR = 13`.
 Multi-byte values are encoded least-significant Byte to most-significant Byte.
 The file thus looks like this:
 
@@ -46,13 +46,20 @@ In the following, we will describe the binary layout for the different operation
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-`GET_CSR` encodes reads `getCSR(...)` to control registers.
+`GET_CSR` encodes reads `getCSR(...)` from application control registers.
 Additionally, there is a polling mode that stalls the dispatching of new operations from the input file until the value of the register with address `addr` matches `data`.
 
 ```
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+------------+
 |  addr (long)  |  data (long)  | do_polling |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+------------+
+```
+
+`SERVICE_SET_CSR` and `SERVICE_GET_CSR` address the separately registered resident dynamic-service control interface. They are available only when service-aware simulation is enabled and the external dynamic service declares a control ABI. They never alias the vFPGA/application CSR space. Addresses are unsigned 64-bit little-endian **byte addresses** relative to the service's rebased `0x000`–`0xfff` page; clients must not add the production host BAR offset `0x1000`. Values are unsigned 64-bit little-endian fields. A service read is returned with the distinct `SERVICE_GET_CSR` scoreboard opcode.
+
+```
+SERVICE_SET_CSR input: uint64_le address | uint64_le value
+SERVICE_GET_CSR input: uint64_le address | uint64_le expected_value | uint8 polling
 ```
 
 `USER_MAP` encodes mapping memory to the FPGA but also triggers the allocations in the host and card memory mock through `userMap(...)`.
@@ -112,10 +119,10 @@ If `do_polling` is asserted, stalls dispatching of the next operator until the `
 ```
 
 ### Scoreboard
-The scoreboard writes back results of control register reads, interrupts, and writes to host memory into a binary output file located at `<build_dir>/sim/output.sock`.
-This binary file works similar to the input file but has the following op codes: `GET_CSR = 0, HOST_WRITE = 1, IRQ = 2, CHECK_COMPLETED = 3, HOST_READ = 4`.
+The scoreboard writes back results of control register reads, interrupts, and writes to host memory into a binary output file located at `<build_dir>/sim/output.bin`.
+This binary file works similarly to the input file but has the following append-only opcodes: `GET_CSR = 0`, `HOST_WRITE = 1`, `IRQ = 2`, `CHECK_COMPLETED = 3`, `HOST_READ = 4`, and `SERVICE_GET_CSR = 5`.
 
-`GET_CSR` encodes the result of a `getCSR(...)` call and returns the `value`.
+`GET_CSR` encodes the result of an application `getCSR(...)` call and returns the `value`. `SERVICE_GET_CSR` uses the same eight-byte little-endian value layout for a resident-service control read, while retaining a distinct opcode so a protocol client can demultiplex the two control spaces. The protocol does not include client or transaction identifiers.
 
 ```
 +-+-+-+-+-+-+-+-+
@@ -244,7 +251,7 @@ $ make
 $ COYOTE_SIM_DIR=path/to/build_hw ./test
 ```
 
-This switches out the `cThread` implementation that the software code is linked against one that starts Vivado in the background which runs the simulation environment that it communicates with through two named pipes `<build_dir>/sim/input.bin` and `<build_dir>/sim/input.bin`.
+This switches out the `cThread` implementation that the software code is linked against one that starts Vivado in the background which runs the simulation environment that it communicates with through two named pipes `<build_dir>/sim/input.bin` and `<build_dir>/sim/output.bin`.
 The protocol is the one specified above for the generator and scoreboard.
 If you need verbose output for debugging purposes, put a `#define VERBOSE` into `sim/sw/include/Common.hpp`.
 

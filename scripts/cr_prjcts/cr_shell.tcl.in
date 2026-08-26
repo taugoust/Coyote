@@ -37,6 +37,10 @@ unset ::env(PYTHONHOME)
 
 source "${CMAKE_BINARY_DIR}/base.tcl"
 
+set external_dynamic_service_sources [list ${EXTERNAL_DYNAMIC_SERVICE_SOURCES_TCL}]
+set external_dynamic_service_include_dirs [list ${EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS_TCL}]
+set external_dynamic_service_init_tcl [lindex [list ${EXTERNAL_DYNAMIC_SERVICE_INIT_TCL_TCL}] 0]
+
 ########################################################################################################
 # CREATE PROJECT
 ########################################################################################################
@@ -108,6 +112,15 @@ if {$cfg(peer_backend) eq "aurora_qsfp1"} {
 }
 add_files "$proj_dir/hdl"
 
+if {$cfg(en_external_dynamic_service) eq 1} {
+    add_files -norecurse $external_dynamic_service_sources
+    if {[llength $external_dynamic_service_include_dirs] > 0} {
+        set_property include_dirs \
+            [concat [get_property include_dirs [current_fileset]] $external_dynamic_service_include_dirs] \
+            [current_fileset]
+    }
+}
+
 # Top level
 set_property "top" "shell_top" [current_fileset]
 
@@ -136,6 +149,9 @@ if {$cfg(en_net) eq 1} {
 }
 if {$cfg(peer_backend) eq "aurora_qsfp1"} {
     source "$scripts_dir/ip_inst/aurora_infrastructure.tcl" -notrace
+}
+if {$cfg(en_external_dynamic_service) eq 1 && $external_dynamic_service_init_tcl ne ""} {
+    source $external_dynamic_service_init_tcl
 }
 
 ########################################################################################################

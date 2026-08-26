@@ -36,6 +36,10 @@ module design_dynamic_top #(
 ) (
     // AXI4 Lite control
     AXI4L.s                                     s_axi_ctrl [N_REGIONS],
+{% if cnfg.en_external_dynamic_service_control %}
+    // Optional resident-service control (already in the service clock domain)
+    AXI4L.s                                     s_axi_service_ctrl,
+{% endif %}
     
 {% if cnfg.en_avx %}
     // AXI4 AVX control
@@ -312,6 +316,42 @@ module design_dynamic_top #(
 {% endif %}
     end
 
+{% if cnfg.en_external_dynamic_service %}
+    // External dynamic service
+    // ----------------------------------------------------------------------
+    // The application decouplers remain adjacent to the reconfigurable
+    // wrappers; the resident service is on the shell side of both decouplers.
+    AXI4S axis_host_in_service [N_REGIONS] ();
+    AXI4S axis_host_out_service [N_REGIONS] ();
+
+    {{ cnfg.external_dynamic_service_top }} inst_external_dynamic_service (
+{% if cnfg.en_external_dynamic_service_control %}
+        .s_axi_ctrl(s_axi_service_ctrl),
+{% endif %}
+{% if cnfg.en_external_dynamic_service_slot_status %}
+        .s_slot_decoupled(decouple_uclk),
+{% endif %}
+{% if cnfg.en_uclk %}
+        .aclk(uclk),
+        .aresetn(uresetn),
+{% else %}
+        .aclk(aclk),
+        .aresetn(aresetn),
+{% endif %}
+        .s_axis_host_in(axis_host_in_s4),
+        .m_axis_host_in(axis_host_in_service),
+        .s_axis_host_out(axis_host_out_service),
+        .m_axis_host_out(axis_host_out_s4)
+    );
+
+    // Decoupling
+    // ----------------------------------------------------------------------
+    AXI4S axis_host_in_ul [N_REGIONS] ();
+    AXI4S axis_host_out_ul [N_REGIONS] ();
+
+    axis_decoupler inst_host_dcpl_in  (.decouple(decouple_uclk), .s_axis(axis_host_in_service), .m_axis(axis_host_in_ul));
+    axis_decoupler inst_host_dcpl_out (.decouple(decouple_uclk), .s_axis(axis_host_out_ul),      .m_axis(axis_host_out_service));
+{% else %}
     // Decoupling 
     // ----------------------------------------------------------------------
     AXI4S axis_host_in_ul [N_REGIONS] ();
@@ -319,6 +359,7 @@ module design_dynamic_top #(
 
     axis_decoupler inst_host_dcpl_in  (.decouple(decouple_uclk), .s_axis(axis_host_in_s4),    .m_axis(axis_host_in_ul));
     axis_decoupler inst_host_dcpl_out (.decouple(decouple_uclk), .s_axis(axis_host_out_ul), .m_axis(axis_host_out_s4));
+{% endif %}
 
 {% endif %}	
 {% if cnfg.en_mem %}

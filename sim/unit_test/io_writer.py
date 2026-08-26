@@ -62,6 +62,8 @@ class SendMessageType(Enum):
     RDMA_REMOTE_INIT = 9
     RDMA_LOCAL_READ = 10
     RDMA_LOCAL_WRITE = 11
+    SERVICE_SET_CSR = 12
+    SERVICE_GET_CSR = 13
 
 
 class ReceiveMessageType(Enum):
@@ -69,6 +71,7 @@ class ReceiveMessageType(Enum):
     HOST_WRITE = 1
     IRQ = 2
     CHECK_COMPLETED = 3
+    SERVICE_GET_CSR = 5
 
 
 class CoyoteOperator(Enum):
@@ -134,6 +137,7 @@ class SimulationIOWriter:
 
         # This queue is used to send the output of getCSR to a consumer
         self.csr_output_queue = Queue()
+        self.service_csr_output_queue = Queue()
         self.check_completed_output_queue = Queue()
         # Start the thread to read the output file
         self.output_thread = SafeThread(self._read_simulation_output_entry)
@@ -257,6 +261,20 @@ class SimulationIOWriter:
         logger.info(f"Got CSR value {csr_value}")
         self.csr_output_queue.put(csr_value)
 
+    def _read_service_get_csr_output(
+        self, output_file: BinaryIO, stop_event: threading.Event, logger: logging.Logger
+    ):
+        format = f"{self.byte_order}Q"
+        size = struct.calcsize(format)
+        data = self._read_exactly_n_bytes_from_output_file(
+            output_file, size, stop_event
+        )
+        if not data:
+            return
+        [csr_value] = struct.unpack(format, data)
+        logger.info(f"Got resident-service CSR value {csr_value}")
+        self.service_csr_output_queue.put(csr_value)
+
     def _read_host_write_output(
         self, output_file: BinaryIO, stop_event: threading.Event, logger: logging.Logger
     ):
@@ -364,6 +382,8 @@ class SimulationIOWriter:
                     self._read_interrupt_output(output_file, stop_event, logger)
                 case ReceiveMessageType.CHECK_COMPLETED:
                     self._read_check_completed_output(output_file, stop_event, logger)
+                case ReceiveMessageType.SERVICE_GET_CSR:
+                    self._read_service_get_csr_output(output_file, stop_event, logger)
 
     def _read_simulation_output_entry(self, stop_event: threading.Event):
         """
@@ -637,6 +657,23 @@ class SimulationIOWriter:
             self._bool_to_byte(do_polling),
         )
 
+    def _get_service_set_csr_bytes(self, byte_address: int, value: int) -> bytes:
+        assert 0 <= byte_address < (1 << 64)
+        assert 0 <= value < (1 << 64)
+        return struct.pack(f"{self.byte_order}QQ", byte_address, value)
+
+    def _get_service_get_csr_bytes(
+        self, byte_address: int, expected_value: int, do_polling: bool
+    ) -> bytes:
+        assert 0 <= byte_address < (1 << 64)
+        assert 0 <= expected_value < (1 << 64)
+        return struct.pack(
+            f"{self.byte_order}QQB",
+            byte_address,
+            expected_value,
+            1 if do_polling else 0,
+        )
+
     def _get_mem_bytes(self, vaddr: int, size_in_bytes: int) -> bytes:
         """
         Returns the bytes for the socket message to perform a memory operation
@@ -798,6 +835,49 @@ class SimulationIOWriter:
         )
 
         return self._try_dequeue_till_stop(self.csr_output_queue, stop_event)
+
+    def service_ctrl_write(self, byte_address: int, value: int) -> None:
+        """Write a byte-addressed resident dynamic-service control register."""
+        self.logger.info(
+            f"Writing resident-service CTRL address {byte_address:#x} value {value:#x}"
+        )
+        self._write_input(
+            SendMessageType.SERVICE_SET_CSR,
+            self._get_service_set_csr_bytes(byte_address, value),
+        )
+
+    def service_ctrl_read(
+        self, byte_address: int, stop_event: threading.Event = None
+    ) -> Optional[int]:
+        """Read a byte-addressed resident dynamic-service control register."""
+        self.logger.info(f"Reading resident-service CTRL address {byte_address:#x}")
+        self._write_input(
+            SendMessageType.SERVICE_GET_CSR,
+            self._get_service_get_csr_bytes(byte_address, 0, False),
+        )
+        return self._try_dequeue_till_stop(
+            self.service_csr_output_queue, stop_event
+        )
+
+    def service_ctrl_poll(
+        self,
+        byte_address: int,
+        expected_value: int,
+        stop_event: threading.Event = None,
+    ) -> Optional[int]:
+        """Poll a resident-service register until it equals the expected value."""
+        self.logger.info(
+            f"Polling resident-service CTRL address {byte_address:#x} for {expected_value:#x}"
+        )
+        self._write_input(
+            SendMessageType.SERVICE_GET_CSR,
+            self._get_service_get_csr_bytes(
+                byte_address, expected_value, True
+            ),
+        )
+        return self._try_dequeue_till_stop(
+            self.service_csr_output_queue, stop_event
+        )
 
     def ctrl_poll(self, config: vFPGARegister, stop_event: threading.Event = None):
         """

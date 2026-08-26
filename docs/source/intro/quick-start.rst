@@ -235,6 +235,27 @@ The command consists of the following incremental steps:
     # Generate bitstreams
     make bitgen   
 
+A ``BUILD_SHELL=1`` build can collect fast pre-placement evidence directly from the synthesized resident-shell checkpoint:
+
+.. code-block:: bash
+
+    make synthesis_analysis
+
+This target synthesizes the resident shell when needed, then emits estimated setup/hold timing, critical paths, utilization, high-fanout diagnostics, and ``reports/synthesis_analysis/summary.json``. It does not synthesize the configuration-0 application, link DFX, optimize, place, route, or generate an image. The result is useful for rejecting clearly poor RTL quickly, but it does not assess placement or congestion.
+
+For a ``BUILD_SHELL=1`` and ``EN_PR=1`` build, Coyote also provides the stronger predictive timing oracle before full-quality implementation:
+
+.. code-block:: bash
+
+    make synth
+    make timing_oracle
+
+The oracle runs ``opt_design`` and Vivado QoR Assessment, rejects poor post-opt scores before placement, and otherwise performs ``RuntimeOptimized`` placement followed by another assessment and an estimated timing report. It deliberately does not route. Reports, diagnostic checkpoints, RQA CSV output, and ``reports/timing_oracle/summary.json`` classify the candidate as ``PASS``, ``MARGINAL``, or ``FAIL``. The classification is predictive only; even ``PASS`` requires normal full routing, DRC, and setup/hold acceptance.
+
+On Versal with application DFX, the oracle links the complete configuration 0 from the static, shell, and seed-application checkpoints plus the implementation constraints and application floorplan. On UltraScale+, it assesses the linked shell before nested DFX subdivision; validate its thresholds separately rather than assuming Versal behavior transfers.
+
+The default policy rejects RQA scores below 3 and treats post-place scores of 4 or greater as ``PASS``. ``TIMING_ORACLE_REJECT_RQA_BELOW``, ``TIMING_ORACLE_PASS_RQA_AT_LEAST``, and ``TIMING_ORACLE_MAX_PATHS`` configure that policy. The target completes for all three classifications so its reports remain available; build-system integrations can enforce ``FAIL`` through a separate gate.
+
 If ``EN_PR = 1`` floor-planning of the applications (vFPGAs) needs to be done by users explicitly after the *make shell* step. 
 This can be done by opening the generated ``shell_subdivided.dcp`` checkpoint. 
 Check out the following link for a detailed `floor-planning guide <https://docs.amd.com/r/en-US/ug903-vivado-using-constraints/Floorplanning>`_.
@@ -346,6 +367,52 @@ If you see this, your system is all ready to run the accompanying Coyote softwar
 
 Coyote has been successfully deployed on other FPGA clusters (e.g., in the `Open Cloud Testbed <https://octestbed.org/>`_) and independent set-ups.
 For some ideas of projects that were based on Coyote, check out the :ref:`publications` page.
+
+External dynamic services
+-------------------------
+
+A shell/static build may register one out-of-tree service that remains resident
+outside the reconfigurable vFPGA wrappers. Register it after setting the shell
+configuration and before ``validation_checks_hw()``:
+
+.. code-block:: cmake
+
+    register_dynamic_service(
+        NAME example-service
+        TOP example_service_top
+        SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/service/example_service_top.sv
+        INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/service/include
+        ABI 1
+        INIT_TCL ${CMAKE_CURRENT_SOURCE_DIR}/service/init_ip.tcl # optional
+    )
+
+Relative paths are resolved relative to the calling ``CMakeLists.txt``. The
+sources, include directories, and optional IP-initialization Tcl are used only
+while building the shell. A ``BUILD_APP`` invocation instead imports the
+service identity, ABI, service-interface version, and complete application
+interface dimensions from ``SHELL_PATH/export.cmake``.
+
+The registered ``TOP`` is instantiated once in ``design_dynamic_top``. It uses
+the application clock domain and the following fixed port contract; each stream
+array has ``N_REGIONS`` elements and uses Coyote's 512-bit ``AXI4S`` interface:
+
+.. code-block:: systemverilog
+
+    module example_service_top (
+        AXI4S.s s_axis_host_in  [N_REGIONS], // shell to service
+        AXI4S.m m_axis_host_in  [N_REGIONS], // service to vFPGA
+        AXI4S.s s_axis_host_out [N_REGIONS], // vFPGA to service
+        AXI4S.m m_axis_host_out [N_REGIONS], // service to shell
+        input logic aclk,
+        input logic aresetn
+    );
+
+The service sits immediately on the shell side of the existing application
+stream decouplers; the vFPGA HDL interface and reconfigurable hierarchy are
+unchanged. Set ``SIM_EXTERNAL_DYNAMIC_SERVICE=1`` to include the same registered
+module in the host-stream integration simulation. This optional simulation mode
+currently supports one region and one host stream; the aggregate interface has
+no routed ``tid`` sideband.
 
 Simulating vFPGAs
 -----------------------

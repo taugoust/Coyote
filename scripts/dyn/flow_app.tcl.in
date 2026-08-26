@@ -33,6 +33,7 @@ if {[catch {
 
 # Config
 source "${CMAKE_BINARY_DIR}/base.tcl"
+file delete -force "$dcp_dir/dynamic_route_complete"
 
 ########################################################################################################
 # APP COMPILATION
@@ -83,7 +84,12 @@ for {set i 0}  {$i < $cfg(n_config)} {incr i} {
     write_checkpoint -force "$dcp_dir/config_$i/shell_opted_c$i.dcp"
 
     if {$cfg(build_opt) eq 1} {
-        place_design -directive Auto_1
+        # Auto_1 is unavailable on supported Versal tool versions.
+        if {$cfg(fpga_arch) eq "versal"} {
+            place_design -directive AggressiveExplore
+        } else {
+            place_design -directive Auto_1
+        }
     } else {
         place_design
     }
@@ -102,18 +108,17 @@ for {set i 0}  {$i < $cfg(n_config)} {incr i} {
         route_design
     }
 
-    if {$cfg(build_opt) eq 1} {
-        phys_opt_design -directive AggressiveExplore
-    }
+    finalize_post_route_optimization
 
+    report_and_validate_routed_design \
+        "config $i routed application" "$rprt_dir/config_$i" "_c$i" config_${i}_bitstream_gate
     write_checkpoint -force "$dcp_dir/config_$i/shell_routed_c$i.dcp"
-
-    report_utilization -file "$rprt_dir/config_$i/shell_utilization_c$i.rpt"
-    report_route_status -file "$rprt_dir/config_$i/shell_route_status_c$i.rpt"
-    report_timing_summary -file "$rprt_dir/config_$i/shell_timing_summary_c$i.rpt"
-    report_drc -ruledeck bitstream_checks -name cyt_top -file "$rprt_dir/config_$i/shell_drc_bitstream_checks_c$i.rpt"
     close_project
 }
+
+set completion [open "$dcp_dir/dynamic_route_complete" w]
+puts $completion "application route complete"
+close $completion
 
 ########################################################################################################
 

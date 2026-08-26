@@ -118,6 +118,24 @@ namespace coyote {
 // Retrieve PR and writeback statistics (no. of read/write requests, completions, data beats from/to the XDMA/QDMA) 
 #define IOCTL_PR_WB_STATS                   _IOR('P', 6, unsigned long)
 
+inline constexpr uint32_t SERVICE_CTRL_INTERFACE_VERSION = 1;
+inline constexpr uint32_t SERVICE_CTRL_MAX_OPS = 64;
+inline constexpr uint32_t SERVICE_CTRL_OP_WRITE = 0x1;
+
+struct cyt_service_ctrl_op {
+    uint32_t offset;
+    uint32_t flags;
+    uint64_t value;
+};
+
+struct cyt_service_ctrl_batch {
+    uint32_t interface_version;
+    uint32_t count;
+    cyt_service_ctrl_op ops[SERVICE_CTRL_MAX_OPS];
+};
+
+#define IOCTL_SERVICE_CTRL_BATCH            _IOWR('P', 7, struct cyt_service_ctrl_batch)
+
 #define BUFF_NEEDS_EXP_SYNC_RET_CODE 99
 
 ///////////////////////////////////////////////////

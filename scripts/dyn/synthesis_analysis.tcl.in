@@ -1,0 +1,300 @@
+######################################################################################
+# This file is part of the Coyote <https://github.com/fpgasystems/Coyote>
+#
+# MIT Licence
+# Copyright (c) 2026, Systems Group, ETH Zurich
+# All rights reserved.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+######################################################################################
+
+# @brief Collects fast predictive timing evidence from the synthesized resident shell.
+#
+# This flow deliberately does not link the DFX configuration, optimize, place, route,
+# or generate an image. It is intended to reject clearly poor RTL before the linked
+# timing oracle. Its estimated timing is not implementation acceptance.
+
+if {[catch {
+
+source "${CMAKE_BINARY_DIR}/base.tcl"
+
+proc json_escape {value} {
+    return [string map [list \\ \\\\ \" \\\" \n \\n \r \\r \t \\t] $value]
+}
+
+proc json_string {value} {
+    return "\"[json_escape $value]\""
+}
+
+proc json_number_or_null {value} {
+    if {$value eq ""} {
+        return "null"
+    }
+    return $value
+}
+
+proc object_name_or_empty {object} {
+    if {$object eq ""} {
+        return ""
+    }
+    if {[catch {set name [get_property NAME $object]}]} {
+        return "$object"
+    }
+    return $name
+}
+
+proc path_property_or_empty {path property} {
+    if {$path eq ""} {
+        return ""
+    }
+    if {[catch {set value [get_property $property $path]}]} {
+        return ""
+    }
+    return $value
+}
+
+proc worst_path {delay_type} {
+    set paths [get_timing_paths -delay_type $delay_type -max_paths 1 -nworst 1]
+    if {[llength $paths] == 0} {
+        return ""
+    }
+    return [lindex $paths 0]
+}
+
+proc setup_tns_from_timing_summary {summary} {
+    set found_header false
+    set found_separator false
+    foreach line [split $summary "\n"] {
+        set trimmed [string trim $line]
+        if {!$found_header} {
+            if {[string first "WNS(ns)" $trimmed] >= 0 && [string first "TNS(ns)" $trimmed] >= 0} {
+                set found_header true
+            }
+            continue
+        }
+        if {!$found_separator} {
+            if {[regexp {^-+[[:space:]]+-+} $trimmed]} {
+                set found_separator true
+            }
+            continue
+        }
+        if {[regexp {^([+-]?[0-9]+(?:\.[0-9]+)?)[[:space:]]+([+-]?[0-9]+(?:\.[0-9]+)?)} \
+                $trimmed match wns tns]} {
+            return $tns
+        }
+    }
+    return ""
+}
+
+proc check_timing_issue_count {path check_name} {
+    set fd [open $path r]
+    set count ""
+    set pattern [format {^[0-9]+\. checking %s \(([0-9]+)\)$} $check_name]
+    while {[gets $fd line] >= 0} {
+        if {[regexp $pattern [string trim $line] match count]} {
+            break
+        }
+    }
+    close $fd
+    return $count
+}
+
+proc write_text_file {path contents} {
+    set fd [open $path w]
+    puts -nonewline $fd $contents
+    close $fd
+}
+
+proc write_summary {path valid reasons setup_path hold_path setup_tns} {
+    global cfg part
+
+    set setup_slack [path_property_or_empty $setup_path SLACK]
+    set hold_slack [path_property_or_empty $hold_path SLACK]
+    set setup_start [object_name_or_empty [path_property_or_empty $setup_path STARTPOINT_PIN]]
+    set setup_end [object_name_or_empty [path_property_or_empty $setup_path ENDPOINT_PIN]]
+    set setup_group [object_name_or_empty [path_property_or_empty $setup_path PATH_GROUP]]
+    set setup_levels [path_property_or_empty $setup_path LOGIC_LEVELS]
+
+    set reason_json {}
+    foreach reason $reasons {
+        lappend reason_json [json_string $reason]
+    }
+
+    set fd [open $path w]
+    puts $fd "{"
+    puts $fd "  \"schemaVersion\": 1,"
+    puts $fd "  \"kind\": \"coyote-synthesis-analysis\","
+    puts $fd "  \"predictiveOnly\": true,"
+    puts $fd "  \"assessmentScope\": \"resident-shell-synthesis\","
+    puts $fd "  \"architecture\": [json_string $cfg(fpga_arch)],"
+    puts $fd "  \"part\": [json_string $part],"
+    puts $fd "  \"vivadoVersion\": [json_string [version -short]],"
+    puts $fd "  \"implementation\": {"
+    puts $fd "    \"linked\": false,"
+    puts $fd "    \"optimized\": false,"
+    puts $fd "    \"placed\": false,"
+    puts $fd "    \"routed\": false"
+    puts $fd "  },"
+    puts $fd "  \"reportLimits\": {"
+    puts $fd "    \"maxPaths\": $cfg(synthesis_analysis_max_paths),"
+    puts $fd "    \"maxFanoutNets\": $cfg(synthesis_analysis_max_fanout_nets)"
+    puts $fd "  },"
+    puts $fd "  \"timing\": {"
+    puts $fd "    \"setupWnsNs\": [json_number_or_null $setup_slack],"
+    puts $fd "    \"setupTnsNs\": [json_number_or_null $setup_tns],"
+    puts $fd "    \"holdWnsNs\": [json_number_or_null $hold_slack],"
+    puts $fd "    \"criticalPath\": {"
+    puts $fd "      \"startpoint\": [json_string $setup_start],"
+    puts $fd "      \"endpoint\": [json_string $setup_end],"
+    puts $fd "      \"pathGroup\": [json_string $setup_group],"
+    puts $fd "      \"logicLevels\": [json_number_or_null $setup_levels]"
+    puts $fd "    }"
+    puts $fd "  },"
+    puts $fd "  \"valid\": [expr {$valid ? "true" : "false"}],"
+    puts $fd "  \"reasons\": \[[join $reason_json {, }]\]"
+    puts $fd "}"
+    close $fd
+
+    puts "SYNTHESIS_ANALYSIS_VALID=$valid"
+    puts "SYNTHESIS_ANALYSIS_SETUP_WNS_NS=$setup_slack"
+    puts "SYNTHESIS_ANALYSIS_SETUP_TNS_NS=$setup_tns"
+    puts "SYNTHESIS_ANALYSIS_HOLD_WNS_NS=$hold_slack"
+    foreach reason $reasons {
+        puts "SYNTHESIS_ANALYSIS_REASON=$reason"
+    }
+}
+
+set analysis_report_dir "$rprt_dir/synthesis_analysis"
+file mkdir $analysis_report_dir
+file delete -force "$analysis_report_dir/complete"
+
+puts "** Starting resident-shell synthesis analysis ..."
+puts "**"
+
+if {!$cfg(build_shell)} {
+    error "Resident-shell synthesis analysis requires BUILD_SHELL=1"
+}
+
+set shell_checkpoint "$dcp_dir/shell/shell_synthed.dcp"
+if {![file exists $shell_checkpoint]} {
+    error "Synthesized resident-shell checkpoint does not exist: $shell_checkpoint"
+}
+
+open_checkpoint $shell_checkpoint
+
+# The shell checkpoint is produced by an out-of-context run. Reapply its
+# top-level clock constraints after reopening it; otherwise Vivado can retain
+# xclk as a constant boundary input and report only unconstrained default paths.
+set shell_clock_constraints "$build_dir/$project\_shell/xdc/shell_clk.xdc"
+if {![file exists $shell_clock_constraints]} {
+    error "Shell synthesis clock constraints do not exist: $shell_clock_constraints"
+}
+read_xdc $shell_clock_constraints
+if {[llength [get_clocks -quiet]] == 0} {
+    error "Resident-shell synthesis analysis has no clocks after loading $shell_clock_constraints"
+}
+
+set check_timing_path "$analysis_report_dir/check_timing.rpt"
+check_timing -verbose -file $check_timing_path
+set no_clock_count [check_timing_issue_count $check_timing_path no_clock]
+set unconstrained_endpoint_count \
+    [check_timing_issue_count $check_timing_path unconstrained_internal_endpoints]
+report_utilization -file "$analysis_report_dir/utilization.rpt"
+report_high_fanout_nets \
+    -max_nets $cfg(synthesis_analysis_max_fanout_nets) \
+    -file "$analysis_report_dir/high_fanout_nets.rpt"
+report_timing \
+    -delay_type max \
+    -max_paths $cfg(synthesis_analysis_max_paths) \
+    -file "$analysis_report_dir/setup_paths.rpt"
+report_timing \
+    -delay_type min \
+    -max_paths $cfg(synthesis_analysis_max_paths) \
+    -file "$analysis_report_dir/hold_paths.rpt"
+
+set timing_summary [report_timing_summary -return_string]
+write_text_file "$analysis_report_dir/timing_summary.rpt" $timing_summary
+
+set setup_path [worst_path max]
+set hold_path [worst_path min]
+set setup_tns [setup_tns_from_timing_summary $timing_summary]
+set setup_group [object_name_or_empty [path_property_or_empty $setup_path PATH_GROUP]]
+set hold_group [object_name_or_empty [path_property_or_empty $hold_path PATH_GROUP]]
+set valid true
+set reasons {}
+if {$setup_path eq ""} {
+    set valid false
+    lappend reasons "no clocked setup timing path was found in the synthesized resident shell"
+}
+if {$hold_path eq ""} {
+    set valid false
+    lappend reasons "no clocked hold timing path was found in the synthesized resident shell"
+}
+if {$setup_tns eq ""} {
+    set valid false
+    lappend reasons "setup TNS could not be parsed from the synthesized timing summary"
+}
+if {$setup_group eq "" || $hold_group eq ""} {
+    set valid false
+    lappend reasons "synthesized timing paths are not associated with clock path groups"
+}
+if {$no_clock_count eq "" || $no_clock_count != 0} {
+    set valid false
+    lappend reasons "check_timing reports $no_clock_count register/latch pins without a clock"
+}
+if {$unconstrained_endpoint_count eq "" || $unconstrained_endpoint_count != 0} {
+    set valid false
+    lappend reasons "check_timing reports $unconstrained_endpoint_count unconstrained internal endpoints"
+}
+if {$valid} {
+    lappend reasons "synthesized timing evidence collected; placement, congestion, and routing are not assessed"
+}
+
+write_summary "$analysis_report_dir/summary.json" $valid $reasons \
+    $setup_path $hold_path $setup_tns
+close_project
+foreach artifact [list \
+    "$analysis_report_dir/summary.json" \
+    "$analysis_report_dir/check_timing.rpt" \
+    "$analysis_report_dir/utilization.rpt" \
+    "$analysis_report_dir/high_fanout_nets.rpt" \
+    "$analysis_report_dir/setup_paths.rpt" \
+    "$analysis_report_dir/hold_paths.rpt" \
+    "$analysis_report_dir/timing_summary.rpt"] {
+    if {![file exists $artifact] || [file size $artifact] == 0} {
+        error "Synthesis-analysis artifact is missing or empty: $artifact"
+    }
+}
+set completion [open "$analysis_report_dir/complete" w]
+puts $completion "synthesis analysis complete"
+close $completion
+
+puts ""
+puts "**"
+puts "** Resident-shell synthesis analysis completed (predictive evidence only)"
+puts "**"
+puts ""
+
+} errorstring]} {
+    puts "** CERR: $errorstring"
+    puts "**"
+    exit 1
+}
+
+exit 0

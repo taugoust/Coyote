@@ -123,6 +123,10 @@ localparam integer TCP_CNFG_REG           = 8;
 // 9, 10 (W1S|W1C|R) : Datapath control set/clear
 localparam integer CTRL_DP_REG_SET        = 9;
 localparam integer CTRL_DP_REG_CLR        = 10;
+// 11 (RO) : Optional resident-service control interface
+localparam integer SERVICE_CTRL_CNFG_REG  = 11;
+// 12 (RO) : Resident-service control host-visible base
+localparam integer SERVICE_CTRL_BASE_REG  = 12;
 // NETWORK 
 // 32 (RW) : IP address
 localparam integer NET_IPADDR_REG         = 32;
@@ -290,6 +294,15 @@ always_ff @(posedge aclk) begin
           axi_rdata[0] <= TCP_FLOW;
           axi_rdata[1] <= QSFP;
         end
+        SERVICE_CTRL_CNFG_REG: begin // Optional resident-service control
+          axi_rdata[0] <= EXTERNAL_SERVICE_CONTROL_ENABLED;
+          axi_rdata[15:8] <= EXTERNAL_SERVICE_CONTROL_INTERFACE_VERSION;
+          axi_rdata[23:16] <= EXTERNAL_SERVICE_CONTROL_ADDR_BITS;
+          axi_rdata[31:24] <= EXTERNAL_SERVICE_CONTROL_DATA_BITS;
+          axi_rdata[63:32] <= EXTERNAL_SERVICE_CONTROL_BYTES;
+        end
+        SERVICE_CTRL_BASE_REG:
+          axi_rdata <= EXTERNAL_SERVICE_CONTROL_BASE;
 
 `ifdef EN_RDMA
         RDMA_OFFS_REG: // Offset

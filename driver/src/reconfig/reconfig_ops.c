@@ -21,6 +21,88 @@
 
 #include "reconfig_ops.h"
 
+static long service_ctrl_batch_ioctl(
+    struct reconfig_dev *device,
+    struct bus_driver_data *bus_data,
+    unsigned long arg
+) {
+    struct cyt_service_ctrl_batch *batch;
+    void __iomem *shell_base;
+    uint64_t control_cnfg;
+    uint64_t control_base;
+    uint64_t control_bytes;
+    uint32_t control_version;
+    uint32_t control_data_bits;
+    long ret_val = 0;
+    uint32_t i;
+
+    if (!capable(CAP_SYS_ADMIN))
+        return -EPERM;
+
+    batch = memdup_user((void __user *)arg, sizeof(*batch));
+    if (IS_ERR(batch))
+        return PTR_ERR(batch);
+
+    if (batch->interface_version != SERVICE_CTRL_INTERFACE_VERSION ||
+        batch->count == 0 || batch->count > SERVICE_CTRL_MAX_OPS) {
+        ret_val = -EINVAL;
+        goto out_free;
+    }
+
+    control_cnfg = READ_ONCE(bus_data->shell_cnfg->service_ctrl_cnfg);
+    control_base = READ_ONCE(bus_data->shell_cnfg->service_ctrl_base);
+    control_version = (control_cnfg >> 8) & 0xff;
+    control_data_bits = (control_cnfg >> 24) & 0xff;
+    control_bytes = control_cnfg >> 32;
+
+    if (!(control_cnfg & 0x1) ||
+        control_version != SERVICE_CTRL_INTERFACE_VERSION) {
+        ret_val = -ENODEV;
+        goto out_free;
+    }
+    if (control_data_bits != 64 || control_bytes < sizeof(uint64_t) ||
+        (control_base & (sizeof(uint64_t) - 1)) != 0 ||
+        control_base >= FPGA_SHELL_CNFG_SIZE ||
+        control_bytes > FPGA_SHELL_CNFG_SIZE - control_base) {
+        ret_val = -EPROTO;
+        goto out_free;
+    }
+
+    for (i = 0; i < batch->count; i++) {
+        if ((batch->ops[i].flags & ~SERVICE_CTRL_OP_WRITE) != 0 ||
+            (batch->ops[i].offset & (sizeof(uint64_t) - 1)) != 0 ||
+            batch->ops[i].offset > control_bytes - sizeof(uint64_t)) {
+            ret_val = -EINVAL;
+            goto out_free;
+        }
+    }
+
+    /* Probe output writability before issuing any MMIO write. */
+    if (copy_to_user((void __user *)arg, batch, sizeof(*batch))) {
+        ret_val = -EFAULT;
+        goto out_free;
+    }
+
+    shell_base = (void __iomem *)bus_data->shell_cnfg;
+    mutex_lock(&device->rcnfg_lock);
+    for (i = 0; i < batch->count; i++) {
+        void __iomem *address = shell_base + control_base + batch->ops[i].offset;
+        if (batch->ops[i].flags & SERVICE_CTRL_OP_WRITE)
+            writeq(batch->ops[i].value, address);
+        else
+            batch->ops[i].value = readq(address);
+    }
+    wmb();
+
+    if (copy_to_user((void __user *)arg, batch, sizeof(*batch)))
+        ret_val = -EFAULT;
+    mutex_unlock(&device->rcnfg_lock);
+
+out_free:
+    kfree(batch);
+    return ret_val;
+}
+
 int reconfig_dev_open(struct inode *inode, struct file *file) {
     // Parse inode arg into reconfig_dev struct and check it's non-null (BUG_ON)
     int minor = iminor(inode);
@@ -204,6 +286,10 @@ long reconfig_dev_ioctl(struct file *file, unsigned int command, unsigned long a
             if (ret_val != 0) {
                 pr_warn("could not copy data to user space, return %d\n", ret_val);
             }
+            break;
+
+        case IOCTL_SERVICE_CTRL_BATCH:
+            ret_val = service_ctrl_batch_ioctl(device, bus_data, arg);
             break;
 
         default: 

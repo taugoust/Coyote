@@ -180,3 +180,5 @@ if arg1 == 3 :
     sim_dir = build_dir + '/sim'
     renderhdl(env_common, 'lynx_pkg', sim_dir, 0)
     renderuser(env_common, 'user_logic', sim_dir, arg2, arg3)
+    if cfg['sim_external_dynamic_service']:
+        renderhdl(env_common, 'dynamic_service_sim', sim_dir, 0)
