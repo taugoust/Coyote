@@ -1833,6 +1833,14 @@ macro(gen_targets)
             list(APPEND PHYSICAL_STAGE_BYPRODUCTS
                 ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_qor_assessment${IMPLEMENTATION_REPORT_SUFFIX}.rpt)
         endif()
+        if(IMPLEMENTATION_PHASE STREQUAL "place" AND FPGA_ARCH STREQUAL "versal")
+            list(APPEND PHYSICAL_STAGE_BYPRODUCTS
+                ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_congestion${IMPLEMENTATION_REPORT_SUFFIX}.rpt
+                ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_complexity${IMPLEMENTATION_REPORT_SUFFIX}.rpt
+                ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_logic_levels${IMPLEMENTATION_REPORT_SUFFIX}.rpt
+                ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_high_fanout${IMPLEMENTATION_REPORT_SUFFIX}.rpt
+                ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_diagnosis${IMPLEMENTATION_REPORT_SUFFIX}.json)
+        endif()
         if(IMPLEMENTATION_PHASE MATCHES "^(route|validate)$")
             list(APPEND PHYSICAL_STAGE_BYPRODUCTS
                 ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_route_status${IMPLEMENTATION_REPORT_SUFFIX}.rpt)

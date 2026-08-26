@@ -118,6 +118,9 @@ if {[catch {
     if {$phase ne "validate"} {
         write_implementation_observations \
             $phase $report_dir $report_suffix $telemetry_path ""
+        if {$phase eq "place" && $cfg(fpga_arch) eq "versal"} {
+            write_placement_diagnosis_evidence $report_dir $report_suffix
+        }
     }
     write_checkpoint -force $output_dcp
     close_project

@@ -321,6 +321,76 @@ proc implementation_route_count {route_type} {
     return [llength $nets]
 }
 
+proc implementation_path_property {path property} {
+    if {$path eq ""} { return "" }
+    if {[catch {set value [get_property $property $path]}]} { return "" }
+    return $value
+}
+
+proc write_placement_diagnosis_evidence {report_dir report_suffix} {
+    set prefix shell_place
+    set congestion_path "$report_dir/${prefix}_congestion${report_suffix}.rpt"
+    set complexity_path "$report_dir/${prefix}_complexity${report_suffix}.rpt"
+    set logic_levels_path "$report_dir/${prefix}_logic_levels${report_suffix}.rpt"
+    set high_fanout_path "$report_dir/${prefix}_high_fanout${report_suffix}.rpt"
+    set output_path "$report_dir/${prefix}_diagnosis${report_suffix}.json"
+
+    set setup_paths [get_timing_paths -delay_type max -max_paths 100 -nworst 100]
+    report_design_analysis -congestion -file $congestion_path
+    report_design_analysis -complexity -file $complexity_path
+    if {[llength $setup_paths] > 0} {
+        report_design_analysis -logic_level_distribution \
+            -of_timing_paths $setup_paths -file $logic_levels_path
+    } else {
+        set empty_report [open $logic_levels_path w]
+        puts $empty_report "No setup timing paths were available for logic-level analysis."
+        close $empty_report
+    }
+    report_high_fanout_nets -max_nets 100 -file $high_fanout_path
+
+    set worst_path ""
+    if {[llength $setup_paths] > 0} { set worst_path [lindex $setup_paths 0] }
+    set slack [implementation_path_property $worst_path SLACK]
+    set requirement [implementation_path_property $worst_path REQUIREMENT]
+    set datapath_delay [implementation_path_property $worst_path DATAPATH_DELAY]
+    set logic_delay [implementation_path_property $worst_path LOGIC_DELAY]
+    set net_delay [implementation_path_property $worst_path NET_DELAY]
+    set logic_levels [implementation_path_property $worst_path LOGIC_LEVELS]
+    set skew [implementation_path_property $worst_path SKEW]
+    set source [implementation_path_property $worst_path STARTPOINT_PIN]
+    set destination [implementation_path_property $worst_path ENDPOINT_PIN]
+    set path_group [implementation_path_property $worst_path PATH_GROUP]
+
+    set fd [open $output_path w]
+    puts $fd "{"
+    puts $fd "  \"schemaVersion\": 1,"
+    puts $fd "  \"kind\": \"coyote-placement-diagnosis-evidence\","
+    puts $fd "  \"phase\": \"place\","
+    puts $fd "  \"vivadoVersion\": [implementation_json_string [version -short]],"
+    puts $fd "  \"vivadoFullVersion\": [implementation_json_string [version]],"
+    puts $fd "  \"setupPathCount\": [llength $setup_paths],"
+    puts $fd "  \"worstSetupPath\": {"
+    puts $fd "    \"source\": [implementation_json_string $source],"
+    puts $fd "    \"destination\": [implementation_json_string $destination],"
+    puts $fd "    \"pathGroup\": [implementation_json_string $path_group],"
+    puts $fd "    \"slackNs\": [implementation_json_number_or_null $slack],"
+    puts $fd "    \"requirementNs\": [implementation_json_number_or_null $requirement],"
+    puts $fd "    \"dataPathDelayNs\": [implementation_json_number_or_null $datapath_delay],"
+    puts $fd "    \"logicDelayNs\": [implementation_json_number_or_null $logic_delay],"
+    puts $fd "    \"netDelayNs\": [implementation_json_number_or_null $net_delay],"
+    puts $fd "    \"logicLevels\": [implementation_json_number_or_null $logic_levels],"
+    puts $fd "    \"skewNs\": [implementation_json_number_or_null $skew]"
+    puts $fd "  },"
+    puts $fd "  \"reports\": {"
+    puts $fd "    \"congestion\": [implementation_json_string [file tail $congestion_path]],"
+    puts $fd "    \"complexity\": [implementation_json_string [file tail $complexity_path]],"
+    puts $fd "    \"logicLevels\": [implementation_json_string [file tail $logic_levels_path]],"
+    puts $fd "    \"highFanout\": [implementation_json_string [file tail $high_fanout_path]]"
+    puts $fd "  }"
+    puts $fd "}"
+    close $fd
+}
+
 proc write_implementation_observations {phase report_dir report_suffix output_path drc_name} {
     file mkdir $report_dir
     file mkdir [file dirname $output_path]

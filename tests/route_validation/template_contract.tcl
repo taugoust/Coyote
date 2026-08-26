@@ -48,6 +48,12 @@ foreach required {
     {foreach delay_type {max min}}
     {proc report_and_validate_routed_design}
     {proc write_implementation_observations}
+    {proc write_placement_diagnosis_evidence}
+    {proc implementation_path_property}
+    {report_design_analysis -congestion}
+    {report_design_analysis -complexity}
+    {-logic_level_distribution}
+    {report_high_fanout_nets -max_nets 100}
     {proc implementation_timing_totals}
     {proc implementation_route_count}
     get_assessment_score
@@ -108,6 +114,7 @@ foreach required {
     {phys_opt_design}
     {route_design}
     {write_implementation_observations}
+    {write_placement_diagnosis_evidence}
     {report_bitstream_drc}
     {require_clean_bitstream_drc}
     {require_timing_closure}
@@ -198,6 +205,8 @@ foreach required {
     {${IMPLEMENTATION_TELEMETRY_PATH}}
     {${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_utilization${IMPLEMENTATION_REPORT_SUFFIX}.rpt}
     {${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_timing_summary${IMPLEMENTATION_REPORT_SUFFIX}.rpt}
+    {${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_congestion${IMPLEMENTATION_REPORT_SUFFIX}.rpt}
+    {${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_diagnosis${IMPLEMENTATION_REPORT_SUFFIX}.json}
     {DEPENDS
                 ${IMPLEMENTATION_INPUT_DCP}}
     {${CMAKE_BINARY_DIR}/flow_dyn_link.tcl}
