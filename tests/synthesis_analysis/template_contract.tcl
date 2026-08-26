@@ -70,4 +70,31 @@ if {$tns ne "-84.750"} {
     exit 1
 }
 
+set helpers_start [string first {proc json_escape} $script]
+set helpers_end [string first {set analysis_report_dir} $script $helpers_start]
+if {$helpers_start < 0 || $helpers_end < 0} {
+    puts stderr "synthesis-analysis summary procedures not found: $path"
+    exit 1
+}
+eval [string range $script $helpers_start [expr {$helpers_end - 1}]]
+proc version {args} {
+    return "test-vivado"
+}
+array set cfg {
+    fpga_arch versal
+    synthesis_analysis_max_paths 100
+    synthesis_analysis_max_fanout_nets 100
+}
+set part test-part
+set summary_path [file join [pwd] synthesis-analysis-summary-test.json]
+write_summary $summary_path true {test-reason} "" "" -1.25
+set summary_fd [open $summary_path r]
+set summary_json [read $summary_fd]
+close $summary_fd
+file delete -force $summary_path
+if {[string first {"valid": true} $summary_json] < 0} {
+    puts stderr "synthesis-analysis summary did not emit a JSON boolean: $summary_json"
+    exit 1
+}
+
 puts "SYNTHESIS_ANALYSIS_TEMPLATE_PASS path=$path"

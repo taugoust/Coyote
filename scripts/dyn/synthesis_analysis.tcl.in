@@ -153,7 +153,7 @@ proc write_summary {path valid reasons setup_path hold_path setup_tns} {
     puts $fd "      \"logicLevels\": [json_number_or_null $setup_levels]"
     puts $fd "    }"
     puts $fd "  },"
-    puts $fd "  \"valid\": [expr {$valid ? \"true\" : \"false\"}],"
+    puts $fd "  \"valid\": [expr {$valid ? "true" : "false"}],"
     puts $fd "  \"reasons\": \[[join $reason_json {, }]\]"
     puts $fd "}"
     close $fd
