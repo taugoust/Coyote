@@ -48,6 +48,12 @@ foreach required {
     {foreach delay_type {max min}}
     {proc report_and_validate_routed_design}
     {proc write_implementation_observations}
+    {proc write_placement_diagnosis_evidence}
+    {proc implementation_path_property}
+    {report_design_analysis -congestion}
+    {report_design_analysis -complexity}
+    {-logic_level_distribution}
+    {report_high_fanout_nets -max_nets 100}
     {proc implementation_timing_totals}
     {proc implementation_route_count}
     get_assessment_score
@@ -108,11 +114,16 @@ foreach required {
     {phys_opt_design}
     {route_design}
     {write_implementation_observations}
+    {write_placement_diagnosis_evidence}
     {report_bitstream_drc}
     {require_clean_bitstream_drc}
     {require_timing_closure}
     {set validation_summary "${IMPLEMENTATION_VALIDATION_SUMMARY}"}
     {set telemetry_path "${IMPLEMENTATION_TELEMETRY_PATH}"}
+    {set incremental_mode "${IMPLEMENTATION_INCREMENTAL_MODE}"}
+    {set incremental_reference_dcp "${IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP}"}
+    {read_checkpoint -incremental $incremental_reference_dcp}
+    {report_incremental_reuse}
     {set enforce_timing "${IMPLEMENTATION_ENFORCE_TIMING}"}
     {set outcome rejected}
     {write_checkpoint -force $output_dcp}
@@ -196,10 +207,16 @@ foreach required {
     {${CMAKE_BINARY_DIR}/physical_stage.tcl}
     {add_custom_target(physical_stage DEPENDS ${IMPLEMENTATION_COMPLETION_PATH})}
     {${IMPLEMENTATION_TELEMETRY_PATH}}
+    {set(IMPLEMENTATION_INCREMENTAL_MODE "none" CACHE STRING}
+    {set(IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP "" CACHE FILEPATH}
+    {${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_incremental_reuse${IMPLEMENTATION_REPORT_SUFFIX}.rpt}
     {${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_utilization${IMPLEMENTATION_REPORT_SUFFIX}.rpt}
     {${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_timing_summary${IMPLEMENTATION_REPORT_SUFFIX}.rpt}
+    {${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_congestion${IMPLEMENTATION_REPORT_SUFFIX}.rpt}
+    {${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_diagnosis${IMPLEMENTATION_REPORT_SUFFIX}.json}
     {DEPENDS
-                ${IMPLEMENTATION_INPUT_DCP}}
+                ${IMPLEMENTATION_INPUT_DCP}
+                ${IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP}}
     {${CMAKE_BINARY_DIR}/flow_dyn_link.tcl}
     {${CMAKE_BINARY_DIR}/flow_dyn_finalize.tcl}
     {add_custom_target(dynamic_link DEPENDS ${DEP_DCP_DYN_LINK_COMPLETION})}

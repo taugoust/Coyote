@@ -77,6 +77,18 @@ proc worst_path {delay_type} {
     return [lindex $paths 0]
 }
 
+proc shell_synthesis_constraint_files {hw_dir build_dir project fdev} {
+    set constraint_files {}
+    foreach constraint_dir [list \
+            "$hw_dir/constraints/$fdev/shell/synth" \
+            "$build_dir/$project\_shell/xdc"] {
+        foreach path [lsort [glob -nocomplain -directory $constraint_dir *.xdc]] {
+            lappend constraint_files $path
+        }
+    }
+    return $constraint_files
+}
+
 proc setup_tns_from_timing_summary {summary} {
     set found_header false
     set found_separator false
@@ -198,16 +210,21 @@ if {![file exists $shell_checkpoint]} {
 
 open_checkpoint $shell_checkpoint
 
-# The shell checkpoint is produced by an out-of-context run. Reapply its
-# top-level clock constraints after reopening it; otherwise Vivado can retain
-# xclk as a constant boundary input and report only unconstrained default paths.
-set shell_clock_constraints "$build_dir/$project\_shell/xdc/shell_clk.xdc"
-if {![file exists $shell_clock_constraints]} {
-    error "Shell synthesis clock constraints do not exist: $shell_clock_constraints"
+# The shell checkpoint is produced by an out-of-context run. Reapply the same
+# top-level synthesis constraints after reopening it; otherwise boundary clocks
+# may be absent and Vivado can report only unconstrained default paths. Versal
+# generates its shell clock XDC in the project directory, while UltraScale+
+# boards keep their shell clocks in the board synthesis constraints.
+set shell_constraint_files \
+    [shell_synthesis_constraint_files $hw_dir $build_dir $project $cfg(fdev)]
+if {[llength $shell_constraint_files] == 0} {
+    error "Shell synthesis constraints do not exist for $cfg(fdev)"
 }
-read_xdc $shell_clock_constraints
+foreach shell_constraint $shell_constraint_files {
+    read_xdc $shell_constraint
+}
 if {[llength [get_clocks -quiet]] == 0} {
-    error "Resident-shell synthesis analysis has no clocks after loading $shell_clock_constraints"
+    error "Resident-shell synthesis analysis has no clocks after loading: $shell_constraint_files"
 }
 
 set check_timing_path "$analysis_report_dir/check_timing.rpt"

@@ -15,7 +15,8 @@ if {![info complete $script]} {
 
 foreach required {
     open_checkpoint
-    {read_xdc $shell_clock_constraints}
+    {shell_synthesis_constraint_files $hw_dir $build_dir $project $cfg(fdev)}
+    {read_xdc $shell_constraint}
     {[llength [get_clocks -quiet]] == 0}
     check_timing
     report_timing_summary
@@ -91,6 +92,30 @@ if {$helpers_start < 0 || $helpers_end < 0} {
     exit 1
 }
 eval [string range $script $helpers_start [expr {$helpers_end - 1}]]
+
+set constraint_test_root [file join [pwd] synthesis-analysis-constraints-test]
+file delete -force $constraint_test_root
+set constraint_hw [file join $constraint_test_root hw]
+set constraint_build [file join $constraint_test_root build]
+file mkdir [file join $constraint_hw constraints u280 shell synth]
+file mkdir [file join $constraint_build test-project_shell xdc]
+foreach path [list \
+        [file join $constraint_hw constraints u280 shell synth u280_shell_base.xdc] \
+        [file join $constraint_build test-project_shell xdc generated_clock.xdc]] {
+    set constraint_fd [open $path w]
+    puts $constraint_fd {create_clock -period 4.000 test_clock}
+    close $constraint_fd
+}
+set constraint_files \
+    [shell_synthesis_constraint_files $constraint_hw $constraint_build test-project u280]
+if {[llength $constraint_files] != 2 ||
+    [file tail [lindex $constraint_files 0]] ne "u280_shell_base.xdc" ||
+    [file tail [lindex $constraint_files 1]] ne "generated_clock.xdc"} {
+    puts stderr "shell synthesis constraint discovery returned '$constraint_files'"
+    exit 1
+}
+file delete -force $constraint_test_root
+
 proc version {args} {
     return "test-vivado"
 }
