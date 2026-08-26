@@ -52,6 +52,7 @@ module peer_backend_aurora_qsfp1 (
     logic aurora_soft_err;
     logic aurora_mmcm_not_locked;
     logic aurora_gt_pll_lock;
+    logic aurora_rx_overflow;
 
     aurora_module inst_aurora_module (
         .init_clk        (init_clk),
@@ -71,10 +72,14 @@ module peer_backend_aurora_qsfp1 (
         .hard_err        (aurora_hard_err),
         .soft_err        (aurora_soft_err),
         .mmcm_not_locked (aurora_mmcm_not_locked),
-        .gt_pll_lock     (aurora_gt_pll_lock)
+        .gt_pll_lock     (aurora_gt_pll_lock),
+        .rx_overflow     (aurora_rx_overflow)
     );
 
-    assign peer_link_up = aurora_channel_up;
+    // Overflow is a transport-integrity fault, not a performance counter.
+    // Withdraw the generic endpoint until the Aurora link is reset so a
+    // consumer can never accept a stream with a silently missing beat.
+    assign peer_link_up = aurora_channel_up && !aurora_rx_overflow;
     assign peer_lane_up = aurora_lane_up;
 
     // ------------------------------------------------------------------
@@ -93,7 +98,7 @@ module peer_backend_aurora_qsfp1 (
     assign aurora_tx.tlast  = tx_hi_valid ? tx_hi_last : 1'b0;
 
     always_ff @(posedge aclk) begin
-        if (!aresetn) begin
+        if (!aresetn || !peer_link_up) begin
             tx_hi_valid <= 1'b0;
             tx_hi_data  <= '0;
             tx_hi_keep  <= '0;
@@ -133,7 +138,7 @@ module peer_backend_aurora_qsfp1 (
     assign axis_peer_recv.tid    = '0;
 
     always_ff @(posedge aclk) begin
-        if (!aresetn) begin
+        if (!aresetn || !peer_link_up) begin
             rx_have_low  <= 1'b0;
             rx_low_data  <= '0;
             rx_low_keep  <= '0;

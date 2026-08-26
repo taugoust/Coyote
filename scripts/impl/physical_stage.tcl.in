@@ -47,6 +47,27 @@ if {[catch {
 
     set_param general.maxThreads $cfg(cores)
     open_checkpoint $input_dcp
+
+    # The U280 QSFP1 GT quad is in SLR2. Aurora's generic OOC constraints do
+    # not keep the associated 402 MHz fabric with the board-selected quad,
+    # which lets lane logic spill into SLR1 and creates multi-nanosecond routed
+    # paths. Keep the complete backend in the adjacent SLR while leaving the
+    # placer free to choose sites inside that region.
+    if {$cfg(fdev) eq "u280" && $cfg(peer_backend) eq "aurora_qsfp1"} {
+        set aurora_backend [get_cells -quiet \
+            inst_shell/inst_peer_backend_aurora_qsfp1]
+        if {[llength $aurora_backend] != 1} {
+            error "Expected exactly one U280 Aurora peer backend, found [llength $aurora_backend]: $aurora_backend"
+        }
+        if {[llength [get_pblocks -quiet pblock_aurora_qsfp1]] == 0} {
+            create_pblock pblock_aurora_qsfp1
+            resize_pblock [get_pblocks pblock_aurora_qsfp1] -add \
+                {CLOCKREGION_X0Y8:CLOCKREGION_X7Y11}
+            set_property IS_SOFT TRUE [get_pblocks pblock_aurora_qsfp1]
+        }
+        add_cells_to_pblock [get_pblocks pblock_aurora_qsfp1] \
+            $aurora_backend
+    }
     if {$incremental_reference_dcp ne ""} {
         read_checkpoint -incremental $incremental_reference_dcp
     }
