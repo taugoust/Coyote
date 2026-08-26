@@ -102,6 +102,19 @@ proc setup_tns_from_timing_summary {summary} {
     return ""
 }
 
+proc check_timing_issue_count {path check_name} {
+    set fd [open $path r]
+    set count ""
+    set pattern [format {^[0-9]+\. checking %s \(([0-9]+)\)$} $check_name]
+    while {[gets $fd line] >= 0} {
+        if {[regexp $pattern [string trim $line] match count]} {
+            break
+        }
+    }
+    close $fd
+    return $count
+}
+
 proc write_text_file {path contents} {
     set fd [open $path w]
     puts -nonewline $fd $contents
@@ -197,7 +210,11 @@ if {[llength [get_clocks -quiet]] == 0} {
     error "Resident-shell synthesis analysis has no clocks after loading $shell_clock_constraints"
 }
 
-check_timing -verbose -file "$analysis_report_dir/check_timing.rpt"
+set check_timing_path "$analysis_report_dir/check_timing.rpt"
+check_timing -verbose -file $check_timing_path
+set no_clock_count [check_timing_issue_count $check_timing_path no_clock]
+set unconstrained_endpoint_count \
+    [check_timing_issue_count $check_timing_path unconstrained_internal_endpoints]
 report_utilization -file "$analysis_report_dir/utilization.rpt"
 report_high_fanout_nets \
     -max_nets $cfg(synthesis_analysis_max_fanout_nets) \
@@ -236,6 +253,14 @@ if {$setup_tns eq ""} {
 if {$setup_group eq "" || $hold_group eq ""} {
     set valid false
     lappend reasons "synthesized timing paths are not associated with clock path groups"
+}
+if {$no_clock_count eq "" || $no_clock_count != 0} {
+    set valid false
+    lappend reasons "check_timing reports $no_clock_count register/latch pins without a clock"
+}
+if {$unconstrained_endpoint_count eq "" || $unconstrained_endpoint_count != 0} {
+    set valid false
+    lappend reasons "check_timing reports $unconstrained_endpoint_count unconstrained internal endpoints"
 }
 if {$valid} {
     lappend reasons "synthesized timing evidence collected; placement, congestion, and routing are not assessed"
