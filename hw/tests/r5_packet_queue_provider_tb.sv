@@ -374,6 +374,50 @@ module r5_packet_queue_provider_tb;
         end
     endtask
 
+    task automatic expect_last_command(
+        input logic [7:0] opcode,
+        input logic [7:0] result
+    );
+        logic [31:0] command;
+        begin
+            axil_read(16'h0020, command, 2'b00);
+            assert(command[15:8] == opcode && command[7:0] == result)
+                else $fatal(1, "command result mismatch: opcode=%0d result=%0d", command[15:8], command[7:0]);
+        end
+    endtask
+
+    task automatic stage_response_data(
+        input integer beat,
+        input logic [511:0] data
+    );
+        integer lane;
+        begin
+            for (lane = 0; lane < 16; lane = lane + 1) begin
+                axil_write(16'h3000 + beat * 64 + lane * 4, data[lane*32 +: 32], lane % 3, 2'b00);
+            end
+        end
+    endtask
+
+    task automatic stage_response_keep(
+        input integer beat,
+        input logic [63:0] keep
+    );
+        begin
+            axil_write(16'h4000 + beat * 8, keep[31:0], 0, 2'b00);
+            axil_write(16'h4004 + beat * 8, keep[63:32], 1, 2'b00);
+        end
+    endtask
+
+    task automatic stage_response_attr(
+        input integer beat,
+        input logic [5:0] id,
+        input logic last
+    );
+        begin
+            axil_write(16'h4200 + beat * 4, {25'd0, last, id}, 2, 2'b00);
+        end
+    endtask
+
     task automatic stage_response_beat(
         input integer beat,
         input logic [511:0] data,
@@ -381,14 +425,33 @@ module r5_packet_queue_provider_tb;
         input logic [5:0] id,
         input logic last
     );
-        integer lane;
         begin
-            for (lane = 0; lane < 16; lane = lane + 1) begin
-                axil_write(16'h3000 + beat * 64 + lane * 4, data[lane*32 +: 32], lane % 3, 2'b00);
+            stage_response_data(beat, data);
+            stage_response_keep(beat, keep);
+            stage_response_attr(beat, id, last);
+        end
+    endtask
+
+    task automatic drain_response(input integer beats);
+        integer received;
+        integer timeout;
+        begin
+            received = 0;
+            timeout = 0;
+            @(negedge clk);
+            response_tready = 1'b1;
+            while (received < beats && timeout < 1000) begin
+                @(posedge clk);
+                if (response_tvalid && response_tready) begin
+                    assert(response_tlast == (received == beats - 1))
+                        else $fatal(1, "response last mismatch at beat %0d", received);
+                    received = received + 1;
+                end
+                timeout = timeout + 1;
             end
-            axil_write(16'h4000 + beat * 8, keep[31:0], 0, 2'b00);
-            axil_write(16'h4004 + beat * 8, keep[63:32], 1, 2'b00);
-            axil_write(16'h4200 + beat * 4, {25'd0, last, id}, 2, 2'b00);
+            assert(received == beats) else $fatal(1, "response drain timeout");
+            @(negedge clk);
+            response_tready = 1'b0;
         end
     endtask
 
@@ -464,6 +527,64 @@ module r5_packet_queue_provider_tb;
         assert(value[7:0] == 8'd4) else $fatal(1, "stale generation was accepted");
         axil_write(16'h001c, 32'd7, 1, 2'b00);
         request_generation = 32'd7;
+
+        // Missing data, keep, or attributes must reject without consuming the stage token.
+        axil_read(16'h0144, token, 2'b00);
+        axil_write(16'h0148, 32'd1, 0, 2'b00);
+        stage_response_keep(0, 64'h1f);
+        stage_response_attr(0, 6'd1, 1'b1);
+        axil_write(16'h014c, token, 1, 2'b00);
+        expect_last_command(8'd4, 8'd8);
+        axil_read(16'h0144, value, 2'b00);
+        assert(value == token) else $fatal(1, "incomplete commit consumed stage token");
+        axil_write(16'h0150, token, 2, 2'b00);
+        expect_last_command(8'd5, 8'd0);
+
+        axil_read(16'h0144, token, 2'b00);
+        axil_write(16'h0148, 32'd1, 1, 2'b00);
+        stage_response_data(0, packet0);
+        stage_response_attr(0, 6'd2, 1'b1);
+        axil_write(16'h014c, token, 2, 2'b00);
+        expect_last_command(8'd4, 8'd8);
+        axil_write(16'h0150, token, 0, 2'b00);
+
+        axil_read(16'h0144, token, 2'b00);
+        axil_write(16'h0148, 32'd1, 2, 2'b00);
+        stage_response_data(0, packet0);
+        stage_response_keep(0, 64'h1f);
+        axil_write(16'h014c, token, 0, 2'b00);
+        expect_last_command(8'd4, 8'd8);
+        axil_write(16'h0150, token, 1, 2'b00);
+
+        // Rewrites must be reflected by commit-time keep and last validation.
+        axil_read(16'h0144, token, 2'b00);
+        axil_write(16'h0148, 32'd1, 0, 2'b00);
+        stage_response_beat(0, packet0, 64'd0, 6'd3, 1'b1);
+        axil_write(16'h014c, token, 1, 2'b00);
+        expect_last_command(8'd4, 8'd8);
+        stage_response_keep(0, 64'h5);
+        axil_write(16'h014c, token, 2, 2'b00);
+        expect_last_command(8'd4, 8'd8);
+        stage_response_keep(0, 64'h1f);
+        axil_write(16'h014c, token, 0, 2'b00);
+        expect_last_command(8'd4, 8'd0);
+        drain_response(1);
+
+        // Every non-final beat requires full keep and last deasserted.
+        axil_read(16'h0144, token, 2'b00);
+        axil_write(16'h0148, 32'd2, 1, 2'b00);
+        stage_response_beat(0, packet0, 64'hffff, 6'd4, 1'b0);
+        stage_response_beat(1, packet1, 64'h1f, 6'd5, 1'b1);
+        axil_write(16'h014c, token, 2, 2'b00);
+        expect_last_command(8'd4, 8'd8);
+        stage_response_keep(0, ~64'd0);
+        stage_response_attr(0, 6'd4, 1'b1);
+        axil_write(16'h014c, token, 0, 2'b00);
+        expect_last_command(8'd4, 8'd8);
+        stage_response_attr(0, 6'd4, 1'b0);
+        axil_write(16'h014c, token, 1, 2'b00);
+        expect_last_command(8'd4, 8'd0);
+        drain_response(2);
 
         send_request_beat(packet0, 64'hffff_ffff_ffff_ffff, 6'd9, 1'b0);
         send_request_beat(packet1, 64'h0000_0000_0001_ffff, 6'd10, 1'b1);

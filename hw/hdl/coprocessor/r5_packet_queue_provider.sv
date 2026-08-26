@@ -338,24 +338,29 @@ module r5_packet_queue_provider #(
     endfunction
 
     function automatic logic tx_stage_packet_valid;
+        logic [MAX_PACKET_BEATS-1:0] beat_valid;
         integer beat_index;
         begin
-            tx_stage_packet_valid = tx_stage_beats > 0 && tx_stage_beats <= MAX_PACKET_BEATS;
+            beat_valid = '1;
             for (beat_index = 0; beat_index < MAX_PACKET_BEATS; beat_index = beat_index + 1) begin
                 if (beat_index < tx_stage_beats) begin
-                    tx_stage_packet_valid = tx_stage_packet_valid && (&tx_data_written[beat_index]) &&
-                                            (&tx_keep_written[beat_index]) && tx_attr_written[beat_index];
+                    beat_valid[beat_index] = (&tx_data_written[beat_index]) &&
+                                             (&tx_keep_written[beat_index]) &&
+                                             tx_attr_written[beat_index];
                     if (beat_index + 1 < tx_stage_beats) begin
-                        tx_stage_packet_valid = tx_stage_packet_valid &&
-                                                (tx_keep[tx_tail][beat_index] == {KEEP_BITS{1'b1}}) &&
-                                                !tx_last[tx_tail][beat_index];
+                        beat_valid[beat_index] = beat_valid[beat_index] &&
+                                                 (tx_keep[tx_tail][beat_index] == {KEEP_BITS{1'b1}}) &&
+                                                 !tx_last[tx_tail][beat_index];
                     end else begin
-                        tx_stage_packet_valid = tx_stage_packet_valid &&
-                                                final_keep_valid(tx_keep[tx_tail][beat_index]) &&
-                                                tx_last[tx_tail][beat_index];
+                        beat_valid[beat_index] = beat_valid[beat_index] &&
+                                                 final_keep_valid(tx_keep[tx_tail][beat_index]) &&
+                                                 tx_last[tx_tail][beat_index];
                     end
                 end
             end
+            tx_stage_packet_valid = tx_stage_beats > 0 &&
+                                    tx_stage_beats <= MAX_PACKET_BEATS &&
+                                    (&beat_valid);
         end
     endfunction
 
