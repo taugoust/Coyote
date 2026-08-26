@@ -15,6 +15,8 @@ if {[catch {
     set drc_name "${IMPLEMENTATION_DRC_NAME}"
     set validation_summary "${IMPLEMENTATION_VALIDATION_SUMMARY}"
     set telemetry_path "${IMPLEMENTATION_TELEMETRY_PATH}"
+    set incremental_mode "${IMPLEMENTATION_INCREMENTAL_MODE}"
+    set incremental_reference_dcp "${IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP}"
 
     if {$phase ni {opt place route validate}} {
         error "Unsupported immutable implementation phase: $phase"
@@ -28,8 +30,26 @@ if {[catch {
     file mkdir [file dirname $output_dcp]
     file mkdir [file dirname $completion_path]
     file mkdir $report_dir
+    if {$incremental_mode ni {none reference}} {
+        error "Unsupported immutable implementation mode: $incremental_mode"
+    }
+    if {$incremental_mode eq "reference" && $cfg(fpga_arch) ne "ultrascale_plus"} {
+        error "Incremental implementation references are supported only for UltraScale+ targets"
+    }
+    if {$incremental_reference_dcp ne "" &&
+        ($incremental_mode ne "reference" || $phase ne "opt")} {
+        error "An incremental reference DCP may be loaded only by the opt phase"
+    }
+    if {$incremental_mode eq "reference" && $phase eq "opt" &&
+        $incremental_reference_dcp eq ""} {
+        error "Incremental opt requires an explicit reference DCP"
+    }
+
     set_param general.maxThreads $cfg(cores)
     open_checkpoint $input_dcp
+    if {$incremental_reference_dcp ne ""} {
+        read_checkpoint -incremental $incremental_reference_dcp
+    }
 
     switch -- $phase {
         opt {
@@ -115,6 +135,10 @@ if {[catch {
         }
     }
 
+    if {$incremental_mode eq "reference" && $phase in {place route}} {
+        report_incremental_reuse \
+            -file "$report_dir/shell_${phase}_incremental_reuse${report_suffix}.rpt"
+    }
     if {$phase ne "validate"} {
         write_implementation_observations \
             $phase $report_dir $report_suffix $telemetry_path ""

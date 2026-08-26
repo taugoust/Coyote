@@ -252,6 +252,8 @@ set(IMPLEMENTATION_DRC_NAME "implementation_bitstream_gate" CACHE STRING "Immuta
 set(IMPLEMENTATION_VALIDATION_SUMMARY "" CACHE FILEPATH "Immutable validation machine-readable result")
 set(IMPLEMENTATION_TELEMETRY_PATH "" CACHE FILEPATH "Immutable phase machine-readable physical observations")
 set(IMPLEMENTATION_ENFORCE_TIMING "project" CACHE STRING "Immutable validation timing policy: project, 0, or 1")
+set(IMPLEMENTATION_INCREMENTAL_MODE "none" CACHE STRING "Immutable implementation mode: none or reference")
+set(IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP "" CACHE FILEPATH "Explicit U280 incremental reference DCP")
 set(IMPLEMENTATION_OPT_DIRECTIVE "project" CACHE STRING "opt_design directive or project policy")
 set(IMPLEMENTATION_PLACE_DIRECTIVE "project" CACHE STRING "place_design directive or project policy")
 set(IMPLEMENTATION_PHYS_OPT_DIRECTIVE "project" CACHE STRING "pre-route phys_opt_design directive or project policy")
@@ -278,7 +280,7 @@ endif()
 if(IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$")
     foreach(_implementation_token IN ITEMS
         IMPLEMENTATION_PHASE IMPLEMENTATION_LABEL IMPLEMENTATION_DRC_NAME
-        IMPLEMENTATION_ENFORCE_TIMING
+        IMPLEMENTATION_ENFORCE_TIMING IMPLEMENTATION_INCREMENTAL_MODE
         IMPLEMENTATION_REPORT_SUFFIX IMPLEMENTATION_OPT_DIRECTIVE
         IMPLEMENTATION_PLACE_DIRECTIVE IMPLEMENTATION_PHYS_OPT_DIRECTIVE
         IMPLEMENTATION_ROUTE_DIRECTIVE IMPLEMENTATION_POST_ROUTE_PHYS_OPT_DIRECTIVE
@@ -290,10 +292,27 @@ if(IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$")
     if(NOT IMPLEMENTATION_ENFORCE_TIMING MATCHES "^(project|0|1)$")
         message(FATAL_ERROR "IMPLEMENTATION_ENFORCE_TIMING must be project, 0, or 1")
     endif()
+    if(NOT IMPLEMENTATION_INCREMENTAL_MODE MATCHES "^(none|reference)$")
+        message(FATAL_ERROR "IMPLEMENTATION_INCREMENTAL_MODE must be none or reference")
+    endif()
+    if(IMPLEMENTATION_INCREMENTAL_MODE STREQUAL "reference" AND NOT FPGA_ARCH STREQUAL "ultrascale_plus")
+        message(FATAL_ERROR "Incremental implementation references are supported only for UltraScale+ targets")
+    endif()
+    if(IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP STREQUAL "" AND
+       IMPLEMENTATION_INCREMENTAL_MODE STREQUAL "reference" AND
+       IMPLEMENTATION_PHASE STREQUAL "opt")
+        message(FATAL_ERROR "Incremental opt requires IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP")
+    endif()
+    if(NOT IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP STREQUAL "" AND
+       (NOT IMPLEMENTATION_INCREMENTAL_MODE STREQUAL "reference" OR
+        NOT IMPLEMENTATION_PHASE STREQUAL "opt"))
+        message(FATAL_ERROR "IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP is valid only for incremental opt")
+    endif()
     foreach(_implementation_path IN ITEMS
         IMPLEMENTATION_INPUT_DCP IMPLEMENTATION_OUTPUT_DCP
         IMPLEMENTATION_COMPLETION_PATH IMPLEMENTATION_REPORT_DIR
-        IMPLEMENTATION_VALIDATION_SUMMARY IMPLEMENTATION_TELEMETRY_PATH)
+        IMPLEMENTATION_VALIDATION_SUMMARY IMPLEMENTATION_TELEMETRY_PATH
+        IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP)
         if(NOT "${${_implementation_path}}" MATCHES "^[A-Za-z0-9_./:+-]*$")
             message(FATAL_ERROR "${_implementation_path} contains unsupported characters")
         endif()
@@ -303,6 +322,9 @@ if(IMPLEMENTATION_PHASE MATCHES "^(opt|place|route|validate)$")
         "${IMPLEMENTATION_OUTPUT_DCP}"
         "${IMPLEMENTATION_COMPLETION_PATH}"
         "${IMPLEMENTATION_TELEMETRY_PATH}")
+    if(NOT IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP STREQUAL "")
+        list(APPEND _implementation_paths "${IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP}")
+    endif()
     if(IMPLEMENTATION_PHASE STREQUAL "validate")
         list(APPEND _implementation_paths "${IMPLEMENTATION_VALIDATION_SUMMARY}")
     endif()
@@ -1346,6 +1368,7 @@ macro(gen_dep_lists)
         ${CYT_DIR}/hw/constraints/${FDEV_NAME}/dynamic/impl
         ${CYT_DIR}/hw/constraints/${FDEV_NAME}/fplan
         ${FPLAN_PATH}
+        ${IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP}
     )
     set(DEP_STATIC_CHECKPOINT_INPUTS "")
     if(NOT BUILD_STATIC AND NOT BUILD_APP AND IMPLEMENTATION_PHASE STREQUAL "")
@@ -1845,6 +1868,11 @@ macro(gen_targets)
             list(APPEND PHYSICAL_STAGE_BYPRODUCTS
                 ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_route_status${IMPLEMENTATION_REPORT_SUFFIX}.rpt)
         endif()
+        if(IMPLEMENTATION_INCREMENTAL_MODE STREQUAL "reference" AND
+           IMPLEMENTATION_PHASE MATCHES "^(place|route)$")
+            list(APPEND PHYSICAL_STAGE_BYPRODUCTS
+                ${IMPLEMENTATION_REPORT_DIR}/${_physical_report_prefix}_incremental_reuse${IMPLEMENTATION_REPORT_SUFFIX}.rpt)
+        endif()
         if(IMPLEMENTATION_PHASE STREQUAL "validate")
             list(APPEND PHYSICAL_STAGE_BYPRODUCTS
                 ${IMPLEMENTATION_VALIDATION_SUMMARY}
@@ -1856,6 +1884,7 @@ macro(gen_targets)
             ${PHYSICAL_STAGE_CMD}
             DEPENDS
                 ${IMPLEMENTATION_INPUT_DCP}
+                ${IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP}
                 ${CMAKE_BINARY_DIR}/base.tcl
                 ${CMAKE_BINARY_DIR}/physical_stage.tcl
         )
