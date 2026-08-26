@@ -94,6 +94,11 @@ module r5_packet_queue_provider #(
     localparam integer BEAT_BITS = MAX_PACKET_BEATS <= 1 ? 1 : $clog2(MAX_PACKET_BEATS);
     localparam integer COUNT_BITS = $clog2(QUEUE_DEPTH + 1);
     localparam integer PACKET_BEAT_COUNT_BITS = $clog2(MAX_PACKET_BEATS + 1);
+    localparam integer TX_ENTRY_KEEP_LSB = STREAM_DATA_BITS;
+    localparam integer TX_ENTRY_ID_LSB = TX_ENTRY_KEEP_LSB + KEEP_BITS;
+    localparam integer TX_ENTRY_LAST_BIT = TX_ENTRY_ID_LSB + STREAM_ID_BITS;
+    localparam integer TX_ENTRY_BITS = TX_ENTRY_LAST_BIT + 1;
+    localparam integer TX_MEMORY_DEPTH = QUEUE_DEPTH * MAX_PACKET_BEATS;
     localparam integer MMIO_TIMEOUT_BITS = MMIO_TIMEOUT_CYCLES <= 1 ? 1 : $clog2(MMIO_TIMEOUT_CYCLES + 1);
 
     localparam logic [31:0] PROTOCOL_MAGIC = 32'h31514c50;
@@ -202,10 +207,12 @@ module r5_packet_queue_provider #(
     logic [PACKET_BEAT_COUNT_BITS-1:0] rx_beats [0:QUEUE_DEPTH-1];
     logic [12:0] rx_bytes [0:QUEUE_DEPTH-1];
 
-    logic [STREAM_DATA_BITS-1:0] tx_data [0:QUEUE_DEPTH-1][0:MAX_PACKET_BEATS-1];
-    logic [KEEP_BITS-1:0] tx_keep [0:QUEUE_DEPTH-1][0:MAX_PACKET_BEATS-1];
-    logic [STREAM_ID_BITS-1:0] tx_id [0:QUEUE_DEPTH-1][0:MAX_PACKET_BEATS-1];
-    logic tx_last [0:QUEUE_DEPTH-1][0:MAX_PACKET_BEATS-1];
+    // Firmware performs narrow, independently ordered writes while the stream
+    // reads one complete beat per cycle. Flattening slot/beat addressing and
+    // packing all stream fields gives Vivado one simple dual-port memory with
+    // write enables instead of hundreds of thousands of packet registers.
+    (* ram_style = "block" *) logic [TX_ENTRY_BITS-1:0]
+        tx_packet_memory [0:TX_MEMORY_DEPTH-1];
     logic [GENERATION_BITS-1:0] tx_generation [0:QUEUE_DEPTH-1];
 
     logic [DATA_WORDS-1:0] tx_data_written [0:MAX_PACKET_BEATS-1];
@@ -224,10 +231,7 @@ module r5_packet_queue_provider #(
     logic [COUNT_BITS-1:0] tx_count;
     logic [BEAT_BITS-1:0] tx_output_beat;
     logic tx_output_valid;
-    logic [STREAM_DATA_BITS-1:0] tx_output_data;
-    logic [KEEP_BITS-1:0] tx_output_keep;
-    logic [STREAM_ID_BITS-1:0] tx_output_id;
-    logic tx_output_last;
+    logic [TX_ENTRY_BITS-1:0] tx_output_entry;
     logic [GENERATION_BITS-1:0] tx_output_generation;
     logic [PACKET_BEAT_COUNT_BITS-1:0] tx_stage_beats;
     logic tx_stage_dirty;
@@ -339,6 +343,13 @@ module r5_packet_queue_provider #(
                 next_slot = slot + 1'b1;
             end
         end
+    endfunction
+
+    function automatic integer tx_memory_index(
+        input logic [SLOT_BITS-1:0] slot,
+        input integer beat
+    );
+        tx_memory_index = slot * MAX_PACKET_BEATS + beat;
     endfunction
 
     function automatic logic staged_intermediate_valid(
@@ -597,10 +608,12 @@ module r5_packet_queue_provider #(
 
         m_axis_response_tvalid = tx_output_valid && provider_selected && identity_valid &&
                                  fault_code == 0 && !provider_abort;
-        m_axis_response_tdata = tx_output_data;
-        m_axis_response_tkeep = tx_output_keep;
-        m_axis_response_tid = tx_output_id;
-        m_axis_response_tlast = tx_output_last;
+        m_axis_response_tdata = tx_output_entry[STREAM_DATA_BITS-1:0];
+        m_axis_response_tkeep =
+            tx_output_entry[TX_ENTRY_KEEP_LSB +: KEEP_BITS];
+        m_axis_response_tid =
+            tx_output_entry[TX_ENTRY_ID_LSB +: STREAM_ID_BITS];
+        m_axis_response_tlast = tx_output_entry[TX_ENTRY_LAST_BIT];
         m_axis_response_generation = tx_output_generation;
 
         provider_mmio_generation = active_generation;
@@ -786,10 +799,7 @@ module r5_packet_queue_provider #(
             tx_count <= '0;
             tx_output_beat <= '0;
             tx_output_valid <= 1'b0;
-            tx_output_data <= '0;
-            tx_output_keep <= '0;
-            tx_output_id <= '0;
-            tx_output_last <= 1'b0;
+            tx_output_entry <= '0;
             tx_output_generation <= '0;
             tx_stage_beats <= '0;
             tx_stage_dirty <= 1'b0;
@@ -888,7 +898,8 @@ module r5_packet_queue_provider #(
                         write_word_index = (write_address - TX_DATA_BASE) >> 2;
                         write_beat_index = write_word_index / DATA_WORDS;
                         write_lane_index = write_word_index % DATA_WORDS;
-                        tx_data[tx_tail][write_beat_index][write_lane_index*32 +: 32] <= held_wdata;
+                        tx_packet_memory[tx_memory_index(tx_tail, write_beat_index)]
+                            [write_lane_index*32 +: 32] <= held_wdata;
                         tx_data_written[write_beat_index][write_lane_index] <= 1'b1;
                         tx_intermediate_valid[write_beat_index] <=
                             staged_intermediate_valid(
@@ -911,7 +922,8 @@ module r5_packet_queue_provider #(
                         write_word_index = (write_address - TX_KEEP_BASE) >> 2;
                         write_beat_index = write_word_index / KEEP_WORDS;
                         write_lane_index = write_word_index % KEEP_WORDS;
-                        tx_keep[tx_tail][write_beat_index][write_lane_index*32 +: 32] <= held_wdata;
+                        tx_packet_memory[tx_memory_index(tx_tail, write_beat_index)]
+                            [TX_ENTRY_KEEP_LSB + write_lane_index*32 +: 32] <= held_wdata;
                         tx_stage_keep[write_beat_index][write_lane_index*32 +: 32] <= held_wdata;
                         tx_keep_written[write_beat_index][write_lane_index] <= 1'b1;
                         tx_intermediate_valid[write_beat_index] <=
@@ -935,8 +947,9 @@ module r5_packet_queue_provider #(
                         tx_stage_dirty <= 1'b1;
                     end else if (write_address >= TX_ATTR_BASE && write_address < TX_ATTR_BASE + 16'h0100) begin
                         write_beat_index = (write_address - TX_ATTR_BASE) >> 2;
-                        tx_id[tx_tail][write_beat_index] <= held_wdata[STREAM_ID_BITS-1:0];
-                        tx_last[tx_tail][write_beat_index] <= held_wdata[6];
+                        tx_packet_memory[tx_memory_index(tx_tail, write_beat_index)]
+                            [TX_ENTRY_ID_LSB +: STREAM_ID_BITS+1] <=
+                                held_wdata[STREAM_ID_BITS:0];
                         tx_stage_last[write_beat_index] <= held_wdata[6];
                         tx_attr_written[write_beat_index] <= 1'b1;
                         tx_intermediate_valid[write_beat_index] <=
@@ -1064,10 +1077,8 @@ module r5_packet_queue_provider #(
 
             if (!tx_output_valid && tx_count != 0 && !provider_abort) begin
                 tx_output_valid <= 1'b1;
-                tx_output_data <= tx_data[tx_head][tx_output_beat];
-                tx_output_keep <= tx_keep[tx_head][tx_output_beat];
-                tx_output_id <= tx_id[tx_head][tx_output_beat];
-                tx_output_last <= tx_last[tx_head][tx_output_beat];
+                tx_output_entry <=
+                    tx_packet_memory[tx_memory_index(tx_head, tx_output_beat)];
                 tx_output_generation <= tx_generation[tx_head];
             end
             if (m_axis_response_tvalid && m_axis_response_tready) begin
@@ -1077,10 +1088,8 @@ module r5_packet_queue_provider #(
                     tx_output_beat <= '0;
                 end else begin
                     tx_output_beat <= tx_output_beat + 1'b1;
-                    tx_output_data <= tx_data[tx_head][tx_output_beat + 1'b1];
-                    tx_output_keep <= tx_keep[tx_head][tx_output_beat + 1'b1];
-                    tx_output_id <= tx_id[tx_head][tx_output_beat + 1'b1];
-                    tx_output_last <= tx_last[tx_head][tx_output_beat + 1'b1];
+                    tx_output_entry <= tx_packet_memory[
+                        tx_memory_index(tx_head, tx_output_beat + 1'b1)];
                     tx_output_generation <= tx_generation[tx_head];
                 end
             end

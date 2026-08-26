@@ -17,6 +17,18 @@ if match is None:
     sys.exit("tx_stage_packet_valid function is missing")
 
 body = match.group("body")
+source_required = {
+    "packed block packet memory": r'\(\*\s*ram_style\s*=\s*"block"\s*\*\).*tx_packet_memory',
+    "synchronous packet prefetch": r"tx_output_entry\s*<=\s*\n?\s*tx_packet_memory",
+    "staging-local keep metadata": r"tx_stage_keep",
+}
+for description, pattern in source_required.items():
+    if re.search(pattern, source, flags=re.DOTALL) is None:
+        sys.exit(f"R5 transmit staging lacks {description}")
+
+if re.search(r"logic\s*\[STREAM_DATA_BITS-1:0\]\s+tx_data\s*\[", source):
+    sys.exit("R5 transmit packet data regressed to an unpacked register array")
+
 required = {
     "intermediate validity metadata": r"tx_intermediate_valid",
     "final validity metadata": r"tx_final_valid\s*\[\s*tx_stage_beats\s*-\s*1'b1\s*\]",
