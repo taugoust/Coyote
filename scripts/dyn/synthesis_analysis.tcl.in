@@ -185,6 +185,18 @@ if {![file exists $shell_checkpoint]} {
 
 open_checkpoint $shell_checkpoint
 
+# The shell checkpoint is produced by an out-of-context run. Reapply its
+# top-level clock constraints after reopening it; otherwise Vivado can retain
+# xclk as a constant boundary input and report only unconstrained default paths.
+set shell_clock_constraints "$build_dir/$project\_shell/xdc/shell_clk.xdc"
+if {![file exists $shell_clock_constraints]} {
+    error "Shell synthesis clock constraints do not exist: $shell_clock_constraints"
+}
+read_xdc $shell_clock_constraints
+if {[llength [get_clocks -quiet]] == 0} {
+    error "Resident-shell synthesis analysis has no clocks after loading $shell_clock_constraints"
+}
+
 check_timing -verbose -file "$analysis_report_dir/check_timing.rpt"
 report_utilization -file "$analysis_report_dir/utilization.rpt"
 report_high_fanout_nets \
@@ -205,6 +217,8 @@ write_text_file "$analysis_report_dir/timing_summary.rpt" $timing_summary
 set setup_path [worst_path max]
 set hold_path [worst_path min]
 set setup_tns [setup_tns_from_timing_summary $timing_summary]
+set setup_group [object_name_or_empty [path_property_or_empty $setup_path PATH_GROUP]]
+set hold_group [object_name_or_empty [path_property_or_empty $hold_path PATH_GROUP]]
 set valid true
 set reasons {}
 if {$setup_path eq ""} {
@@ -218,6 +232,10 @@ if {$hold_path eq ""} {
 if {$setup_tns eq ""} {
     set valid false
     lappend reasons "setup TNS could not be parsed from the synthesized timing summary"
+}
+if {$setup_group eq "" || $hold_group eq ""} {
+    set valid false
+    lappend reasons "synthesized timing paths are not associated with clock path groups"
 }
 if {$valid} {
     lappend reasons "synthesized timing evidence collected; placement, congestion, and routing are not assessed"

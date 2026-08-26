@@ -15,6 +15,8 @@ if {![info complete $script]} {
 
 foreach required {
     open_checkpoint
+    {read_xdc $shell_clock_constraints}
+    {[llength [get_clocks -quiet]] == 0}
     check_timing
     report_timing_summary
     report_timing
@@ -24,6 +26,7 @@ foreach required {
     predictiveOnly
     setupWnsNs
     logicLevels
+    {synthesized timing paths are not associated with clock path groups}
     {file delete -force "$analysis_report_dir/complete"}
     {$analysis_report_dir/complete}
 } {
