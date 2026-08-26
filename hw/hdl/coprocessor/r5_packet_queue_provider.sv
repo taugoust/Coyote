@@ -211,6 +211,10 @@ module r5_packet_queue_provider #(
     logic [DATA_WORDS-1:0] tx_data_written [0:MAX_PACKET_BEATS-1];
     logic [KEEP_WORDS-1:0] tx_keep_written [0:MAX_PACKET_BEATS-1];
     logic tx_attr_written [0:MAX_PACKET_BEATS-1];
+    logic [KEEP_BITS-1:0] tx_stage_keep [0:MAX_PACKET_BEATS-1];
+    logic tx_stage_last [0:MAX_PACKET_BEATS-1];
+    logic [MAX_PACKET_BEATS-1:0] tx_intermediate_valid;
+    logic [MAX_PACKET_BEATS-1:0] tx_final_valid;
 
     logic [SLOT_BITS-1:0] rx_head;
     logic [SLOT_BITS-1:0] rx_tail;
@@ -337,30 +341,56 @@ module r5_packet_queue_provider #(
         end
     endfunction
 
-    function automatic logic tx_stage_packet_valid;
-        logic [MAX_PACKET_BEATS-1:0] beat_valid;
-        integer beat_index;
+    function automatic logic staged_intermediate_valid(
+        input logic [DATA_WORDS-1:0] data_written,
+        input logic [KEEP_WORDS-1:0] keep_written,
+        input logic attr_written,
+        input logic [KEEP_BITS-1:0] keep,
+        input logic last
+    );
+        staged_intermediate_valid = (&data_written) && (&keep_written) &&
+                                    attr_written &&
+                                    keep == {KEEP_BITS{1'b1}} && !last;
+    endfunction
+
+    function automatic logic staged_final_valid(
+        input logic [DATA_WORDS-1:0] data_written,
+        input logic [KEEP_WORDS-1:0] keep_written,
+        input logic attr_written,
+        input logic [KEEP_BITS-1:0] keep,
+        input logic last
+    );
+        staged_final_valid = (&data_written) && (&keep_written) &&
+                             attr_written && final_keep_valid(keep) && last;
+    endfunction
+
+    function automatic [KEEP_BITS-1:0] keep_with_word(
+        input logic [KEEP_BITS-1:0] keep,
+        input integer word_index,
+        input logic [31:0] word
+    );
         begin
-            beat_valid = '1;
-            for (beat_index = 0; beat_index < MAX_PACKET_BEATS; beat_index = beat_index + 1) begin
-                if (beat_index < tx_stage_beats) begin
-                    beat_valid[beat_index] = (&tx_data_written[beat_index]) &&
-                                             (&tx_keep_written[beat_index]) &&
-                                             tx_attr_written[beat_index];
-                    if (beat_index + 1 < tx_stage_beats) begin
-                        beat_valid[beat_index] = beat_valid[beat_index] &&
-                                                 (tx_keep[tx_tail][beat_index] == {KEEP_BITS{1'b1}}) &&
-                                                 !tx_last[tx_tail][beat_index];
-                    end else begin
-                        beat_valid[beat_index] = beat_valid[beat_index] &&
-                                                 final_keep_valid(tx_keep[tx_tail][beat_index]) &&
-                                                 tx_last[tx_tail][beat_index];
-                    end
+            keep_with_word = keep;
+            keep_with_word[word_index*32 +: 32] = word;
+        end
+    endfunction
+
+    function automatic logic tx_stage_packet_valid;
+        logic [MAX_PACKET_BEATS-1:0] required_intermediate;
+        begin
+            tx_stage_packet_valid = 1'b0;
+            required_intermediate = '0;
+            if (tx_stage_beats > 0 && tx_stage_beats <= MAX_PACKET_BEATS) begin
+                if (tx_stage_beats > 1) begin
+                    required_intermediate =
+                        ({{(MAX_PACKET_BEATS-1){1'b0}}, 1'b1} <<
+                         (tx_stage_beats - 1'b1)) - 1'b1;
                 end
+                tx_stage_packet_valid =
+                    (tx_intermediate_valid & required_intermediate) ==
+                        required_intermediate &&
+                    tx_final_valid[tx_stage_beats - 1'b1];
             end
-            tx_stage_packet_valid = tx_stage_beats > 0 &&
-                                    tx_stage_beats <= MAX_PACKET_BEATS &&
-                                    (&beat_valid);
         end
     endfunction
 
@@ -763,6 +793,8 @@ module r5_packet_queue_provider #(
             tx_output_generation <= '0;
             tx_stage_beats <= '0;
             tx_stage_dirty <= 1'b0;
+            tx_intermediate_valid <= '0;
+            tx_final_valid <= '0;
             rx_packet_open <= 1'b0;
             rx_input_beat <= '0;
             next_rx_token <= 32'd1;
@@ -858,19 +890,67 @@ module r5_packet_queue_provider #(
                         write_lane_index = write_word_index % DATA_WORDS;
                         tx_data[tx_tail][write_beat_index][write_lane_index*32 +: 32] <= held_wdata;
                         tx_data_written[write_beat_index][write_lane_index] <= 1'b1;
+                        tx_intermediate_valid[write_beat_index] <=
+                            staged_intermediate_valid(
+                                tx_data_written[write_beat_index] |
+                                    ({{(DATA_WORDS-1){1'b0}}, 1'b1} << write_lane_index),
+                                tx_keep_written[write_beat_index],
+                                tx_attr_written[write_beat_index],
+                                tx_stage_keep[write_beat_index],
+                                tx_stage_last[write_beat_index]);
+                        tx_final_valid[write_beat_index] <=
+                            staged_final_valid(
+                                tx_data_written[write_beat_index] |
+                                    ({{(DATA_WORDS-1){1'b0}}, 1'b1} << write_lane_index),
+                                tx_keep_written[write_beat_index],
+                                tx_attr_written[write_beat_index],
+                                tx_stage_keep[write_beat_index],
+                                tx_stage_last[write_beat_index]);
                         tx_stage_dirty <= 1'b1;
                     end else if (write_address >= TX_KEEP_BASE && write_address < TX_KEEP_BASE + 16'h0200) begin
                         write_word_index = (write_address - TX_KEEP_BASE) >> 2;
                         write_beat_index = write_word_index / KEEP_WORDS;
                         write_lane_index = write_word_index % KEEP_WORDS;
                         tx_keep[tx_tail][write_beat_index][write_lane_index*32 +: 32] <= held_wdata;
+                        tx_stage_keep[write_beat_index][write_lane_index*32 +: 32] <= held_wdata;
                         tx_keep_written[write_beat_index][write_lane_index] <= 1'b1;
+                        tx_intermediate_valid[write_beat_index] <=
+                            staged_intermediate_valid(
+                                tx_data_written[write_beat_index],
+                                tx_keep_written[write_beat_index] |
+                                    ({{(KEEP_WORDS-1){1'b0}}, 1'b1} << write_lane_index),
+                                tx_attr_written[write_beat_index],
+                                keep_with_word(tx_stage_keep[write_beat_index],
+                                               write_lane_index, held_wdata),
+                                tx_stage_last[write_beat_index]);
+                        tx_final_valid[write_beat_index] <=
+                            staged_final_valid(
+                                tx_data_written[write_beat_index],
+                                tx_keep_written[write_beat_index] |
+                                    ({{(KEEP_WORDS-1){1'b0}}, 1'b1} << write_lane_index),
+                                tx_attr_written[write_beat_index],
+                                keep_with_word(tx_stage_keep[write_beat_index],
+                                               write_lane_index, held_wdata),
+                                tx_stage_last[write_beat_index]);
                         tx_stage_dirty <= 1'b1;
                     end else if (write_address >= TX_ATTR_BASE && write_address < TX_ATTR_BASE + 16'h0100) begin
                         write_beat_index = (write_address - TX_ATTR_BASE) >> 2;
                         tx_id[tx_tail][write_beat_index] <= held_wdata[STREAM_ID_BITS-1:0];
                         tx_last[tx_tail][write_beat_index] <= held_wdata[6];
+                        tx_stage_last[write_beat_index] <= held_wdata[6];
                         tx_attr_written[write_beat_index] <= 1'b1;
+                        tx_intermediate_valid[write_beat_index] <=
+                            staged_intermediate_valid(
+                                tx_data_written[write_beat_index],
+                                tx_keep_written[write_beat_index], 1'b1,
+                                tx_stage_keep[write_beat_index],
+                                held_wdata[6]);
+                        tx_final_valid[write_beat_index] <=
+                            staged_final_valid(
+                                tx_data_written[write_beat_index],
+                                tx_keep_written[write_beat_index], 1'b1,
+                                tx_stage_keep[write_beat_index],
+                                held_wdata[6]);
                         tx_stage_dirty <= 1'b1;
                     end else begin
                         case (write_address)
@@ -951,6 +1031,8 @@ module r5_packet_queue_provider #(
                 tx_tail <= next_slot(tx_tail);
                 tx_stage_dirty <= 1'b0;
                 tx_stage_beats <= '0;
+                tx_intermediate_valid <= '0;
+                tx_final_valid <= '0;
                 if (&tx_stage_token) begin
                     fault_code <= 32'h0003_0001;
                     fault_detail <= tx_stage_token;
@@ -965,6 +1047,8 @@ module r5_packet_queue_provider #(
             end else if (tx_cancel_success) begin
                 tx_stage_dirty <= 1'b0;
                 tx_stage_beats <= '0;
+                tx_intermediate_valid <= '0;
+                tx_final_valid <= '0;
                 if (&tx_stage_token) begin
                     fault_code <= 32'h0003_0001;
                     fault_detail <= tx_stage_token;
@@ -1086,6 +1170,8 @@ module r5_packet_queue_provider #(
                 tx_output_valid <= 1'b0;
                 tx_stage_dirty <= 1'b0;
                 tx_stage_beats <= '0;
+                tx_intermediate_valid <= '0;
+                tx_final_valid <= '0;
                 if (!(&tx_stage_token)) tx_stage_token <= tx_stage_token + 1'b1;
                 for (reset_beat = 0; reset_beat < MAX_PACKET_BEATS; reset_beat = reset_beat + 1) begin
                     tx_data_written[reset_beat] <= '0;
@@ -1119,6 +1205,8 @@ module r5_packet_queue_provider #(
                 tx_output_valid <= 1'b0;
                 tx_stage_dirty <= 1'b0;
                 tx_stage_beats <= '0;
+                tx_intermediate_valid <= '0;
+                tx_final_valid <= '0;
                 if (!(&tx_stage_token)) tx_stage_token <= tx_stage_token + 1'b1;
                 for (reset_beat = 0; reset_beat < MAX_PACKET_BEATS; reset_beat = reset_beat + 1) begin
                     tx_data_written[reset_beat] <= '0;
@@ -1155,6 +1243,8 @@ module r5_packet_queue_provider #(
                 tx_output_valid <= 1'b0;
                 tx_stage_dirty <= 1'b0;
                 tx_stage_beats <= '0;
+                tx_intermediate_valid <= '0;
+                tx_final_valid <= '0;
                 if (!(&tx_stage_token)) tx_stage_token <= tx_stage_token + 1'b1;
                 for (reset_beat = 0; reset_beat < MAX_PACKET_BEATS; reset_beat = reset_beat + 1) begin
                     tx_data_written[reset_beat] <= '0;
