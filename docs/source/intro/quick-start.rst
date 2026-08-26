@@ -235,6 +235,27 @@ The command consists of the following incremental steps:
     # Generate bitstreams
     make bitgen   
 
+A ``BUILD_SHELL=1`` build can collect fast pre-placement evidence directly from the synthesized resident-shell checkpoint:
+
+.. code-block:: bash
+
+    make synthesis_analysis
+
+This target synthesizes the resident shell when needed, then emits estimated setup/hold timing, critical paths, utilization, high-fanout diagnostics, and ``reports/synthesis_analysis/summary.json``. It does not synthesize the configuration-0 application, link DFX, optimize, place, route, or generate an image. The result is useful for rejecting clearly poor RTL quickly, but it does not assess placement or congestion.
+
+For a ``BUILD_SHELL=1`` and ``EN_PR=1`` build, Coyote also provides the stronger predictive timing oracle before full-quality implementation:
+
+.. code-block:: bash
+
+    make synth
+    make timing_oracle
+
+The oracle runs ``opt_design`` and Vivado QoR Assessment, rejects poor post-opt scores before placement, and otherwise performs ``RuntimeOptimized`` placement followed by another assessment and an estimated timing report. It deliberately does not route. Reports, diagnostic checkpoints, RQA CSV output, and ``reports/timing_oracle/summary.json`` classify the candidate as ``PASS``, ``MARGINAL``, or ``FAIL``. The classification is predictive only; even ``PASS`` requires normal full routing, DRC, and setup/hold acceptance.
+
+On Versal with application DFX, the oracle links the complete configuration 0 from the static, shell, and seed-application checkpoints plus the implementation constraints and application floorplan. On UltraScale+, it assesses the linked shell before nested DFX subdivision; validate its thresholds separately rather than assuming Versal behavior transfers.
+
+The default policy rejects RQA scores below 3 and treats post-place scores of 4 or greater as ``PASS``. ``TIMING_ORACLE_REJECT_RQA_BELOW``, ``TIMING_ORACLE_PASS_RQA_AT_LEAST``, and ``TIMING_ORACLE_MAX_PATHS`` configure that policy. The target completes for all three classifications so its reports remain available; build-system integrations can enforce ``FAIL`` through a separate gate.
+
 If ``EN_PR = 1`` floor-planning of the applications (vFPGAs) needs to be done by users explicitly after the *make shell* step. 
 This can be done by opening the generated ``shell_subdivided.dcp`` checkpoint. 
 Check out the following link for a detailed `floor-planning guide <https://docs.amd.com/r/en-US/ug903-vivado-using-constraints/Floorplanning>`_.

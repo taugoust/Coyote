@@ -1,0 +1,341 @@
+######################################################################################
+# This file is part of the Coyote <https://github.com/fpgasystems/Coyote>
+#
+# MIT Licence
+# Copyright (c) 2026, Systems Group, ETH Zurich
+# All rights reserved.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+######################################################################################
+
+# @brief Predicts shell implementation quality without performing a full route.
+#
+# The oracle links configuration 0 exactly as the shell implementation flow does,
+# runs opt_design and Vivado QoR Assessment, then performs RuntimeOptimized
+# placement only when the post-opt score is not rejected. Its output is
+# predictive evidence and must never be treated as routed timing acceptance.
+
+if {[catch {
+
+source "${CMAKE_BINARY_DIR}/base.tcl"
+
+proc json_escape {value} {
+    return [string map [list \\ \\\\ \" \\\" \n \\n \r \\r \t \\t] $value]
+}
+
+proc json_string {value} {
+    return "\"[json_escape $value]\""
+}
+
+proc json_number_or_null {value} {
+    if {$value eq ""} {
+        return "null"
+    }
+    return $value
+}
+
+proc object_name_or_empty {object} {
+    if {$object eq ""} {
+        return ""
+    }
+    if {[catch {set name [get_property NAME $object]}]} {
+        return "$object"
+    }
+    return $name
+}
+
+proc path_property_or_empty {path property} {
+    if {$path eq ""} {
+        return ""
+    }
+    if {[catch {set value [get_property $property $path]}]} {
+        return ""
+    }
+    return $value
+}
+
+proc worst_path {delay_type} {
+    set paths [get_timing_paths -delay_type $delay_type -max_paths 1 -nworst 1]
+    if {[llength $paths] == 0} {
+        return ""
+    }
+    return [lindex $paths 0]
+}
+
+proc setup_tns_from_timing_summary {summary} {
+    set found_header false
+    set found_separator false
+    foreach line [split $summary "\n"] {
+        set trimmed [string trim $line]
+        if {!$found_header} {
+            if {[string first "WNS(ns)" $trimmed] >= 0 && [string first "TNS(ns)" $trimmed] >= 0} {
+                set found_header true
+            }
+            continue
+        }
+        if {!$found_separator} {
+            if {[regexp {^-+[[:space:]]+-+} $trimmed]} {
+                set found_separator true
+            }
+            continue
+        }
+        if {[regexp {^([+-]?[0-9]+(?:\.[0-9]+)?)[[:space:]]+([+-]?[0-9]+(?:\.[0-9]+)?)} \
+                $trimmed match wns tns]} {
+            return $tns
+        }
+    }
+    return ""
+}
+
+proc write_text_file {path contents} {
+    set fd [open $path w]
+    puts -nonewline $fd $contents
+    close $fd
+}
+
+proc write_summary {path classification reasons opt_rqa placed place_rqa setup_path hold_path setup_tns} {
+    global cfg part
+
+    set setup_slack [path_property_or_empty $setup_path SLACK]
+    set hold_slack [path_property_or_empty $hold_path SLACK]
+    set setup_start [object_name_or_empty [path_property_or_empty $setup_path STARTPOINT_PIN]]
+    set setup_end [object_name_or_empty [path_property_or_empty $setup_path ENDPOINT_PIN]]
+    set setup_group [object_name_or_empty [path_property_or_empty $setup_path PATH_GROUP]]
+    set setup_levels [path_property_or_empty $setup_path LOGIC_LEVELS]
+
+    set reason_json {}
+    foreach reason $reasons {
+        lappend reason_json [json_string $reason]
+    }
+
+    set fd [open $path w]
+    puts $fd "{"
+    puts $fd "  \"schemaVersion\": 1,"
+    puts $fd "  \"kind\": \"coyote-timing-oracle\","
+    puts $fd "  \"predictiveOnly\": true,"
+    if {$cfg(fpga_arch) eq "versal"} {
+        set assessment_scope "linked-config-0"
+    } else {
+        set assessment_scope "linked-shell-before-nested-dfx"
+    }
+    puts $fd "  \"architecture\": [json_string $cfg(fpga_arch)],"
+    puts $fd "  \"assessmentScope\": [json_string $assessment_scope],"
+    puts $fd "  \"part\": [json_string $part],"
+    puts $fd "  \"vivadoVersion\": [json_string [version -short]],"
+    puts $fd "  \"policy\": {"
+    puts $fd "    \"rejectRqaBelow\": $cfg(timing_oracle_reject_rqa_below),"
+    puts $fd "    \"passRqaAtLeast\": $cfg(timing_oracle_pass_rqa_at_least),"
+    puts $fd "    \"maxPaths\": $cfg(timing_oracle_max_paths)"
+    puts $fd "  },"
+    puts $fd "  \"postOpt\": { \"rqa\": $opt_rqa },"
+    if {$placed} {
+        puts $fd "  \"postPlace\": {"
+        puts $fd "    \"rqa\": $place_rqa,"
+        puts $fd "    \"setupWnsNs\": [json_number_or_null $setup_slack],"
+        puts $fd "    \"setupTnsNs\": [json_number_or_null $setup_tns],"
+        puts $fd "    \"holdWnsNs\": [json_number_or_null $hold_slack],"
+        puts $fd "    \"criticalPath\": {"
+        puts $fd "      \"startpoint\": [json_string $setup_start],"
+        puts $fd "      \"endpoint\": [json_string $setup_end],"
+        puts $fd "      \"pathGroup\": [json_string $setup_group],"
+        puts $fd "      \"logicLevels\": [json_number_or_null $setup_levels]"
+        puts $fd "    }"
+        puts $fd "  },"
+    } else {
+        puts $fd "  \"postPlace\": null,"
+    }
+    puts $fd "  \"classification\": [json_string $classification],"
+    puts $fd "  \"reasons\": \[[join $reason_json {, }]\]"
+    puts $fd "}"
+    close $fd
+
+    puts "TIMING_ORACLE_CLASSIFICATION=$classification"
+    puts "TIMING_ORACLE_POST_OPT_RQA=$opt_rqa"
+    if {$placed} {
+        puts "TIMING_ORACLE_POST_PLACE_RQA=$place_rqa"
+        puts "TIMING_ORACLE_POST_PLACE_SETUP_WNS_NS=$setup_slack"
+        puts "TIMING_ORACLE_POST_PLACE_SETUP_TNS_NS=$setup_tns"
+        puts "TIMING_ORACLE_POST_PLACE_HOLD_WNS_NS=$hold_slack"
+    }
+    foreach reason $reasons {
+        puts "TIMING_ORACLE_REASON=$reason"
+    }
+}
+
+set oracle_report_dir "$rprt_dir/timing_oracle"
+set oracle_dcp_dir "$dcp_dir/timing_oracle"
+file mkdir $oracle_report_dir
+file mkdir $oracle_dcp_dir
+file mkdir "$oracle_report_dir/post_opt_csv"
+file mkdir "$oracle_report_dir/post_place_csv"
+file delete -force "$oracle_report_dir/complete"
+
+set_msg_config -suppress -id {[DRC RPBF-3] IO port buffering is incomplete}
+set_msg_config -suppress -id {[Constraints 18-4866] Site}
+set_msg_config -suppress -id {[Vivado 12-2261] HD.PARTPIN_RANGE cannot be set on pins}
+set_msg_config -suppress -id {[Vivado 12-4385] Failed to assign PARTPIN_RANGE on port}
+
+puts "** Starting shell timing oracle ..."
+puts "**"
+
+if {!$cfg(en_pr)} {
+    error "The shell timing oracle currently requires application-level partial reconfiguration (EN_PR=1)"
+}
+if {!$cfg(build_shell)} {
+    error "The shell timing oracle requires a shell build (BUILD_SHELL=1)"
+}
+if {$cfg(n_config) < 1} {
+    error "The shell timing oracle requires configuration 0"
+}
+
+if {$cfg(fpga_arch) eq "ultrascale_plus"} {
+    open_checkpoint "$dcp_dir/shell_linked.dcp"
+} elseif {$cfg(fpga_arch) eq "versal"} {
+    create_project -in_memory -part $part
+
+    set vivado_ver [version -short]
+    if {[package vcompare $vivado_ver "2024.2"] < 0} {
+        error "V80 static checkpoints require Vivado 2024.2 or newer"
+    }
+
+    add_files "$cfg(static_path)/static_synthed_$cfg(fdev)_gen$cfg(pcie_gen).dcp"
+    add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/static/impl"
+    set_property SCOPED_TO_CELLS {inst_static} \
+        [get_files "$cfg(static_path)/static_synthed_$cfg(fdev)_gen$cfg(pcie_gen).dcp"]
+
+    add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/shell/impl"
+    add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/dynamic/impl"
+    add_files "$dcp_dir/shell/shell_synthed.dcp"
+    set_property SCOPED_TO_CELLS {inst_shell} [get_files "$dcp_dir/shell/shell_synthed.dcp"]
+
+    for {set j 0} {$j < $cfg(n_reg)} {incr j} {
+        set user_dcp "$dcp_dir/config_0/user_synthed_c0_$j.dcp"
+        add_files $user_dcp
+        set_property SCOPED_TO_CELLS "inst_shell/inst_dynamic/inst_user_wrapper_$j" [get_files $user_dcp]
+    }
+
+    if {$cfg(fplan_path) eq "0"} {
+        error "No vFPGA floorplan was provided for the shell timing oracle"
+    }
+    add_files -fileset [get_filesets constrs_1] $cfg(fplan_path)
+    set_property PROCESSING_ORDER LATE [get_files [file tail $cfg(fplan_path)]]
+
+    set reconfig_partitions {}
+    for {set j 0} {$j < $cfg(n_reg)} {incr j} {
+        lappend reconfig_partitions "inst_shell/inst_dynamic/inst_user_wrapper_$j"
+    }
+    link_design -mode default -reconfig_partitions $reconfig_partitions -part $part -top cyt_top
+} else {
+    error "Unsupported FPGA architecture for the shell timing oracle: $cfg(fpga_arch)"
+}
+
+write_checkpoint -force "$oracle_dcp_dir/shell_linked.dcp"
+
+opt_design
+write_checkpoint -force "$oracle_dcp_dir/shell_opted.dcp"
+report_qor_assessment \
+    -file "$oracle_report_dir/post_opt_qor_assessment.rpt" \
+    -csv_output_dir "$oracle_report_dir/post_opt_csv" \
+    -max_paths $cfg(timing_oracle_max_paths)
+set opt_rqa [expr {int([get_assessment_score])}]
+set placement_completed false
+
+if {$opt_rqa < $cfg(timing_oracle_reject_rqa_below)} {
+    set reason "post-opt RQA $opt_rqa is below rejection threshold $cfg(timing_oracle_reject_rqa_below)"
+    write_summary "$oracle_report_dir/summary.json" FAIL [list $reason] $opt_rqa false 0 "" "" ""
+    close_project
+} else {
+    place_design -directive RuntimeOptimized
+    write_checkpoint -force "$oracle_dcp_dir/shell_placed_runtime_optimized.dcp"
+    report_qor_assessment \
+        -file "$oracle_report_dir/post_place_qor_assessment.rpt" \
+        -csv_output_dir "$oracle_report_dir/post_place_csv" \
+        -max_paths $cfg(timing_oracle_max_paths)
+    set place_rqa [expr {int([get_assessment_score])}]
+    report_utilization -file "$oracle_report_dir/post_place_utilization.rpt"
+    set timing_summary [report_timing_summary -return_string]
+    write_text_file "$oracle_report_dir/post_place_timing_summary.rpt" $timing_summary
+
+    set setup_path [worst_path max]
+    set hold_path [worst_path min]
+    set setup_tns [setup_tns_from_timing_summary $timing_summary]
+    set setup_slack [path_property_or_empty $setup_path SLACK]
+    set hold_slack [path_property_or_empty $hold_path SLACK]
+    set setup_start [object_name_or_empty [path_property_or_empty $setup_path STARTPOINT_PIN]]
+    set setup_end [object_name_or_empty [path_property_or_empty $setup_path ENDPOINT_PIN]]
+    set setup_group [object_name_or_empty [path_property_or_empty $setup_path PATH_GROUP]]
+    set setup_levels [path_property_or_empty $setup_path LOGIC_LEVELS]
+    set reasons {}
+    if {$setup_path eq "" || $hold_path eq "" || $setup_tns eq "" ||
+        $setup_slack eq "" || $hold_slack eq "" || $setup_start eq "" ||
+        $setup_end eq "" || $setup_group eq "" || $setup_levels eq ""} {
+        set classification FAIL
+        lappend reasons "post-place timing paths or critical-path diagnostics are incomplete"
+    } elseif {$place_rqa < $cfg(timing_oracle_reject_rqa_below)} {
+        set classification FAIL
+        lappend reasons "post-place RQA $place_rqa is below rejection threshold $cfg(timing_oracle_reject_rqa_below)"
+    } elseif {$place_rqa >= $cfg(timing_oracle_pass_rqa_at_least)} {
+        set classification PASS
+        lappend reasons "post-place RQA $place_rqa meets pass threshold $cfg(timing_oracle_pass_rqa_at_least)"
+    } else {
+        set classification MARGINAL
+        lappend reasons "post-place RQA $place_rqa requires full-route judgment"
+    }
+
+    write_summary "$oracle_report_dir/summary.json" $classification $reasons \
+        $opt_rqa true $place_rqa $setup_path $hold_path $setup_tns
+    set placement_completed true
+    close_project
+}
+
+set required_artifacts [list \
+    "$oracle_report_dir/summary.json" \
+    "$oracle_dcp_dir/shell_linked.dcp" \
+    "$oracle_dcp_dir/shell_opted.dcp" \
+    "$oracle_report_dir/post_opt_qor_assessment.rpt"]
+if {$placement_completed} {
+    lappend required_artifacts \
+        "$oracle_dcp_dir/shell_placed_runtime_optimized.dcp" \
+        "$oracle_report_dir/post_place_qor_assessment.rpt" \
+        "$oracle_report_dir/post_place_utilization.rpt" \
+        "$oracle_report_dir/post_place_timing_summary.rpt"
+}
+foreach artifact $required_artifacts {
+    if {![file exists $artifact] || [file size $artifact] == 0} {
+        error "Timing-oracle artifact is missing or empty: $artifact"
+    }
+}
+
+set completion [open "$oracle_report_dir/complete" w]
+puts $completion "timing oracle complete"
+close $completion
+
+puts ""
+puts "**"
+puts "** Shell timing oracle completed (predictive evidence only)"
+puts "**"
+puts ""
+
+} errorstring]} {
+    puts "** CERR: $errorstring"
+    puts "**"
+    exit 1
+}
+
+exit 0
