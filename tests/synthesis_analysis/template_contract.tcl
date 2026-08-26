@@ -72,6 +72,17 @@ if {$tns ne "-84.750"} {
     puts stderr "timing summary parser returned '$tns'"
     exit 1
 }
+set check_timing_path [file join [pwd] check-timing-test.rpt]
+set check_timing_fd [open $check_timing_path w]
+puts $check_timing_fd {1. checking no_clock (0)
+2. checking unconstrained_internal_endpoints (17)}
+close $check_timing_fd
+if {[check_timing_issue_count $check_timing_path no_clock] ne "0" ||
+    [check_timing_issue_count $check_timing_path unconstrained_internal_endpoints] ne "17"} {
+    puts stderr "check_timing issue parser returned incorrect counts"
+    exit 1
+}
+file delete -force $check_timing_path
 
 set helpers_start [string first {proc json_escape} $script]
 set helpers_end [string first {set analysis_report_dir} $script $helpers_start]
