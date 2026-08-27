@@ -43,8 +43,8 @@ module peer_backend_aurora_qsfp1 (
     output logic[3:0]           peer_lane_up
 );
 
-    AXI4S #(.AXI4S_DATA_BITS(256)) aurora_rx (.*);
-    AXI4S #(.AXI4S_DATA_BITS(256)) aurora_tx (.*);
+    AXI4S #(.AXI4S_DATA_BITS(512)) aurora_rx (.*);
+    AXI4S #(.AXI4S_DATA_BITS(512)) aurora_tx (.*);
 
     logic aurora_channel_up;
     logic [3:0] aurora_lane_up;
@@ -79,105 +79,28 @@ module peer_backend_aurora_qsfp1 (
     // Overflow is a transport-integrity fault, not a performance counter.
     // Withdraw the generic endpoint until the Aurora link is reset so a
     // consumer can never accept a stream with a silently missing beat.
-    assign peer_link_up = aurora_channel_up && !aurora_rx_overflow;
+    assign peer_link_up = aurora_channel_up && !aurora_rx_overflow &&
+                          !aurora_hard_err && !aurora_mmcm_not_locked &&
+                          aurora_gt_pll_lock;
     assign peer_lane_up = aurora_lane_up;
 
-    // ------------------------------------------------------------------
-    // TX adapter: 512-bit AXI4SR peer_send -> two 256-bit Aurora beats.
-    // ------------------------------------------------------------------
-    logic        tx_hi_valid;
-    logic[255:0] tx_hi_data;
-    logic[31:0]  tx_hi_keep;
-    logic        tx_hi_last;
+    // Width adaptation and asynchronous crossing are owned by aurora_module;
+    // this boundary now carries complete 512-bit shell beats in both directions.
+    assign aurora_tx.tvalid = peer_link_up && axis_peer_send.tvalid;
+    assign aurora_tx.tdata  = axis_peer_send.tdata;
+    assign aurora_tx.tkeep  = axis_peer_send.tkeep;
+    assign aurora_tx.tlast  = axis_peer_send.tlast;
+    assign axis_peer_send.tready = peer_link_up && aurora_tx.tready;
 
-    assign axis_peer_send.tready = peer_link_up && !tx_hi_valid && aurora_tx.tready;
-
-    assign aurora_tx.tvalid = peer_link_up && (tx_hi_valid || axis_peer_send.tvalid);
-    assign aurora_tx.tdata  = tx_hi_valid ? tx_hi_data : axis_peer_send.tdata[255:0];
-    assign aurora_tx.tkeep  = tx_hi_valid ? tx_hi_keep : axis_peer_send.tkeep[31:0];
-    assign aurora_tx.tlast  = tx_hi_valid ? tx_hi_last : 1'b0;
-
-    always_ff @(posedge aclk) begin
-        if (!aresetn || !peer_link_up) begin
-            tx_hi_valid <= 1'b0;
-            tx_hi_data  <= '0;
-            tx_hi_keep  <= '0;
-            tx_hi_last  <= 1'b0;
-        end else begin
-            if (tx_hi_valid && aurora_tx.tready) begin
-                tx_hi_valid <= 1'b0;
-            end
-
-            if (!tx_hi_valid && axis_peer_send.tvalid && axis_peer_send.tready) begin
-                tx_hi_valid <= 1'b1;
-                tx_hi_data  <= axis_peer_send.tdata[511:256];
-                tx_hi_keep  <= axis_peer_send.tkeep[63:32];
-                tx_hi_last  <= axis_peer_send.tlast;
-            end
-        end
-    end
-
-    // ------------------------------------------------------------------
-    // RX adapter: two 256-bit Aurora beats -> 512-bit AXI4SR peer_recv.
-    // ------------------------------------------------------------------
-    logic        rx_have_low;
-    logic[255:0] rx_low_data;
-    logic[31:0]  rx_low_keep;
-
-    logic        rx_out_valid;
-    logic[511:0] rx_out_data;
-    logic[63:0]  rx_out_keep;
-    logic        rx_out_last;
-
-    assign aurora_rx.tready = !rx_out_valid;
-
-    assign axis_peer_recv.tvalid = rx_out_valid;
-    assign axis_peer_recv.tdata  = rx_out_data;
-    assign axis_peer_recv.tkeep  = rx_out_keep;
-    assign axis_peer_recv.tlast  = rx_out_last;
+    assign axis_peer_recv.tvalid = peer_link_up && aurora_rx.tvalid;
+    assign axis_peer_recv.tdata  = aurora_rx.tdata;
+    assign axis_peer_recv.tkeep  = aurora_rx.tkeep;
+    assign axis_peer_recv.tlast  = aurora_rx.tlast;
     assign axis_peer_recv.tid    = '0;
+    assign aurora_rx.tready = peer_link_up && axis_peer_recv.tready;
 
-    always_ff @(posedge aclk) begin
-        if (!aresetn || !peer_link_up) begin
-            rx_have_low  <= 1'b0;
-            rx_low_data  <= '0;
-            rx_low_keep  <= '0;
-            rx_out_valid <= 1'b0;
-            rx_out_data  <= '0;
-            rx_out_keep  <= '0;
-            rx_out_last  <= 1'b0;
-        end else begin
-            if (rx_out_valid && axis_peer_recv.tready) begin
-                rx_out_valid <= 1'b0;
-            end
-
-            if (aurora_rx.tvalid && aurora_rx.tready) begin
-                if (!rx_have_low) begin
-                    if (aurora_rx.tlast) begin
-                        rx_out_data  <= {256'b0, aurora_rx.tdata};
-                        rx_out_keep  <= {32'b0, aurora_rx.tkeep};
-                        rx_out_last  <= 1'b1;
-                        rx_out_valid <= 1'b1;
-                        rx_have_low  <= 1'b0;
-                    end else begin
-                        rx_low_data <= aurora_rx.tdata;
-                        rx_low_keep <= aurora_rx.tkeep;
-                        rx_have_low <= 1'b1;
-                    end
-                end else begin
-                    rx_out_data  <= {aurora_rx.tdata, rx_low_data};
-                    rx_out_keep  <= {aurora_rx.tkeep, rx_low_keep};
-                    rx_out_last  <= aurora_rx.tlast;
-                    rx_out_valid <= 1'b1;
-                    rx_have_low  <= 1'b0;
-                end
-            end
-        end
-    end
-
-    // These transport diagnostics are retained at this backend boundary even
-    // though the generic endpoint currently exports only link and lane state.
-    wire _unused_aurora_status = &{1'b0, aurora_hard_err, aurora_soft_err,
-                                   aurora_mmcm_not_locked, aurora_gt_pll_lock};
+    // Soft errors are reported by Aurora but do not invalidate an otherwise
+    // healthy framed link; hard/clock/PLL faults are included in peer_link_up.
+    wire _unused_aurora_soft_err = aurora_soft_err;
 
 endmodule
