@@ -46,6 +46,28 @@ proc count_text {source needle} {
     }
 }
 
+proc extract_proc {source name} {
+    set start [string first "proc $name " $source]
+    if {$start < 0} {
+        error "procedure $name is missing"
+    }
+    set candidate ""
+    foreach line [split [string range $source $start end] \n] {
+        append candidate $line \n
+        if {[info complete $candidate]} {
+            return $candidate
+        }
+    }
+    error "procedure $name is incomplete"
+}
+
+proc require_equal {actual expected label} {
+    if {$actual ne $expected} {
+        puts stderr "$label: expected '$expected', got '$actual'"
+        exit 1
+    }
+}
+
 lassign $argv base_path pnr_path physical_path app_link_path dyn_link_ultrascale_path dyn_link_versal_path dyn_finalize_path app_path ultrascale_path versal_path bitgen_path cmake_path
 set source_root [file dirname [file dirname $cmake_path]]
 set script_root [file join $source_root scripts]
@@ -57,6 +79,63 @@ foreach path [configured_templates $script_root] {
     }
 }
 set base [read_source $base_path]
+
+# Execute the post-route decision with mocked timing and implementation commands.
+# A closed routed design must remain untouched, while either setup or hold failure
+# requires physical optimization followed by routing. Missing timing evidence
+# fails closed instead of silently preserving an unverified result.
+eval [extract_proc $base routed_design_needs_post_route_optimization]
+eval [extract_proc $base finalize_post_route_optimization]
+array set mock_slack {max 0.003 min 0.012}
+set mock_missing ""
+set implementation_calls {}
+proc get_timing_paths {args} {
+    set delay_type [lindex $args [expr {[lsearch -exact $args -delay_type] + 1}]]
+    if {$delay_type eq $::mock_missing} {
+        return {}
+    }
+    return [list $delay_type]
+}
+proc get_property {property path} {
+    if {$property ne "SLACK"} {
+        error "unexpected property $property"
+    }
+    return $::mock_slack($path)
+}
+proc phys_opt_design {args} {
+    lappend ::implementation_calls [list phys_opt_design {*}$args]
+}
+proc route_design {args} {
+    lappend ::implementation_calls [list route_design {*}$args]
+}
+set cfg(build_opt) 1
+finalize_post_route_optimization
+require_equal $implementation_calls {} "closed routed design finalization"
+foreach failing_type {max min} {
+    array set mock_slack {max 0.003 min 0.012}
+    set mock_slack($failing_type) -0.001
+    set implementation_calls {}
+    finalize_post_route_optimization
+    require_equal $implementation_calls {{phys_opt_design -directive AggressiveExplore} route_design} "$failing_type failure finalization"
+}
+array set mock_slack {max 0.003 min 0.012}
+set mock_missing min
+set implementation_calls {}
+if {![catch {finalize_post_route_optimization} missing_error] ||
+    [string first "No min timing path is available" $missing_error] < 0} {
+    puts stderr "missing timing evidence did not fail closed: $missing_error"
+    exit 1
+}
+require_equal $implementation_calls {} "missing timing evidence finalization"
+set mock_missing ""
+set cfg(build_opt) 0
+set implementation_calls {}
+finalize_post_route_optimization
+require_equal $implementation_calls {} "unoptimized compatibility finalization"
+rename get_timing_paths {}
+rename get_property {}
+rename phys_opt_design {}
+rename route_design {}
 
 set report_dir /reports
 set prefix shell_route
@@ -88,7 +167,9 @@ foreach {actual expected} [list \
 }
 
 foreach required {
+    {proc routed_design_needs_post_route_optimization}
     {proc finalize_post_route_optimization}
+    {if {![routed_design_needs_post_route_optimization]}}
     {phys_opt_design -directive AggressiveExplore}
     route_design
     {proc report_bitstream_drc}
