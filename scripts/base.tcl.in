@@ -222,9 +222,29 @@ proc color {fore text} {
 
 # Post-route physical optimization can replicate or move routed logic. Finalize
 # routing again before any checkpoint is validated, locked, or used for images.
+# Keep an already closed routed result unchanged: Vivado skips every optimization
+# when setup and hold pass, but a subsequent route_design can still perturb it.
+proc routed_design_needs_post_route_optimization {} {
+    set needs_optimization 0
+    foreach delay_type {max min} {
+        set paths [get_timing_paths -delay_type $delay_type -max_paths 1 -nworst 1]
+        if {[llength $paths] == 0} {
+            error "No $delay_type timing path is available before post-route finalization"
+        }
+        if {[get_property SLACK [lindex $paths 0]] < 0.0} {
+            set needs_optimization 1
+        }
+    }
+    return $needs_optimization
+}
+
 proc finalize_post_route_optimization {} {
     upvar #0 cfg cnfg
     if {$cnfg(build_opt) eq 1} {
+        if {![routed_design_needs_post_route_optimization]} {
+            puts "INFO: Skipping post-route physical optimization because setup and hold timing already pass."
+            return
+        }
         phys_opt_design -directive AggressiveExplore
         route_design
     }
