@@ -284,7 +284,7 @@ module design_user_wrapper_{{ c_reg }} (
     (* io_buffer_type = "none" *) output logic                              s_axi_debug_hub_rvalid,
     (* io_buffer_type = "none" *) input  logic[127:0]                       s_axi_debug_hub_wdata,
     (* io_buffer_type = "none" *) input  logic                              s_axi_debug_hub_wlast,
-    (* io_buffer_type = "none" *) input  logic[16:0]                        s_axi_debug_hub_wstrb,
+    (* io_buffer_type = "none" *) input  logic[15:0]                        s_axi_debug_hub_wstrb,
     (* io_buffer_type = "none" *) output logic                              s_axi_debug_hub_wready,
     (* io_buffer_type = "none" *) input  logic                              s_axi_debug_hub_wvalid,
     (* io_buffer_type = "none" *) output logic[1:0]                         s_axi_debug_hub_bid,

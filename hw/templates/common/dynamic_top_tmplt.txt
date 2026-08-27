@@ -173,7 +173,7 @@ module design_dynamic_top #(
     output logic                                s_axi_debug_hub_rvalid,
     input  logic[127:0]                         s_axi_debug_hub_wdata,
     input  logic                                s_axi_debug_hub_wlast,
-    input  logic[16:0]                          s_axi_debug_hub_wstrb,
+    input  logic[15:0]                          s_axi_debug_hub_wstrb,
     output logic                                s_axi_debug_hub_wready,
     input  logic                                s_axi_debug_hub_wvalid,
     output logic[1:0]                           s_axi_debug_hub_bid,

@@ -99,6 +99,10 @@ module r5_packet_queue_provider #(
     localparam integer TX_ENTRY_LAST_BIT = TX_ENTRY_ID_LSB + STREAM_ID_BITS;
     localparam integer TX_ENTRY_BITS = TX_ENTRY_LAST_BIT + 1;
     localparam integer TX_MEMORY_DEPTH = QUEUE_DEPTH * MAX_PACKET_BEATS;
+    localparam integer PACKET_MEMORY_BYTES = (TX_ENTRY_BITS + 7) / 8;
+    localparam integer PACKET_MEMORY_BITS = PACKET_MEMORY_BYTES * 8;
+    localparam integer PACKET_MEMORY_ADDR_BITS =
+        TX_MEMORY_DEPTH <= 1 ? 1 : $clog2(TX_MEMORY_DEPTH);
     localparam integer MMIO_TIMEOUT_BITS = MMIO_TIMEOUT_CYCLES <= 1 ? 1 : $clog2(MMIO_TIMEOUT_CYCLES + 1);
 
     localparam logic [31:0] PROTOCOL_MAGIC = 32'h31514c50;
@@ -198,21 +202,55 @@ module r5_packet_queue_provider #(
     localparam logic [15:0] TX_KEEP_BASE = 16'h4000;
     localparam logic [15:0] TX_ATTR_BASE = 16'h4200;
 
-    logic [STREAM_DATA_BITS-1:0] rx_data [0:QUEUE_DEPTH-1][0:MAX_PACKET_BEATS-1];
-    logic [KEEP_BITS-1:0] rx_keep [0:QUEUE_DEPTH-1][0:MAX_PACKET_BEATS-1];
-    logic [STREAM_ID_BITS-1:0] rx_id [0:QUEUE_DEPTH-1][0:MAX_PACKET_BEATS-1];
-    logic rx_last [0:QUEUE_DEPTH-1][0:MAX_PACKET_BEATS-1];
+    logic rx_memory_write_enable;
+    logic [PACKET_MEMORY_ADDR_BITS-1:0] rx_memory_write_address;
+    logic [PACKET_MEMORY_BYTES-1:0] rx_memory_write_bytes;
+    logic [PACKET_MEMORY_BITS-1:0] rx_memory_write_data;
+    logic rx_memory_read_enable;
+    logic [PACKET_MEMORY_ADDR_BITS-1:0] rx_memory_read_address;
+    logic [PACKET_MEMORY_BITS-1:0] rx_memory_read_data;
+    logic rx_memory_read_issued;
     logic [GENERATION_BITS-1:0] rx_generation [0:QUEUE_DEPTH-1];
     logic [31:0] rx_token [0:QUEUE_DEPTH-1];
     logic [PACKET_BEAT_COUNT_BITS-1:0] rx_beats [0:QUEUE_DEPTH-1];
     logic [12:0] rx_bytes [0:QUEUE_DEPTH-1];
 
-    // Firmware performs narrow, independently ordered writes while the stream
-    // reads one complete beat per cycle. Flattening slot/beat addressing and
-    // packing all stream fields gives Vivado one simple dual-port memory with
-    // write enables instead of hundreds of thousands of packet registers.
-    (* ram_style = "block" *) logic [TX_ENTRY_BITS-1:0]
-        tx_packet_memory [0:TX_MEMORY_DEPTH-1];
+    logic tx_memory_write_enable;
+    logic [PACKET_MEMORY_ADDR_BITS-1:0] tx_memory_write_address;
+    logic [PACKET_MEMORY_BYTES-1:0] tx_memory_write_bytes;
+    logic [PACKET_MEMORY_BITS-1:0] tx_memory_write_data;
+    logic tx_memory_read_enable;
+    logic [PACKET_MEMORY_ADDR_BITS-1:0] tx_memory_read_address;
+    logic [PACKET_MEMORY_BITS-1:0] tx_memory_read_data;
+    logic tx_memory_read_pending;
+
+    r5_packet_byte_memory #(
+        .DATA_BYTES(PACKET_MEMORY_BYTES),
+        .ADDR_BITS(PACKET_MEMORY_ADDR_BITS)
+    ) inst_rx_packet_memory (
+        .clk(aclk),
+        .write_enable(rx_memory_write_enable),
+        .write_address(rx_memory_write_address),
+        .write_bytes(rx_memory_write_bytes),
+        .write_data(rx_memory_write_data),
+        .read_enable(rx_memory_read_enable),
+        .read_address(rx_memory_read_address),
+        .read_data(rx_memory_read_data)
+    );
+
+    r5_packet_byte_memory #(
+        .DATA_BYTES(PACKET_MEMORY_BYTES),
+        .ADDR_BITS(PACKET_MEMORY_ADDR_BITS)
+    ) inst_tx_packet_memory (
+        .clk(aclk),
+        .write_enable(tx_memory_write_enable),
+        .write_address(tx_memory_write_address),
+        .write_bytes(tx_memory_write_bytes),
+        .write_data(tx_memory_write_data),
+        .read_enable(tx_memory_read_enable),
+        .read_address(tx_memory_read_address),
+        .read_data(tx_memory_read_data)
+    );
     logic [GENERATION_BITS-1:0] tx_generation [0:QUEUE_DEPTH-1];
 
     logic [DATA_WORDS-1:0] tx_data_written [0:MAX_PACKET_BEATS-1];
@@ -419,6 +457,55 @@ module r5_packet_queue_provider #(
         end
     endfunction
 
+    function automatic logic rx_memory_address(input logic [15:0] address);
+        rx_memory_address =
+            (address >= RX_DATA_BASE && address < RX_DATA_BASE + 16'h1000) ||
+            (address >= RX_KEEP_BASE && address < RX_KEEP_BASE + 16'h0200) ||
+            (address >= RX_ATTR_BASE && address < RX_ATTR_BASE + 16'h0100);
+    endfunction
+
+    function automatic integer rx_memory_beat(input logic [15:0] address);
+        integer word_index;
+        begin
+            if (address >= RX_DATA_BASE && address < RX_DATA_BASE + 16'h1000) begin
+                word_index = (address - RX_DATA_BASE) >> 2;
+                rx_memory_beat = word_index / DATA_WORDS;
+            end else if (address >= RX_KEEP_BASE &&
+                         address < RX_KEEP_BASE + 16'h0200) begin
+                word_index = (address - RX_KEEP_BASE) >> 2;
+                rx_memory_beat = word_index / KEEP_WORDS;
+            end else begin
+                rx_memory_beat = (address - RX_ATTR_BASE) >> 2;
+            end
+        end
+    endfunction
+
+    function automatic [31:0] rx_memory_value(
+        input logic [PACKET_MEMORY_BITS-1:0] entry,
+        input logic [15:0] address
+    );
+        integer word_index;
+        integer lane_index;
+        begin
+            rx_memory_value = '0;
+            if (address >= RX_DATA_BASE && address < RX_DATA_BASE + 16'h1000) begin
+                word_index = (address - RX_DATA_BASE) >> 2;
+                lane_index = word_index % DATA_WORDS;
+                rx_memory_value = entry[lane_index*32 +: 32];
+            end else if (address >= RX_KEEP_BASE &&
+                         address < RX_KEEP_BASE + 16'h0200) begin
+                word_index = (address - RX_KEEP_BASE) >> 2;
+                lane_index = word_index % KEEP_WORDS;
+                rx_memory_value =
+                    entry[TX_ENTRY_KEEP_LSB + lane_index*32 +: 32];
+            end else begin
+                rx_memory_value[STREAM_ID_BITS-1:0] =
+                    entry[TX_ENTRY_ID_LSB +: STREAM_ID_BITS];
+                rx_memory_value[6] = entry[TX_ENTRY_LAST_BIT];
+            end
+        end
+    endfunction
+
     always_comb begin
         s_axi_awready = !aw_held && !s_axi_bvalid;
         s_axi_wready = !w_held && !s_axi_bvalid;
@@ -601,6 +688,81 @@ module r5_packet_queue_provider #(
         end
     end
 
+    always_comb begin : packet_memory_control
+        integer beat_index;
+        integer lane_index;
+
+        rx_memory_write_enable = rx_handshake && !rx_malformed_event;
+        rx_memory_write_address =
+            PACKET_MEMORY_ADDR_BITS'(tx_memory_index(rx_tail, rx_input_beat));
+        rx_memory_write_bytes = {PACKET_MEMORY_BYTES{1'b1}};
+        rx_memory_write_data = '0;
+        rx_memory_write_data[STREAM_DATA_BITS-1:0] = s_axis_request_tdata;
+        rx_memory_write_data[TX_ENTRY_KEEP_LSB +: KEEP_BITS] = s_axis_request_tkeep;
+        rx_memory_write_data[TX_ENTRY_ID_LSB +: STREAM_ID_BITS] = s_axis_request_tid;
+        rx_memory_write_data[TX_ENTRY_LAST_BIT] = s_axis_request_tlast;
+
+        rx_memory_read_enable = read_pending && !s_axi_rvalid &&
+                                !rx_memory_read_issued &&
+                                rx_memory_address(held_araddr[15:0]);
+        beat_index = rx_memory_beat(held_araddr[15:0]);
+        rx_memory_read_address =
+            PACKET_MEMORY_ADDR_BITS'(tx_memory_index(rx_head, beat_index));
+
+        tx_memory_write_enable = 1'b0;
+        tx_memory_write_address = '0;
+        tx_memory_write_bytes = '0;
+        tx_memory_write_data = '0;
+        beat_index = 0;
+        lane_index = 0;
+        if (write_execute && write_bus_response == AXI_OKAY &&
+            write_result == RESULT_OK) begin
+            if (write_address >= TX_DATA_BASE &&
+                write_address < TX_DATA_BASE + 16'h1000) begin
+                lane_index = ((write_address - TX_DATA_BASE) >> 2) % DATA_WORDS;
+                beat_index = ((write_address - TX_DATA_BASE) >> 2) / DATA_WORDS;
+                tx_memory_write_enable = 1'b1;
+                tx_memory_write_address = PACKET_MEMORY_ADDR_BITS'(
+                    tx_memory_index(tx_tail, beat_index));
+                tx_memory_write_bytes[lane_index*4 +: 4] = 4'hf;
+                tx_memory_write_data[lane_index*32 +: 32] = held_wdata;
+            end else if (write_address >= TX_KEEP_BASE &&
+                         write_address < TX_KEEP_BASE + 16'h0200) begin
+                lane_index = ((write_address - TX_KEEP_BASE) >> 2) % KEEP_WORDS;
+                beat_index = ((write_address - TX_KEEP_BASE) >> 2) / KEEP_WORDS;
+                tx_memory_write_enable = 1'b1;
+                tx_memory_write_address = PACKET_MEMORY_ADDR_BITS'(
+                    tx_memory_index(tx_tail, beat_index));
+                tx_memory_write_bytes[STREAM_DATA_BITS/8 + lane_index*4 +: 4] =
+                    4'hf;
+                tx_memory_write_data[TX_ENTRY_KEEP_LSB + lane_index*32 +: 32] =
+                    held_wdata;
+            end else if (write_address >= TX_ATTR_BASE &&
+                         write_address < TX_ATTR_BASE + 16'h0100) begin
+                beat_index = (write_address - TX_ATTR_BASE) >> 2;
+                tx_memory_write_enable = 1'b1;
+                tx_memory_write_address = PACKET_MEMORY_ADDR_BITS'(
+                    tx_memory_index(tx_tail, beat_index));
+                tx_memory_write_bytes[TX_ENTRY_ID_LSB/8] = 1'b1;
+                tx_memory_write_data[TX_ENTRY_ID_LSB +: STREAM_ID_BITS+1] =
+                    held_wdata[STREAM_ID_BITS:0];
+            end
+        end
+
+        tx_memory_read_enable =
+            (!tx_output_valid && !tx_memory_read_pending &&
+             tx_count != 0 && !provider_abort) ||
+            (m_axis_response_tvalid && m_axis_response_tready &&
+             !m_axis_response_tlast);
+        if (m_axis_response_tvalid && m_axis_response_tready &&
+            !m_axis_response_tlast)
+            tx_memory_read_address = PACKET_MEMORY_ADDR_BITS'(
+                tx_memory_index(tx_head, tx_output_beat + 1'b1));
+        else
+            tx_memory_read_address = PACKET_MEMORY_ADDR_BITS'(
+                tx_memory_index(tx_head, tx_output_beat));
+    end
+
     always_comb begin
         s_axis_request_tready = provider_selected && identity_valid && fault_code == 0 &&
                                 !provider_abort &&
@@ -663,33 +825,15 @@ module r5_packet_queue_provider #(
     end
 
     function automatic [31:0] read_register(input logic [15:0] address, output logic known);
-        integer word_index;
         integer beat_index;
-        integer lane_index;
         logic [31:0] value;
         begin
             known = 1'b1;
             value = 32'd0;
-            if (address >= RX_DATA_BASE && address < RX_DATA_BASE + 16'h1000) begin
-                word_index = (address - RX_DATA_BASE) >> 2;
-                beat_index = word_index / DATA_WORDS;
-                lane_index = word_index % DATA_WORDS;
-                if (rx_count != 0 && beat_index < rx_beats[rx_head]) begin
-                    value = rx_data[rx_head][beat_index][lane_index*32 +: 32];
-                end
-            end else if (address >= RX_KEEP_BASE && address < RX_KEEP_BASE + 16'h0200) begin
-                word_index = (address - RX_KEEP_BASE) >> 2;
-                beat_index = word_index / KEEP_WORDS;
-                lane_index = word_index % KEEP_WORDS;
-                if (rx_count != 0 && beat_index < rx_beats[rx_head]) begin
-                    value = rx_keep[rx_head][beat_index][lane_index*32 +: 32];
-                end
-            end else if (address >= RX_ATTR_BASE && address < RX_ATTR_BASE + 16'h0100) begin
-                beat_index = (address - RX_ATTR_BASE) >> 2;
-                if (rx_count != 0 && beat_index < rx_beats[rx_head]) begin
-                    value[STREAM_ID_BITS-1:0] = rx_id[rx_head][beat_index];
-                    value[6] = rx_last[rx_head][beat_index];
-                end
+            if (rx_memory_address(address)) begin
+                beat_index = rx_memory_beat(address);
+                if (rx_count != 0 && beat_index < rx_beats[rx_head])
+                    value = rx_memory_value(rx_memory_read_data, address);
             end else begin
                 case (address)
                     REG_MAGIC: value = PROTOCOL_MAGIC;
@@ -758,7 +902,6 @@ module r5_packet_queue_provider #(
         end
     endfunction
 
-    integer reset_index;
     integer reset_beat;
     integer identity_index;
     integer write_word_index;
@@ -799,6 +942,7 @@ module r5_packet_queue_provider #(
             tx_count <= '0;
             tx_output_beat <= '0;
             tx_output_valid <= 1'b0;
+            tx_memory_read_pending <= 1'b0;
             tx_output_entry <= '0;
             tx_output_generation <= '0;
             tx_stage_beats <= '0;
@@ -812,6 +956,7 @@ module r5_packet_queue_provider #(
             aw_held <= 1'b0;
             w_held <= 1'b0;
             read_pending <= 1'b0;
+            rx_memory_read_issued <= 1'b0;
             s_axi_bvalid <= 1'b0;
             s_axi_bresp <= AXI_OKAY;
             s_axi_rvalid <= 1'b0;
@@ -869,12 +1014,19 @@ module r5_packet_queue_provider #(
                 held_ar_epoch <= transport_epoch;
             end
             if (read_pending && !s_axi_rvalid) begin
-                read_pending <= 1'b0;
-                read_value = read_register(held_araddr[15:0], read_known);
-                s_axi_rdata <= read_value;
-                s_axi_rresp <= (held_ar_epoch != transport_epoch) ? AXI_SLVERR :
-                               (read_known ? AXI_OKAY : AXI_DECERR);
-                s_axi_rvalid <= 1'b1;
+                if (rx_memory_address(held_araddr[15:0]) &&
+                    !rx_memory_read_issued) begin
+                    rx_memory_read_issued <= 1'b1;
+                end else begin
+                    read_pending <= 1'b0;
+                    rx_memory_read_issued <= 1'b0;
+                    read_value = read_register(held_araddr[15:0], read_known);
+                    s_axi_rdata <= read_value;
+                    s_axi_rresp <=
+                        (held_ar_epoch != transport_epoch) ? AXI_SLVERR :
+                        (read_known ? AXI_OKAY : AXI_DECERR);
+                    s_axi_rvalid <= 1'b1;
+                end
             end
 
             if (write_execute) begin
@@ -898,8 +1050,6 @@ module r5_packet_queue_provider #(
                         write_word_index = (write_address - TX_DATA_BASE) >> 2;
                         write_beat_index = write_word_index / DATA_WORDS;
                         write_lane_index = write_word_index % DATA_WORDS;
-                        tx_packet_memory[tx_memory_index(tx_tail, write_beat_index)]
-                            [write_lane_index*32 +: 32] <= held_wdata;
                         tx_data_written[write_beat_index][write_lane_index] <= 1'b1;
                         tx_intermediate_valid[write_beat_index] <=
                             staged_intermediate_valid(
@@ -922,8 +1072,6 @@ module r5_packet_queue_provider #(
                         write_word_index = (write_address - TX_KEEP_BASE) >> 2;
                         write_beat_index = write_word_index / KEEP_WORDS;
                         write_lane_index = write_word_index % KEEP_WORDS;
-                        tx_packet_memory[tx_memory_index(tx_tail, write_beat_index)]
-                            [TX_ENTRY_KEEP_LSB + write_lane_index*32 +: 32] <= held_wdata;
                         tx_stage_keep[write_beat_index][write_lane_index*32 +: 32] <= held_wdata;
                         tx_keep_written[write_beat_index][write_lane_index] <= 1'b1;
                         tx_intermediate_valid[write_beat_index] <=
@@ -947,9 +1095,6 @@ module r5_packet_queue_provider #(
                         tx_stage_dirty <= 1'b1;
                     end else if (write_address >= TX_ATTR_BASE && write_address < TX_ATTR_BASE + 16'h0100) begin
                         write_beat_index = (write_address - TX_ATTR_BASE) >> 2;
-                        tx_packet_memory[tx_memory_index(tx_tail, write_beat_index)]
-                            [TX_ENTRY_ID_LSB +: STREAM_ID_BITS+1] <=
-                                held_wdata[STREAM_ID_BITS:0];
                         tx_stage_last[write_beat_index] <= held_wdata[6];
                         tx_attr_written[write_beat_index] <= 1'b1;
                         tx_intermediate_valid[write_beat_index] <=
@@ -1005,10 +1150,6 @@ module r5_packet_queue_provider #(
             end
 
             if (rx_handshake && !rx_malformed_event) begin
-                rx_data[rx_tail][rx_input_beat] <= s_axis_request_tdata;
-                rx_keep[rx_tail][rx_input_beat] <= s_axis_request_tkeep;
-                rx_id[rx_tail][rx_input_beat] <= s_axis_request_tid;
-                rx_last[rx_tail][rx_input_beat] <= s_axis_request_tlast;
                 if (!rx_packet_open) begin
                     rx_packet_open <= 1'b1;
                     rx_input_beat <= '0;
@@ -1075,22 +1216,24 @@ module r5_packet_queue_provider #(
                 end
             end
 
-            if (!tx_output_valid && tx_count != 0 && !provider_abort) begin
-                tx_output_valid <= 1'b1;
-                tx_output_entry <=
-                    tx_packet_memory[tx_memory_index(tx_head, tx_output_beat)];
+            if (tx_memory_read_pending) begin
+                tx_output_entry <= tx_memory_read_data[TX_ENTRY_BITS-1:0];
                 tx_output_generation <= tx_generation[tx_head];
+                tx_output_valid <= 1'b1;
+                tx_memory_read_pending <= 1'b0;
+            end
+            if (!tx_output_valid && !tx_memory_read_pending &&
+                tx_count != 0 && !provider_abort) begin
+                tx_memory_read_pending <= 1'b1;
             end
             if (m_axis_response_tvalid && m_axis_response_tready) begin
+                tx_output_valid <= 1'b0;
                 if (m_axis_response_tlast) begin
-                    tx_output_valid <= 1'b0;
                     tx_head <= next_slot(tx_head);
                     tx_output_beat <= '0;
                 end else begin
                     tx_output_beat <= tx_output_beat + 1'b1;
-                    tx_output_entry <= tx_packet_memory[
-                        tx_memory_index(tx_head, tx_output_beat + 1'b1)];
-                    tx_output_generation <= tx_generation[tx_head];
+                    tx_memory_read_pending <= 1'b1;
                 end
             end
 
@@ -1177,6 +1320,7 @@ module r5_packet_queue_provider #(
                 tx_count <= '0;
                 tx_output_beat <= '0;
                 tx_output_valid <= 1'b0;
+                tx_memory_read_pending <= 1'b0;
                 tx_stage_dirty <= 1'b0;
                 tx_stage_beats <= '0;
                 tx_intermediate_valid <= '0;
@@ -1212,6 +1356,7 @@ module r5_packet_queue_provider #(
                 tx_count <= '0;
                 tx_output_beat <= '0;
                 tx_output_valid <= 1'b0;
+                tx_memory_read_pending <= 1'b0;
                 tx_stage_dirty <= 1'b0;
                 tx_stage_beats <= '0;
                 tx_intermediate_valid <= '0;
@@ -1250,6 +1395,7 @@ module r5_packet_queue_provider #(
                 tx_count <= '0;
                 tx_output_beat <= '0;
                 tx_output_valid <= 1'b0;
+                tx_memory_read_pending <= 1'b0;
                 tx_stage_dirty <= 1'b0;
                 tx_stage_beats <= '0;
                 tx_intermediate_valid <= '0;
@@ -1261,6 +1407,8 @@ module r5_packet_queue_provider #(
                     tx_attr_written[reset_beat] <= 1'b0;
                 end
                 rx_packet_open <= 1'b0;
+                read_pending <= 1'b0;
+                rx_memory_read_issued <= 1'b0;
                 mmio_busy <= 1'b0;
                 mmio_done <= 1'b0;
             end
@@ -1303,3 +1451,34 @@ module r5_packet_queue_provider #(
 `endif
 
 endmodule
+
+/* verilator lint_off DECLFILENAME */
+module r5_packet_byte_memory #(
+    parameter integer DATA_BYTES = 73,
+    parameter integer ADDR_BITS = 8
+) (
+    input  logic                    clk,
+    input  logic                    write_enable,
+    input  logic [ADDR_BITS-1:0]    write_address,
+    input  logic [DATA_BYTES-1:0]   write_bytes,
+    input  logic [DATA_BYTES*8-1:0] write_data,
+    input  logic                    read_enable,
+    input  logic [ADDR_BITS-1:0]    read_address,
+    output logic [DATA_BYTES*8-1:0] read_data
+);
+    localparam integer DEPTH = 1 << ADDR_BITS;
+    (* ram_style = "block" *) logic [DATA_BYTES*8-1:0] memory [0:DEPTH-1];
+
+    always_ff @(posedge clk) begin
+        if (write_enable) begin
+            for (integer byte_index = 0; byte_index < DATA_BYTES; byte_index++) begin
+                if (write_bytes[byte_index])
+                    memory[write_address][byte_index*8 +: 8] <=
+                        write_data[byte_index*8 +: 8];
+            end
+        end
+        if (read_enable)
+            read_data <= memory[read_address];
+    end
+endmodule
+/* verilator lint_on DECLFILENAME */
