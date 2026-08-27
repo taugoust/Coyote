@@ -21,6 +21,18 @@ proc require_text {source needle path} {
     }
 }
 
+proc configured_templates {directory} {
+    set paths {}
+    foreach entry [glob -nocomplain -directory $directory *] {
+        if {[file isdirectory $entry]} {
+            set paths [concat $paths [configured_templates $entry]]
+        } elseif {[string match *.in $entry]} {
+            lappend paths $entry
+        }
+    }
+    return $paths
+}
+
 proc count_text {source needle} {
     set count 0
     set offset 0
@@ -35,7 +47,9 @@ proc count_text {source needle} {
 }
 
 lassign $argv base_path pnr_path physical_path app_link_path dyn_link_ultrascale_path dyn_link_versal_path dyn_finalize_path app_path ultrascale_path versal_path bitgen_path cmake_path
-foreach path [lrange $argv 0 10] {
+set source_root [file dirname [file dirname $cmake_path]]
+set script_root [file join $source_root scripts]
+foreach path [configured_templates $script_root] {
     set configured_template [read_source $path]
     if {[regexp {\$\{[a-z_]} $configured_template collision]} {
         puts stderr "$path contains Tcl runtime syntax '$collision' that configure_file would consume"
@@ -51,7 +65,22 @@ foreach {actual expected} [list \
     [file join $report_dir [format "%s_utilization%s.rpt" $prefix $report_suffix]] /reports/shell_route_utilization_c0.rpt \
     [file join $report_dir [format "%s_timing_summary%s.rpt" $prefix $report_suffix]] /reports/shell_route_timing_summary_c0.rpt \
     [file join $report_dir [format "%s_route_status%s.rpt" $prefix $report_suffix]] /reports/shell_route_route_status_c0.rpt \
-    [file join $report_dir [format "shell_%s_incremental_reuse%s.rpt" route $report_suffix]] /reports/shell_route_incremental_reuse_c0.rpt] {
+    [file join $report_dir [format "shell_%s_incremental_reuse%s.rpt" route $report_suffix]] /reports/shell_route_incremental_reuse_c0.rpt \
+    [file join $report_dir [format "%s_utilization%s.rpt" shell_opt $report_suffix]] /reports/shell_opt_utilization_c0.rpt \
+    [file join $report_dir [format "%s_timing_summary%s.rpt" shell_opt $report_suffix]] /reports/shell_opt_timing_summary_c0.rpt \
+    [file join $report_dir [format "%s_qor_assessment%s.rpt" shell_opt $report_suffix]] /reports/shell_opt_qor_assessment_c0.rpt \
+    [file join $report_dir [format "%s_utilization%s.rpt" shell_place $report_suffix]] /reports/shell_place_utilization_c0.rpt \
+    [file join $report_dir [format "%s_timing_summary%s.rpt" shell_place $report_suffix]] /reports/shell_place_timing_summary_c0.rpt \
+    [file join $report_dir [format "%s_qor_assessment%s.rpt" shell_place $report_suffix]] /reports/shell_place_qor_assessment_c0.rpt \
+    [file join $report_dir [format "%s_diagnosis%s.json" shell_place $report_suffix]] /reports/shell_place_diagnosis_c0.json \
+    [file join $report_dir [format "%s_congestion%s.rpt" shell_place $report_suffix]] /reports/shell_place_congestion_c0.rpt \
+    [file join $report_dir [format "%s_complexity%s.rpt" shell_place $report_suffix]] /reports/shell_place_complexity_c0.rpt \
+    [file join $report_dir [format "%s_logic_levels%s.rpt" shell_place $report_suffix]] /reports/shell_place_logic_levels_c0.rpt \
+    [file join $report_dir [format "%s_high_fanout%s.rpt" shell_place $report_suffix]] /reports/shell_place_high_fanout_c0.rpt \
+    [file join $report_dir [format "%s_utilization%s.rpt" shell $report_suffix]] /reports/shell_utilization_c0.rpt \
+    [file join $report_dir [format "%s_timing_summary%s.rpt" shell $report_suffix]] /reports/shell_timing_summary_c0.rpt \
+    [file join $report_dir [format "%s_route_status%s.rpt" shell $report_suffix]] /reports/shell_route_status_c0.rpt \
+    [file join $report_dir [format "shell_drc_bitstream_checks%s.rpt" $report_suffix]] /reports/shell_drc_bitstream_checks_c0.rpt] {
     if {$actual ne $expected} {
         puts stderr "runtime report path '$actual' does not match '$expected'"
         exit 1
