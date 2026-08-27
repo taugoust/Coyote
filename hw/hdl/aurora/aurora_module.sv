@@ -344,28 +344,14 @@ module aurora_module (
     // can overflow. While the threshold remains asserted, refresh the maximum
     // pause request whenever Aurora accepts the prior command; send zero once
     // occupancy falls below the threshold to resume promptly.
-    logic nfc_paused;
-    always_ff @(posedge user_clk_out) begin
-        if (!user_rstn || !channel_up_w) begin
-            nfc_tdata <= '0;
-            nfc_tvalid <= 1'b0;
-            nfc_paused <= 1'b0;
-        end else begin
-            if (nfc_tvalid && nfc_tready)
-                nfc_tvalid <= 1'b0;
-            if (rx_fifo_prog_full) begin
-                nfc_paused <= 1'b1;
-                if (!nfc_tvalid) begin
-                    nfc_tdata <= 16'hffff;
-                    nfc_tvalid <= 1'b1;
-                end
-            end else if (nfc_paused) begin
-                nfc_paused <= 1'b0;
-                nfc_tdata <= 16'h0000;
-                nfc_tvalid <= 1'b1;
-            end
-        end
-    end
+    aurora_nfc_controller inst_nfc_controller (
+        .aclk(user_clk_out),
+        .aresetn(user_rstn && channel_up_w),
+        .fifo_almost_full(rx_fifo_prog_full),
+        .command_data(nfc_tdata),
+        .command_valid(nfc_tvalid),
+        .command_ready(nfc_tready)
+    );
 
     // Refusal after proactive NFC is a transport-integrity fault. Latch it,
     // withdraw the endpoint, and restart the Aurora initialization sequence;

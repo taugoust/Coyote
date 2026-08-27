@@ -53,6 +53,39 @@ endmodule
 // One 512-bit FIFO write is produced for every pair of Aurora transfers. A
 // short transfer ending in the low half is zero-padded. The source cannot be
 // backpressured, so refusal of a completed packed beat is reported explicitly.
+module aurora_nfc_controller (
+    input  logic        aclk,
+    input  logic        aresetn,
+    input  logic        fifo_almost_full,
+    output logic [15:0] command_data,
+    output logic        command_valid,
+    input  logic        command_ready
+);
+    logic paused;
+
+    always_ff @(posedge aclk) begin
+        if (!aresetn) begin
+            command_data <= '0;
+            command_valid <= 1'b0;
+            paused <= 1'b0;
+        end else begin
+            if (command_valid && command_ready)
+                command_valid <= 1'b0;
+            if (fifo_almost_full) begin
+                paused <= 1'b1;
+                if (!command_valid) begin
+                    command_data <= 16'hffff;
+                    command_valid <= 1'b1;
+                end
+            end else if (paused) begin
+                paused <= 1'b0;
+                command_data <= 16'h0000;
+                command_valid <= 1'b1;
+            end
+        end
+    end
+endmodule
+
 module aurora_rx_256_to_512 (
     input  logic         aclk,
     input  logic         aresetn,

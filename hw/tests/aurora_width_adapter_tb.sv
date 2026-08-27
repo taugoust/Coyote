@@ -26,6 +26,10 @@ module aurora_width_adapter_tb;
     logic rx_m_valid;
     logic rx_m_ready;
     logic rx_overflow;
+    logic nfc_almost_full;
+    logic [15:0] nfc_command_data;
+    logic nfc_command_valid;
+    logic nfc_command_ready;
 
     aurora_tx_512_to_256 tx_dut (
         .aclk(clk), .aresetn(resetn),
@@ -33,6 +37,12 @@ module aurora_width_adapter_tb;
         .s_tvalid(tx_s_valid), .s_tready(tx_s_ready),
         .m_tdata(tx_m_data), .m_tkeep(tx_m_keep), .m_tlast(tx_m_last),
         .m_tvalid(tx_m_valid), .m_tready(tx_m_ready)
+    );
+
+    aurora_nfc_controller nfc_dut (
+        .aclk(clk), .aresetn(resetn), .fifo_almost_full(nfc_almost_full),
+        .command_data(nfc_command_data), .command_valid(nfc_command_valid),
+        .command_ready(nfc_command_ready)
     );
 
     aurora_rx_256_to_512 rx_dut (
@@ -55,6 +65,8 @@ module aurora_width_adapter_tb;
         rx_s_last = 1'b0;
         rx_s_valid = 1'b0;
         rx_m_ready = 1'b1;
+        nfc_almost_full = 1'b0;
+        nfc_command_ready = 1'b1;
         repeat (3) @(posedge clk);
         resetn = 1'b1;
 
@@ -83,6 +95,30 @@ module aurora_width_adapter_tb;
         #1;
         if (tx_m_valid)
             $fatal(1, "TX high half did not retire");
+
+        // Crossing the FIFO safety threshold issues and refreshes an immediate
+        // maximum pause; leaving it issues one zero-duration resume command.
+        @(negedge clk);
+        nfc_almost_full = 1'b1;
+        @(posedge clk);
+        #1;
+        if (!nfc_command_valid || nfc_command_data != 16'hffff)
+            $fatal(1, "NFC pause was not issued");
+        @(posedge clk);
+        #1;
+        if (nfc_command_valid)
+            $fatal(1, "accepted NFC pause did not retire");
+        @(posedge clk);
+        #1;
+        if (!nfc_command_valid || nfc_command_data != 16'hffff)
+            $fatal(1, "NFC pause was not refreshed");
+        @(negedge clk);
+        nfc_almost_full = 1'b0;
+        @(posedge clk);
+        #1;
+        if (!nfc_command_valid || nfc_command_data != 16'h0000)
+            $fatal(1, "NFC resume was not issued");
+        @(posedge clk);
 
         // Four consecutive push-only Aurora halves produce two consecutive
         // packed FIFO writes without an inserted destination-clock bubble.
