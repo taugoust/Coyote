@@ -258,6 +258,8 @@ module r5_packet_queue_provider #(
     logic tx_attr_written [0:MAX_PACKET_BEATS-1];
     logic [KEEP_BITS-1:0] tx_stage_keep [0:MAX_PACKET_BEATS-1];
     logic tx_stage_last [0:MAX_PACKET_BEATS-1];
+    // Cleared as one compact mask between stages; stale per-beat payload metadata
+    // is initialized only when firmware first touches that beat.
     logic [MAX_PACKET_BEATS-1:0] tx_metadata_current;
     logic [MAX_PACKET_BEATS-1:0] tx_intermediate_valid;
     logic [MAX_PACKET_BEATS-1:0] tx_final_valid;
