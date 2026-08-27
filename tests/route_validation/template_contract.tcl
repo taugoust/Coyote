@@ -133,7 +133,7 @@ foreach required {
     {set_param general.maxThreads $cfg(cores)}
     {open_checkpoint $input_dcp}
     {pblock_aurora_qsfp1}
-    {CLOCKREGION_X0Y8:CLOCKREGION_X7Y11}
+    {CLOCKREGION_X0Y8:CLOCKREGION_X3Y11}
     {Expected exactly one U280 Aurora peer backend}
     {switch -- $phase}
     {opt_design}
