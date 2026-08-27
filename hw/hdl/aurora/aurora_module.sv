@@ -307,6 +307,11 @@ module aurora_module (
     wire         rx_fifo_ready;
     wire         rx_pack_overflow;
     wire         rx_fifo_prog_full;
+    wire [511:0] rx_cdc_data;
+    wire [63:0]  rx_cdc_keep;
+    wire         rx_cdc_last;
+    wire         rx_cdc_valid;
+    wire         rx_cdc_ready;
 
     aurora_rx_256_to_512 inst_rx_width_adapter (
         .aclk      (user_clk_out),
@@ -332,12 +337,30 @@ module aurora_module (
         .s_axis_tkeep   (rx_packed_keep),
         .s_axis_tlast   (rx_packed_last),
         .m_axis_aclk    (aclk),
-        .m_axis_tvalid  (m_aurora_rx.tvalid),
-        .m_axis_tready  (m_aurora_rx.tready),
-        .m_axis_tdata   (m_aurora_rx.tdata),
-        .m_axis_tkeep   (m_aurora_rx.tkeep),
-        .m_axis_tlast   (m_aurora_rx.tlast),
+        .m_axis_tvalid  (rx_cdc_valid),
+        .m_axis_tready  (rx_cdc_ready),
+        .m_axis_tdata   (rx_cdc_data),
+        .m_axis_tkeep   (rx_cdc_keep),
+        .m_axis_tlast   (rx_cdc_last),
         .prog_full      (rx_fifo_prog_full)
+    );
+
+    // Break downstream arbitration and record-validation backpressure before it
+    // reaches the RX FIFO RAM enable. The queue is inside the Aurora hierarchy
+    // and therefore remains local to the bounded Aurora placement region.
+    aurora_axis_skid_buffer inst_rx_output_buffer (
+        .aclk      (aclk),
+        .aresetn   (tx_fifo_aresetn),
+        .s_tdata   (rx_cdc_data),
+        .s_tkeep   (rx_cdc_keep),
+        .s_tlast   (rx_cdc_last),
+        .s_tvalid  (rx_cdc_valid),
+        .s_tready  (rx_cdc_ready),
+        .m_tdata   (m_aurora_rx.tdata),
+        .m_tkeep   (m_aurora_rx.tkeep),
+        .m_tlast   (m_aurora_rx.tlast),
+        .m_tvalid  (m_aurora_rx.tvalid),
+        .m_tready  (m_aurora_rx.tready)
     );
 
     // Immediate NFC pauses the remote transmitter before the finite RX FIFO
