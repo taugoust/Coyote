@@ -1,0 +1,3 @@
+# The static clock wizard already buffers dclk. Do not insert another global
+# clock buffer after the clock crosses into the shell reconfigurable partition.
+set_property CLOCK_BUFFER_TYPE NONE [get_ports dclk]

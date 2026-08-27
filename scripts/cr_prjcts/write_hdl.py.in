@@ -130,9 +130,9 @@ if arg1 == 1 :
     renderhdl(env_common, 'shell_top', shell_dir, 0)
     renderhdl(env_common, 'shell_ctrl', shell_dir, 0)
 
-    # Shell clock (Versal-only; see templates/versal/shell_clk_tmplt.txt for more details)
-    if cfg['fpga_arch'] == 'versal': 
-        renderxdc(env_platform, 'shell_clk', f'{proj_dir}/xdc')
+    # Preserve the already buffered static clock when it crosses into the shell
+    # reconfigurable partition. Platform templates select the boundary port.
+    renderxdc(env_platform, 'shell_clk', f'{proj_dir}/xdc')
 
     # Dynamic layer
     renderhdl(env_common, 'dynamic_top', shell_dir, 0)
