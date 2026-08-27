@@ -24,6 +24,7 @@ source_required = {
     "synchronous packet prefetch": r"tx_output_entry\s*<=\s*tx_memory_read_data",
     "registered packet memory read": r"read_data\s*<=\s*memory\[read_address\]",
     "staging-local keep metadata": r"tx_stage_keep",
+    "lazy per-beat metadata initialization": r"tx_metadata_current",
 }
 for description, pattern in source_required.items():
     if re.search(pattern, source, flags=re.DOTALL) is None:
@@ -38,6 +39,13 @@ for direction in ("rx", "tx"):
 for forbidden_storage in ("tx_packet_memory", "rx_data", "rx_keep", "rx_last"):
     if re.search(rf"\b{forbidden_storage}\s*\[", source):
         sys.exit(f"R5 packet storage bypasses isolated byte memory: {forbidden_storage}")
+
+if re.search(
+    r"for\s*\([^)]*MAX_PACKET_BEATS.*?tx_(?:data|keep)_written",
+    source,
+    flags=re.DOTALL,
+):
+    sys.exit("R5 transmit metadata regressed to a whole-packet clear loop")
 
 required = {
     "intermediate validity metadata": r"tx_intermediate_valid",
