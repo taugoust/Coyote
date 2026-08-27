@@ -35,7 +35,28 @@ proc count_text {source needle} {
 }
 
 lassign $argv base_path pnr_path physical_path app_link_path dyn_link_ultrascale_path dyn_link_versal_path dyn_finalize_path app_path ultrascale_path versal_path bitgen_path cmake_path
+foreach path [lrange $argv 0 10] {
+    set configured_template [read_source $path]
+    if {[regexp {\$\{[a-z_]} $configured_template collision]} {
+        puts stderr "$path contains Tcl runtime syntax '$collision' that configure_file would consume"
+        exit 1
+    }
+}
 set base [read_source $base_path]
+
+set report_dir /reports
+set prefix shell_route
+set report_suffix _c0
+foreach {actual expected} [list \
+    [file join $report_dir [format "%s_utilization%s.rpt" $prefix $report_suffix]] /reports/shell_route_utilization_c0.rpt \
+    [file join $report_dir [format "%s_timing_summary%s.rpt" $prefix $report_suffix]] /reports/shell_route_timing_summary_c0.rpt \
+    [file join $report_dir [format "%s_route_status%s.rpt" $prefix $report_suffix]] /reports/shell_route_route_status_c0.rpt \
+    [file join $report_dir [format "shell_%s_incremental_reuse%s.rpt" route $report_suffix]] /reports/shell_route_incremental_reuse_c0.rpt] {
+    if {$actual ne $expected} {
+        puts stderr "runtime report path '$actual' does not match '$expected'"
+        exit 1
+    }
+}
 
 foreach required {
     {proc finalize_post_route_optimization}
@@ -61,6 +82,9 @@ foreach required {
     report_timing_summary
     require_clean_bitstream_drc
     require_timing_closure
+    {[format "%s_utilization%s.rpt" $prefix $report_suffix]}
+    {[format "%s_timing_summary%s.rpt" $prefix $report_suffix]}
+    {[format "%s_route_status%s.rpt" $prefix $report_suffix]}
 } {
     require_text $base $required $base_path
 }
@@ -127,6 +151,7 @@ foreach required {
     {set incremental_reference_dcp "${IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP}"}
     {read_checkpoint -incremental $incremental_reference_dcp}
     {report_incremental_reuse}
+    {[format "shell_%s_incremental_reuse%s.rpt" $phase $report_suffix]}
     {set enforce_timing "${IMPLEMENTATION_ENFORCE_TIMING}"}
     {set outcome rejected}
     {write_checkpoint -force $output_dcp}
