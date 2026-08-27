@@ -431,7 +431,7 @@ proc write_implementation_observations {phase report_dir report_suffix output_pa
         set rqa_report [file join $report_dir [format "%s_qor_assessment%s.rpt" $prefix $report_suffix]]
         if {![catch {
             report_qor_assessment -file $rqa_report
-            set rqa [get_assessment_score]
+            set rqa [expr {int([get_assessment_score])}]
         }]} {
             if {![string is integer -strict $rqa] || $rqa < 1 || $rqa > 5} { set rqa "" }
         }

@@ -106,7 +106,7 @@ foreach required {
     {report_high_fanout_nets -max_nets 100}
     {proc implementation_timing_totals}
     {proc implementation_route_count}
-    get_assessment_score
+    {set rqa [expr {int([get_assessment_score])}]}
     report_route_status
     report_timing_summary
     require_clean_bitstream_drc
