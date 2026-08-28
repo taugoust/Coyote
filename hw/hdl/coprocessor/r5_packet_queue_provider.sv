@@ -356,6 +356,14 @@ module r5_packet_queue_provider #(
     logic tx_stage_write_success;
     logic rx_pop_success;
     logic tx_commit_success;
+    logic tx_commit_validation_active;
+    logic [PACKET_BEAT_COUNT_BITS-1:0] tx_commit_validation_beat;
+    logic tx_commit_apply;
+    logic rx_completion_valid;
+    logic [PACKET_BEAT_COUNT_BITS-1:0] rx_completion_beats;
+    logic [12:0] rx_completion_bytes;
+    logic [31:0] rx_completion_generation;
+    logic [31:0] rx_completion_token;
     logic tx_cancel_success;
     logic identity_publish_success;
     logic generation_ack_success;
@@ -379,16 +387,6 @@ module r5_packet_queue_provider #(
             // putting a KEEP_BITS-wide increment carry chain in packet accept.
             invalid_zero_to_one_transitions = (~keep) & (keep >> 1);
             final_keep_valid = keep[0] && !(|invalid_zero_to_one_transitions);
-        end
-    endfunction
-
-    function automatic [12:0] keep_byte_count(input logic [KEEP_BITS-1:0] keep);
-        integer index;
-        begin
-            keep_byte_count = '0;
-            for (index = 0; index < KEEP_BITS; index = index + 1) begin
-                keep_byte_count = keep_byte_count + keep[index];
-            end
         end
     endfunction
 
@@ -440,25 +438,6 @@ module r5_packet_queue_provider #(
         begin
             keep_with_word = keep;
             keep_with_word[word_index*32 +: 32] = word;
-        end
-    endfunction
-
-    function automatic logic tx_stage_packet_valid;
-        logic [MAX_PACKET_BEATS-1:0] required_intermediate;
-        begin
-            tx_stage_packet_valid = 1'b0;
-            required_intermediate = '0;
-            if (tx_stage_beats > 0 && tx_stage_beats <= MAX_PACKET_BEATS) begin
-                if (tx_stage_beats > 1) begin
-                    required_intermediate =
-                        ({{(MAX_PACKET_BEATS-1){1'b0}}, 1'b1} <<
-                         (tx_stage_beats - 1'b1)) - 1'b1;
-                end
-                tx_stage_packet_valid =
-                    (tx_intermediate_valid & required_intermediate) ==
-                        required_intermediate &&
-                    tx_final_valid[tx_stage_beats - 1'b1];
-            end
         end
     endfunction
 
@@ -526,8 +505,10 @@ module r5_packet_queue_provider #(
     endfunction
 
     always_comb begin
-        s_axi_awready = !aw_held && !s_axi_bvalid;
-        s_axi_wready = !w_held && !s_axi_bvalid;
+        s_axi_awready = !aw_held && !s_axi_bvalid &&
+                        !tx_commit_validation_active;
+        s_axi_wready = !w_held && !s_axi_bvalid &&
+                       !tx_commit_validation_active;
         s_axi_arready = !read_pending && !s_axi_rvalid;
         write_execute = aw_held && w_held && !s_axi_bvalid;
         write_epoch_valid = held_aw_epoch == held_w_epoch && held_aw_epoch == transport_epoch;
@@ -645,8 +626,6 @@ module r5_packet_queue_provider #(
                         write_result = RESULT_BAD_TOKEN;
                     end else if (tx_count == QUEUE_DEPTH) begin
                         write_result = RESULT_FULL;
-                    end else if (!tx_stage_packet_valid()) begin
-                        write_result = RESULT_INCOMPLETE;
                     end else begin
                         tx_commit_success = 1'b1;
                     end
@@ -785,7 +764,7 @@ module r5_packet_queue_provider #(
                               s_axis_request_generation == active_generation;
         rx_malformed_event = rx_handshake && (!rx_keep_valid || !rx_generation_valid ||
                              (!s_axis_request_tlast && rx_input_beat == MAX_PACKET_BEATS - 1));
-        rx_push_event = rx_handshake && s_axis_request_tlast && rx_keep_valid && rx_generation_valid;
+        rx_push_event = rx_completion_valid;
         tx_pop_event = m_axis_response_tvalid && m_axis_response_tready && m_axis_response_tlast;
         mmio_timeout_event = mmio_busy && mmio_timeout_count == MMIO_TIMEOUT_CYCLES - 1;
     end
@@ -936,6 +915,10 @@ module r5_packet_queue_provider #(
             tx_output_generation <= '0;
             tx_stage_beats <= '0;
             tx_stage_dirty <= 1'b0;
+            tx_commit_validation_active <= 1'b0;
+            tx_commit_validation_beat <= '0;
+            tx_commit_apply <= 1'b0;
+            rx_completion_valid <= 1'b0;
             tx_metadata_current <= '0;
             tx_intermediate_valid <= '0;
             tx_final_valid <= '0;
@@ -977,6 +960,8 @@ module r5_packet_queue_provider #(
             rx_memory_write_bytes <= rx_memory_write_bytes_next;
             rx_memory_write_data <= rx_memory_write_data_next;
             tx_memory_write_enable <= 1'b0;
+            tx_commit_apply <= 1'b0;
+            rx_completion_valid <= 1'b0;
             tx_rejection_event <= 1'b0;
             if (tx_rejection_event)
                 tx_rejected <= saturating_increment(tx_rejected);
@@ -1025,10 +1010,17 @@ module r5_packet_queue_provider #(
             if (write_execute) begin
                 aw_held <= 1'b0;
                 w_held <= 1'b0;
-                s_axi_bresp <= write_bus_response;
-                s_axi_bvalid <= 1'b1;
+                if (!(write_opcode == CMD_TX_COMMIT && tx_commit_success)) begin
+                    s_axi_bresp <= write_bus_response;
+                    s_axi_bvalid <= 1'b1;
+                end else begin
+                    tx_commit_validation_active <= 1'b1;
+                    tx_commit_validation_beat <= '0;
+                end
 
-                if (write_known && write_bus_response == AXI_OKAY && write_opcode != CMD_NONE) begin
+                if (write_known && write_bus_response == AXI_OKAY &&
+                    write_opcode != CMD_NONE &&
+                    !(write_opcode == CMD_TX_COMMIT && tx_commit_success)) begin
                     command_serial <= command_serial + 1'b1;
                     last_command_opcode <= write_opcode;
                     last_command_result <= write_result;
@@ -1207,6 +1199,43 @@ module r5_packet_queue_provider #(
                     tx_rejection_event <= 1'b1;
             end
 
+            if (tx_commit_validation_active) begin : validate_staged_packet
+                logic selected_beat_valid;
+                selected_beat_valid =
+                    tx_commit_validation_beat + 1'b1 == tx_stage_beats ?
+                    staged_final_valid(
+                        tx_data_written[tx_commit_validation_beat],
+                        tx_keep_written[tx_commit_validation_beat],
+                        tx_attr_written[tx_commit_validation_beat],
+                        tx_stage_keep[tx_commit_validation_beat],
+                        tx_stage_last[tx_commit_validation_beat]) :
+                    staged_intermediate_valid(
+                        tx_data_written[tx_commit_validation_beat],
+                        tx_keep_written[tx_commit_validation_beat],
+                        tx_attr_written[tx_commit_validation_beat],
+                        tx_stage_keep[tx_commit_validation_beat],
+                        tx_stage_last[tx_commit_validation_beat]);
+
+                if (!selected_beat_valid ||
+                    tx_commit_validation_beat + 1'b1 == tx_stage_beats) begin
+                    tx_commit_validation_active <= 1'b0;
+                    s_axi_bresp <= AXI_OKAY;
+                    s_axi_bvalid <= 1'b1;
+                    command_serial <= command_serial + 1'b1;
+                    last_command_opcode <= CMD_TX_COMMIT;
+                    last_command_result <= selected_beat_valid ?
+                                           RESULT_OK : RESULT_INCOMPLETE;
+                    last_command_token <= tx_stage_token;
+                    if (selected_beat_valid)
+                        tx_commit_apply <= 1'b1;
+                    else
+                        tx_rejection_event <= 1'b1;
+                end else begin
+                    tx_commit_validation_beat <=
+                        tx_commit_validation_beat + 1'b1;
+                end
+            end
+
             if (rx_handshake && !rx_malformed_event) begin
                 if (!rx_packet_open) begin
                     rx_packet_open <= 1'b1;
@@ -1215,19 +1244,28 @@ module r5_packet_queue_provider #(
                 if (s_axis_request_tlast) begin
                     rx_packet_open <= 1'b0;
                     rx_input_beat <= '0;
-                    rx_generation[rx_tail] <= active_generation;
-                    rx_token[rx_tail] <= next_rx_token;
-                    rx_beats[rx_tail] <= rx_input_beat + 1'b1;
-                    rx_bytes[rx_tail] <= rx_input_beat * KEEP_BITS + keep_byte_count(s_axis_request_tkeep);
-                    rx_tail <= next_slot(rx_tail);
-                    if (&next_rx_token) begin
-                        fault_code <= 32'h0002_0001;
-                        fault_detail <= next_rx_token;
-                    end else begin
-                        next_rx_token <= next_rx_token + 1'b1;
-                    end
+                    rx_completion_valid <= 1'b1;
+                    rx_completion_generation <= active_generation;
+                    rx_completion_token <= next_rx_token;
+                    rx_completion_beats <= rx_input_beat + 1'b1;
+                    rx_completion_bytes <=
+                        rx_input_beat * KEEP_BITS +
+                        13'($countones(s_axis_request_tkeep));
                 end else begin
                     rx_input_beat <= rx_input_beat + 1'b1;
+                end
+            end
+            if (rx_completion_valid) begin
+                rx_generation[rx_tail] <= rx_completion_generation;
+                rx_token[rx_tail] <= rx_completion_token;
+                rx_beats[rx_tail] <= rx_completion_beats;
+                rx_bytes[rx_tail] <= rx_completion_bytes;
+                rx_tail <= next_slot(rx_tail);
+                if (&rx_completion_token) begin
+                    fault_code <= 32'h0002_0001;
+                    fault_detail <= rx_completion_token;
+                end else begin
+                    next_rx_token <= rx_completion_token + 1'b1;
                 end
             end
             if (rx_malformed_event) begin
@@ -1238,7 +1276,7 @@ module r5_packet_queue_provider #(
                 fault_detail <= {24'd0, s_axis_request_tlast, s_axis_request_tid};
             end
 
-            if (tx_commit_success) begin
+            if (tx_commit_apply) begin
                 tx_generation[tx_tail] <= active_generation;
                 tx_tail <= next_slot(tx_tail);
                 tx_stage_dirty <= 1'b0;
@@ -1296,7 +1334,7 @@ module r5_packet_queue_provider #(
                 2'b11: rx_head <= next_slot(rx_head);
                 default: ;
             endcase
-            case ({tx_commit_success, tx_pop_event})
+            case ({tx_commit_apply, tx_pop_event})
                 2'b10: tx_count <= tx_count + 1'b1;
                 2'b01: tx_count <= tx_count - 1'b1;
                 default: ;
