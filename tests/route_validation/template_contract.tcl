@@ -70,10 +70,15 @@ set base [read_source $base_path]
 # A closed routed design must remain untouched, while either setup or hold failure
 # requires physical optimization followed by routing. Missing timing evidence
 # fails closed instead of silently preserving an unverified result.
+eval [extract_proc $base routed_design_worst_slacks]
 eval [extract_proc $base routed_design_needs_post_route_optimization]
+eval [extract_proc $base routed_candidate_is_better]
+eval [extract_proc $base optimize_and_retain_best_routed_candidate]
 eval [extract_proc $base finalize_post_route_optimization]
 array set mock_slack {max 0.003 min 0.012}
+array set routed_slack {max 0.003 min 0.012}
 set mock_missing ""
+set apply_routed_slack 0
 set implementation_calls {}
 proc get_timing_paths {args} {
     set delay_type [lindex $args [expr {[lsearch -exact $args -delay_type] + 1}]]
@@ -88,12 +93,27 @@ proc get_property {property path} {
     }
     return $::mock_slack($path)
 }
+proc write_checkpoint {args} {
+    lappend ::implementation_calls [list write_checkpoint {*}$args]
+}
 proc phys_opt_design {args} {
     lappend ::implementation_calls [list phys_opt_design {*}$args]
 }
 proc route_design {args} {
     lappend ::implementation_calls [list route_design {*}$args]
+    if {$::apply_routed_slack} {
+        foreach delay_type {max min} {
+            set ::mock_slack($delay_type) $::routed_slack($delay_type)
+        }
+    }
 }
+proc close_design {} {
+    lappend ::implementation_calls close_design
+}
+proc open_checkpoint {path} {
+    lappend ::implementation_calls [list open_checkpoint $path]
+}
+set cfg(build_dir) /build
 set cfg(build_opt) 1
 finalize_post_route_optimization
 require_equal $implementation_calls {} "closed routed design finalization"
@@ -102,8 +122,23 @@ foreach failing_type {max min} {
     set mock_slack($failing_type) -0.001
     set implementation_calls {}
     finalize_post_route_optimization
-    require_equal $implementation_calls {{phys_opt_design -directive AggressiveExplore} route_design} "$failing_type failure finalization"
+    require_equal $implementation_calls \
+        {{write_checkpoint -force /build/checkpoints/routed_candidate.dcp} {phys_opt_design -directive AggressiveExplore} route_design} \
+        "$failing_type failure finalization"
 }
+require_equal [routed_candidate_is_better {-0.100 0.010} {-0.200 0.020}] 1 \
+    "better routed setup candidate"
+require_equal [routed_candidate_is_better {-0.100 -0.010} {-0.200 0.020}] 0 \
+    "candidate with more failing timing classes"
+array set mock_slack {max -0.100 min 0.010}
+array set routed_slack {max -0.200 min 0.020}
+set apply_routed_slack 1
+set implementation_calls {}
+finalize_post_route_optimization
+require_equal $implementation_calls \
+    {{write_checkpoint -force /build/checkpoints/routed_candidate.dcp} {phys_opt_design -directive AggressiveExplore} route_design close_design {open_checkpoint /build/checkpoints/routed_candidate.dcp}} \
+    "regressed routed candidate restoration"
+set apply_routed_slack 0
 array set mock_slack {max 0.003 min 0.012}
 set mock_missing min
 set implementation_calls {}
@@ -120,8 +155,11 @@ finalize_post_route_optimization
 require_equal $implementation_calls {} "unoptimized compatibility finalization"
 rename get_timing_paths {}
 rename get_property {}
+rename write_checkpoint {}
 rename phys_opt_design {}
 rename route_design {}
+rename close_design {}
+rename open_checkpoint {}
 
 set report_dir /reports
 set prefix shell_route
@@ -138,10 +176,12 @@ foreach {actual expected} [list \
 }
 
 foreach required {
+    {proc routed_design_worst_slacks}
     {proc routed_design_needs_post_route_optimization}
+    {proc routed_candidate_is_better}
+    {proc optimize_and_retain_best_routed_candidate}
     {proc finalize_post_route_optimization}
     {if {![routed_design_needs_post_route_optimization]}}
-    {phys_opt_design -directive AggressiveExplore}
     route_design
     {proc report_bitstream_drc}
     {proc require_clean_bitstream_drc}
