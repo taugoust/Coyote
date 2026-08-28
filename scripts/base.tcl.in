@@ -232,18 +232,74 @@ proc color {fore text} {
 # routing again before any checkpoint is validated, locked, or used for images.
 # Keep an already closed routed result unchanged: Vivado skips every optimization
 # when setup and hold pass, but a subsequent route_design can still perturb it.
-proc routed_design_needs_post_route_optimization {} {
-    set needs_optimization 0
+proc routed_design_worst_slacks {} {
+    set slacks {}
     foreach delay_type {max min} {
         set paths [get_timing_paths -delay_type $delay_type -max_paths 1 -nworst 1]
         if {[llength $paths] == 0} {
             error "No $delay_type timing path is available before post-route finalization"
         }
-        if {[get_property SLACK [lindex $paths 0]] < 0.0} {
-            set needs_optimization 1
+        lappend slacks [get_property SLACK [lindex $paths 0]]
+    }
+    return $slacks
+}
+
+proc routed_design_needs_post_route_optimization {} {
+    foreach slack [routed_design_worst_slacks] {
+        if {$slack < 0.0} {
+            return 1
         }
     }
-    return $needs_optimization
+    return 0
+}
+
+# Prefer fewer failing setup/hold classes, then maximize the worst slack. The
+# sum is only a deterministic tie breaker. Detailed telemetry and canonical
+# validation remain responsible for reporting and accepting the selected DCP.
+proc routed_candidate_is_better {candidate_slacks current_slacks} {
+    set candidate_failures 0
+    set current_failures 0
+    foreach slack $candidate_slacks {
+        if {$slack < 0.0} { incr candidate_failures }
+    }
+    foreach slack $current_slacks {
+        if {$slack < 0.0} { incr current_failures }
+    }
+    if {$candidate_failures != $current_failures} {
+        return [expr {$candidate_failures < $current_failures}]
+    }
+
+    set candidate_worst [expr {min([lindex $candidate_slacks 0], [lindex $candidate_slacks 1])}]
+    set current_worst [expr {min([lindex $current_slacks 0], [lindex $current_slacks 1])}]
+    if {$candidate_worst != $current_worst} {
+        return [expr {$candidate_worst > $current_worst}]
+    }
+    set candidate_sum [expr {[lindex $candidate_slacks 0] + [lindex $candidate_slacks 1]}]
+    set current_sum [expr {[lindex $current_slacks 0] + [lindex $current_slacks 1]}]
+    return [expr {$candidate_sum > $current_sum}]
+}
+
+proc optimize_and_retain_best_routed_candidate {post_directive final_directive candidate_checkpoint} {
+    set candidate_slacks [routed_design_worst_slacks]
+    write_checkpoint -force $candidate_checkpoint
+    if {$post_directive ne ""} {
+        phys_opt_design -directive $post_directive
+    } else {
+        phys_opt_design
+    }
+    if {$final_directive ne ""} {
+        route_design -directive $final_directive
+    } else {
+        route_design
+    }
+
+    set optimized_slacks [routed_design_worst_slacks]
+    if {[routed_candidate_is_better $candidate_slacks $optimized_slacks]} {
+        puts "INFO: Restoring the better fully routed candidate after post-route optimization regressed timing."
+        close_design
+        open_checkpoint $candidate_checkpoint
+    }
+    file delete -force $candidate_checkpoint
 }
 
 proc finalize_post_route_optimization {} {
@@ -253,8 +309,9 @@ proc finalize_post_route_optimization {} {
             puts "INFO: Skipping post-route physical optimization because setup and hold timing already pass."
             return
         }
-        phys_opt_design -directive AggressiveExplore
-        route_design
+        set candidate_checkpoint [file join $cnfg(build_dir) checkpoints routed_candidate.dcp]
+        optimize_and_retain_best_routed_candidate \
+            AggressiveExplore "" $candidate_checkpoint
     }
 }
 

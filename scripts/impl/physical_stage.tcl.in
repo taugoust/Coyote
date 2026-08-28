@@ -91,10 +91,11 @@ if {[catch {
                 set post_directive [expr {$cfg(build_opt) eq 1 ? "AggressiveExplore" : ""}]
             }
             if {$post_directive ne ""} {
-                phys_opt_design -directive $post_directive
                 set final_directive "${IMPLEMENTATION_FINAL_ROUTE_DIRECTIVE}"
                 if {$final_directive eq "project"} { set final_directive "" }
-                if {$final_directive ne ""} { route_design -directive $final_directive } else { route_design }
+                set candidate_checkpoint "[file rootname $output_dcp].routed_candidate.dcp"
+                optimize_and_retain_best_routed_candidate \
+                    $post_directive $final_directive $candidate_checkpoint
             }
         }
         validate {
