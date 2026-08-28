@@ -86,6 +86,12 @@ foreach xdc [glob -nocomplain "$dyn_impl_dir/*.xdc"] {
         continue
     }
     add_files -fileset [get_filesets constrs_1] $xdc
+    if {[string match "*zaurora*" $xdc_name]} {
+        # The Aurora OOC checkpoint carries generated PCIe-quad GT LOCs.
+        # Apply the board QSFP1 correction after all embedded IP constraints
+        # during link, rather than repairing an already-invalid linked DCP.
+        set_property PROCESSING_ORDER LATE [get_files $xdc]
+    }
 }
 set_property used_in_synthesis false [get_files -of_objects [get_filesets constrs_1]]
 set_property used_in_implementation true [get_files -of_objects [get_filesets constrs_1]]

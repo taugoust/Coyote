@@ -117,6 +117,11 @@ module aurora_module (
     wire         tx_tlast;
     wire         tx_tvalid;
     wire         tx_tready;
+    wire [255:0] tx_adapter_data;
+    wire [31:0]  tx_adapter_keep;
+    wire         tx_adapter_last;
+    wire         tx_adapter_valid;
+    wire         tx_adapter_ready;
 
     wire [255:0] rx_tdata;
     wire [31:0]  rx_tkeep;
@@ -293,6 +298,28 @@ module aurora_module (
         .s_tlast   (tx_fifo_last),
         .s_tvalid  (tx_fifo_valid),
         .s_tready  (tx_fifo_ready),
+        .m_tdata   (tx_adapter_data),
+        .m_tkeep   (tx_adapter_keep),
+        .m_tlast   (tx_adapter_last),
+        .m_tvalid  (tx_adapter_valid),
+        .m_tready  (tx_adapter_ready)
+    );
+
+    // Register the 402.8 MHz Aurora transmit boundary. The width adapter and
+    // asynchronous FIFO no longer drive the generated core's data, keep,
+    // last, valid, or ready cones directly. The two-entry queue sustains one
+    // 256-bit transfer per user clock after filling.
+    aurora_axis_skid_buffer #(
+        .DATA_W(256),
+        .KEEP_W(32)
+    ) inst_tx_output_buffer (
+        .aclk      (user_clk_out),
+        .aresetn   (user_rstn && channel_up_w),
+        .s_tdata   (tx_adapter_data),
+        .s_tkeep   (tx_adapter_keep),
+        .s_tlast   (tx_adapter_last),
+        .s_tvalid  (tx_adapter_valid),
+        .s_tready  (tx_adapter_ready),
         .m_tdata   (tx_tdata),
         .m_tkeep   (tx_tkeep),
         .m_tlast   (tx_tlast),
