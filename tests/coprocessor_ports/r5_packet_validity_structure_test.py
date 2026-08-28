@@ -23,12 +23,28 @@ source_required = {
     "isolated packet memory module": r"module\s+r5_packet_byte_memory",
     "synchronous packet prefetch": r"tx_output_entry\s*<=\s*tx_memory_read_data",
     "registered packet memory read": r"read_data\s*<=\s*memory\[read_address\]",
+    "staging-specific write authorization": r"tx_stage_write_success\s*=\s*1'b1",
+    "registered transmit write boundary": r"if\s*\(tx_stage_write_success\).*?tx_memory_write_enable\s*<=\s*1'b1",
+    "registered transmit write valid": r"tx_memory_write_enable\s*<=\s*1'b1",
+    "registered transmit write address": r"tx_memory_write_address\s*<=",
+    "registered transmit byte enables": r"tx_memory_write_bytes\s*<=",
+    "registered transmit write data": r"tx_memory_write_data\s*<=",
     "staging-local keep metadata": r"tx_stage_keep",
     "lazy per-beat metadata initialization": r"tx_metadata_current",
 }
 for description, pattern in source_required.items():
     if re.search(pattern, source, flags=re.DOTALL) is None:
         sys.exit(f"R5 transmit staging lacks {description}")
+
+memory_control_match = re.search(
+    r"always_comb\s+begin\s*:\s*packet_memory_control(?P<body>.*?)end\s*\n\s*always_comb",
+    source,
+    flags=re.DOTALL,
+)
+if memory_control_match is None:
+    sys.exit("R5 packet memory control block is missing")
+if re.search(r"tx_memory_write_(?:enable|address|bytes|data)\s*=", memory_control_match.group("body")):
+    sys.exit("R5 transmit BRAM write command regressed to combinational pins")
 
 for direction in ("rx", "tx"):
     if re.search(

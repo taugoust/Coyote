@@ -215,6 +215,9 @@ module r5_packet_queue_provider #(
     logic [PACKET_BEAT_COUNT_BITS-1:0] rx_beats [0:QUEUE_DEPTH-1];
     logic [12:0] rx_bytes [0:QUEUE_DEPTH-1];
 
+    // Register the complete byte-memory command before it reaches BRAM pins.
+    // AXI-Lite serializes staging writes through their response, so this extra
+    // storage cycle does not reduce accepted command throughput.
     logic tx_memory_write_enable;
     logic [PACKET_MEMORY_ADDR_BITS-1:0] tx_memory_write_address;
     logic [PACKET_MEMORY_BYTES-1:0] tx_memory_write_bytes;
@@ -341,6 +344,7 @@ module r5_packet_queue_provider #(
     logic [7:0] write_result;
     logic [1:0] write_bus_response;
     logic write_known;
+    logic tx_stage_write_success;
     logic rx_pop_success;
     logic tx_commit_success;
     logic tx_cancel_success;
@@ -521,6 +525,7 @@ module r5_packet_queue_provider #(
         write_result = RESULT_OK;
         write_bus_response = AXI_OKAY;
         write_known = 1'b1;
+        tx_stage_write_success = 1'b0;
         rx_pop_success = 1'b0;
         tx_commit_success = 1'b0;
         tx_cancel_success = 1'b0;
@@ -543,6 +548,8 @@ module r5_packet_queue_provider #(
                                (quiesce_acknowledged ? RESULT_QUIESCING : RESULT_STALE_GENERATION);
             end else if (tx_count == QUEUE_DEPTH) begin
                 write_result = RESULT_FULL;
+            end else begin
+                tx_stage_write_success = 1'b1;
             end
         end else if (write_address >= TX_KEEP_BASE && write_address < TX_KEEP_BASE + 16'h0200) begin
             write_opcode = CMD_TX_STAGE;
@@ -551,6 +558,8 @@ module r5_packet_queue_provider #(
                                (quiesce_acknowledged ? RESULT_QUIESCING : RESULT_STALE_GENERATION);
             end else if (tx_count == QUEUE_DEPTH) begin
                 write_result = RESULT_FULL;
+            end else begin
+                tx_stage_write_success = 1'b1;
             end
         end else if (write_address >= TX_ATTR_BASE && write_address < TX_ATTR_BASE + 16'h0100) begin
             write_opcode = CMD_TX_STAGE;
@@ -559,6 +568,8 @@ module r5_packet_queue_provider #(
                                (quiesce_acknowledged ? RESULT_QUIESCING : RESULT_STALE_GENERATION);
             end else if (tx_count == QUEUE_DEPTH) begin
                 write_result = RESULT_FULL;
+            end else begin
+                tx_stage_write_success = 1'b1;
             end
         end else begin
             case (write_address)
@@ -693,7 +704,6 @@ module r5_packet_queue_provider #(
 
     always_comb begin : packet_memory_control
         integer beat_index;
-        integer lane_index;
 
         rx_memory_write_enable = rx_handshake && !rx_malformed_event;
         rx_memory_write_address =
@@ -711,46 +721,6 @@ module r5_packet_queue_provider #(
         beat_index = rx_memory_beat(held_araddr[15:0]);
         rx_memory_read_address =
             PACKET_MEMORY_ADDR_BITS'(tx_memory_index(rx_head, beat_index));
-
-        tx_memory_write_enable = 1'b0;
-        tx_memory_write_address = '0;
-        tx_memory_write_bytes = '0;
-        tx_memory_write_data = '0;
-        beat_index = 0;
-        lane_index = 0;
-        if (write_execute && write_bus_response == AXI_OKAY &&
-            write_result == RESULT_OK) begin
-            if (write_address >= TX_DATA_BASE &&
-                write_address < TX_DATA_BASE + 16'h1000) begin
-                lane_index = ((write_address - TX_DATA_BASE) >> 2) % DATA_WORDS;
-                beat_index = ((write_address - TX_DATA_BASE) >> 2) / DATA_WORDS;
-                tx_memory_write_enable = 1'b1;
-                tx_memory_write_address = PACKET_MEMORY_ADDR_BITS'(
-                    tx_memory_index(tx_tail, beat_index));
-                tx_memory_write_bytes[lane_index*4 +: 4] = 4'hf;
-                tx_memory_write_data[lane_index*32 +: 32] = held_wdata;
-            end else if (write_address >= TX_KEEP_BASE &&
-                         write_address < TX_KEEP_BASE + 16'h0200) begin
-                lane_index = ((write_address - TX_KEEP_BASE) >> 2) % KEEP_WORDS;
-                beat_index = ((write_address - TX_KEEP_BASE) >> 2) / KEEP_WORDS;
-                tx_memory_write_enable = 1'b1;
-                tx_memory_write_address = PACKET_MEMORY_ADDR_BITS'(
-                    tx_memory_index(tx_tail, beat_index));
-                tx_memory_write_bytes[STREAM_DATA_BITS/8 + lane_index*4 +: 4] =
-                    4'hf;
-                tx_memory_write_data[TX_ENTRY_KEEP_LSB + lane_index*32 +: 32] =
-                    held_wdata;
-            end else if (write_address >= TX_ATTR_BASE &&
-                         write_address < TX_ATTR_BASE + 16'h0100) begin
-                beat_index = (write_address - TX_ATTR_BASE) >> 2;
-                tx_memory_write_enable = 1'b1;
-                tx_memory_write_address = PACKET_MEMORY_ADDR_BITS'(
-                    tx_memory_index(tx_tail, beat_index));
-                tx_memory_write_bytes[TX_ENTRY_ID_LSB/8] = 1'b1;
-                tx_memory_write_data[TX_ENTRY_ID_LSB +: STREAM_ID_BITS+1] =
-                    held_wdata[STREAM_ID_BITS:0];
-            end
-        end
 
         tx_memory_read_enable =
             (!tx_output_valid && !tx_memory_read_pending &&
@@ -945,6 +915,9 @@ module r5_packet_queue_provider #(
             tx_output_beat <= '0;
             tx_output_valid <= 1'b0;
             tx_memory_read_pending <= 1'b0;
+            // Validity alone resets the registered write command. Payload is
+            // overwritten before every assertion and is inaccessible otherwise.
+            tx_memory_write_enable <= 1'b0;
             tx_output_entry <= '0;
             tx_output_generation <= '0;
             tx_stage_beats <= '0;
@@ -985,6 +958,7 @@ module r5_packet_queue_provider #(
         end else begin
             provider_selected_d <= provider_selected;
             active_generation_d <= active_generation;
+            tx_memory_write_enable <= 1'b0;
 
             if (s_axi_bvalid && s_axi_bready) begin
                 s_axi_bvalid <= 1'b0;
@@ -1043,11 +1017,19 @@ module r5_packet_queue_provider #(
                     protocol_errors <= saturating_increment(protocol_errors);
                 end
 
-                if (write_bus_response == AXI_OKAY && write_result == RESULT_OK) begin
+                if (tx_stage_write_success) begin
                     if (write_address >= TX_DATA_BASE && write_address < TX_DATA_BASE + 16'h1000) begin
                         write_word_index = (write_address - TX_DATA_BASE) >> 2;
                         write_beat_index = write_word_index / DATA_WORDS;
                         write_lane_index = write_word_index % DATA_WORDS;
+                        tx_memory_write_enable <= 1'b1;
+                        tx_memory_write_address <= PACKET_MEMORY_ADDR_BITS'(
+                            tx_memory_index(tx_tail, write_beat_index));
+                        tx_memory_write_bytes <= '0;
+                        tx_memory_write_bytes[write_lane_index*4 +: 4] <= 4'hf;
+                        tx_memory_write_data <= '0;
+                        tx_memory_write_data[write_lane_index*32 +: 32] <=
+                            held_wdata;
                         if (tx_metadata_current[write_beat_index]) begin
                             tx_data_written[write_beat_index][write_lane_index] <= 1'b1;
                             tx_intermediate_valid[write_beat_index] <=
@@ -1082,6 +1064,17 @@ module r5_packet_queue_provider #(
                         write_word_index = (write_address - TX_KEEP_BASE) >> 2;
                         write_beat_index = write_word_index / KEEP_WORDS;
                         write_lane_index = write_word_index % KEEP_WORDS;
+                        tx_memory_write_enable <= 1'b1;
+                        tx_memory_write_address <= PACKET_MEMORY_ADDR_BITS'(
+                            tx_memory_index(tx_tail, write_beat_index));
+                        tx_memory_write_bytes <= '0;
+                        tx_memory_write_bytes[
+                            STREAM_DATA_BITS/8 + write_lane_index*4 +: 4] <=
+                            4'hf;
+                        tx_memory_write_data <= '0;
+                        tx_memory_write_data[
+                            TX_ENTRY_KEEP_LSB + write_lane_index*32 +: 32] <=
+                            held_wdata;
                         if (tx_metadata_current[write_beat_index]) begin
                             tx_stage_keep[write_beat_index][write_lane_index*32 +: 32] <=
                                 held_wdata;
@@ -1119,6 +1112,15 @@ module r5_packet_queue_provider #(
                         tx_stage_dirty <= 1'b1;
                     end else if (write_address >= TX_ATTR_BASE && write_address < TX_ATTR_BASE + 16'h0100) begin
                         write_beat_index = (write_address - TX_ATTR_BASE) >> 2;
+                        tx_memory_write_enable <= 1'b1;
+                        tx_memory_write_address <= PACKET_MEMORY_ADDR_BITS'(
+                            tx_memory_index(tx_tail, write_beat_index));
+                        tx_memory_write_bytes <= '0;
+                        tx_memory_write_bytes[TX_ENTRY_ID_LSB/8] <= 1'b1;
+                        tx_memory_write_data <= '0;
+                        tx_memory_write_data[
+                            TX_ENTRY_ID_LSB +: STREAM_ID_BITS+1] <=
+                            held_wdata[STREAM_ID_BITS:0];
                         if (tx_metadata_current[write_beat_index]) begin
                             tx_stage_last[write_beat_index] <= held_wdata[6];
                             tx_attr_written[write_beat_index] <= 1'b1;
@@ -1145,8 +1147,10 @@ module r5_packet_queue_provider #(
                         end
                         tx_metadata_current[write_beat_index] <= 1'b1;
                         tx_stage_dirty <= 1'b1;
-                    end else begin
-                        case (write_address)
+                    end
+                end else if (write_bus_response == AXI_OKAY &&
+                             write_result == RESULT_OK) begin
+                    case (write_address)
                             REG_COMMAND_GENERATION: if (generation_ack_success) command_generation <= held_wdata;
                             REG_RUNTIME_ABI: runtime_abi <= held_wdata[15:0];
                             REG_FIRMWARE_ABI: firmware_abi <= held_wdata[15:0];
@@ -1174,9 +1178,8 @@ module r5_packet_queue_provider #(
                                 mmio_operation_write <= held_wdata[0];
                                 mmio_write_strobe <= held_wdata[8:1];
                             end
-                            default: ;
-                        endcase
-                    end
+                        default: ;
+                    endcase
                 end
 
                 if (write_opcode == CMD_TX_COMMIT && !tx_commit_success) begin
