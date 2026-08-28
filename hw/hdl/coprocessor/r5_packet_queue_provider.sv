@@ -202,10 +202,18 @@ module r5_packet_queue_provider #(
     localparam logic [15:0] TX_KEEP_BASE = 16'h4000;
     localparam logic [15:0] TX_ATTR_BASE = 16'h4200;
 
+    // Register the complete receive-memory command after packet validity has
+    // been classified. This keeps the 64-bit final-keep carry chain and stream
+    // handshake qualification off the byte-memory BRAM pins while sustaining
+    // one accepted beat per cycle.
     logic rx_memory_write_enable;
     logic [PACKET_MEMORY_ADDR_BITS-1:0] rx_memory_write_address;
     logic [PACKET_MEMORY_BYTES-1:0] rx_memory_write_bytes;
     logic [PACKET_MEMORY_BITS-1:0] rx_memory_write_data;
+    logic rx_memory_write_enable_next;
+    logic [PACKET_MEMORY_ADDR_BITS-1:0] rx_memory_write_address_next;
+    logic [PACKET_MEMORY_BYTES-1:0] rx_memory_write_bytes_next;
+    logic [PACKET_MEMORY_BITS-1:0] rx_memory_write_data_next;
     logic rx_memory_read_enable;
     logic [PACKET_MEMORY_ADDR_BITS-1:0] rx_memory_read_address;
     logic [PACKET_MEMORY_BITS-1:0] rx_memory_read_data;
@@ -364,10 +372,13 @@ module r5_packet_queue_provider #(
     logic mmio_timeout_event;
 
     function automatic logic final_keep_valid(input logic [KEEP_BITS-1:0] keep);
-        logic [KEEP_BITS-1:0] incremented;
+        logic [KEEP_BITS-1:0] invalid_zero_to_one_transitions;
         begin
-            incremented = keep + 1'b1;
-            final_keep_valid = keep != '0 && (keep & incremented) == '0;
+            // A final keep mask is a nonempty run of ones from lane zero.
+            // Check for a one above any zero with a reduction tree instead of
+            // putting a KEEP_BITS-wide increment carry chain in packet accept.
+            invalid_zero_to_one_transitions = (~keep) & (keep >> 1);
+            final_keep_valid = keep[0] && !(|invalid_zero_to_one_transitions);
         end
     endfunction
 
@@ -706,15 +717,15 @@ module r5_packet_queue_provider #(
     always_comb begin : packet_memory_control
         integer beat_index;
 
-        rx_memory_write_enable = rx_handshake && !rx_malformed_event;
-        rx_memory_write_address =
+        rx_memory_write_enable_next = rx_handshake && !rx_malformed_event;
+        rx_memory_write_address_next =
             PACKET_MEMORY_ADDR_BITS'(tx_memory_index(rx_tail, rx_input_beat));
-        rx_memory_write_bytes = {PACKET_MEMORY_BYTES{1'b1}};
-        rx_memory_write_data = '0;
-        rx_memory_write_data[STREAM_DATA_BITS-1:0] = s_axis_request_tdata;
-        rx_memory_write_data[TX_ENTRY_KEEP_LSB +: KEEP_BITS] = s_axis_request_tkeep;
-        rx_memory_write_data[TX_ENTRY_ID_LSB +: STREAM_ID_BITS] = s_axis_request_tid;
-        rx_memory_write_data[TX_ENTRY_LAST_BIT] = s_axis_request_tlast;
+        rx_memory_write_bytes_next = {PACKET_MEMORY_BYTES{1'b1}};
+        rx_memory_write_data_next = '0;
+        rx_memory_write_data_next[STREAM_DATA_BITS-1:0] = s_axis_request_tdata;
+        rx_memory_write_data_next[TX_ENTRY_KEEP_LSB +: KEEP_BITS] = s_axis_request_tkeep;
+        rx_memory_write_data_next[TX_ENTRY_ID_LSB +: STREAM_ID_BITS] = s_axis_request_tid;
+        rx_memory_write_data_next[TX_ENTRY_LAST_BIT] = s_axis_request_tlast;
 
         rx_memory_read_enable = read_pending && !s_axi_rvalid &&
                                 !rx_memory_read_issued &&
@@ -917,8 +928,9 @@ module r5_packet_queue_provider #(
             tx_output_beat <= '0;
             tx_output_valid <= 1'b0;
             tx_memory_read_pending <= 1'b0;
-            // Validity alone resets the registered write command. Payload is
+            // Validity alone resets the registered write commands. Payload is
             // overwritten before every assertion and is inaccessible otherwise.
+            rx_memory_write_enable <= 1'b0;
             tx_memory_write_enable <= 1'b0;
             tx_output_entry <= '0;
             tx_output_generation <= '0;
@@ -960,6 +972,10 @@ module r5_packet_queue_provider #(
         end else begin
             provider_selected_d <= provider_selected;
             active_generation_d <= active_generation;
+            rx_memory_write_enable <= rx_memory_write_enable_next;
+            rx_memory_write_address <= rx_memory_write_address_next;
+            rx_memory_write_bytes <= rx_memory_write_bytes_next;
+            rx_memory_write_data <= rx_memory_write_data_next;
             tx_memory_write_enable <= 1'b0;
             tx_rejection_event <= 1'b0;
             if (tx_rejection_event)

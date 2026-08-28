@@ -24,6 +24,10 @@ source_required = {
     "synchronous packet prefetch": r"tx_output_entry\s*<=\s*tx_memory_read_data",
     "registered packet memory read": r"read_data\s*<=\s*memory\[read_address\]",
     "staging-specific write authorization": r"tx_stage_write_success\s*=\s*1'b1",
+    "registered receive write valid": r"rx_memory_write_enable\s*<=\s*rx_memory_write_enable_next",
+    "registered receive write address": r"rx_memory_write_address\s*<=\s*rx_memory_write_address_next",
+    "registered receive byte enables": r"rx_memory_write_bytes\s*<=\s*rx_memory_write_bytes_next",
+    "registered receive write data": r"rx_memory_write_data\s*<=\s*rx_memory_write_data_next",
     "registered transmit write boundary": r"if\s*\(tx_stage_write_success\).*?tx_memory_write_enable\s*<=\s*1'b1",
     "registered transmit write valid": r"tx_memory_write_enable\s*<=\s*1'b1",
     "registered transmit write address": r"tx_memory_write_address\s*<=",
@@ -32,6 +36,7 @@ source_required = {
     "registered transmit rejection event": r"tx_rejection_event\s*<=\s*1'b1",
     "rejection counter event boundary": r"if\s*\(tx_rejection_event\)\s*tx_rejected\s*<=",
     "staging-local keep metadata": r"tx_stage_keep",
+    "carry-free final keep validation": r"invalid_zero_to_one_transitions\s*=\s*\(~keep\)\s*&\s*\(keep\s*>>\s*1\)",
     "lazy per-beat metadata initialization": r"tx_metadata_current",
 }
 for description, pattern in source_required.items():
@@ -47,6 +52,8 @@ if memory_control_match is None:
     sys.exit("R5 packet memory control block is missing")
 if re.search(r"tx_memory_write_(?:enable|address|bytes|data)\s*=", memory_control_match.group("body")):
     sys.exit("R5 transmit BRAM write command regressed to combinational pins")
+if re.search(r"rx_memory_write_(?:enable|address|bytes|data)\s*=", memory_control_match.group("body")):
+    sys.exit("R5 receive BRAM write command regressed to combinational pins")
 if re.search(
     r"write_opcode\s*==\s*CMD_TX_COMMIT.*?tx_rejected\s*<=",
     source,
@@ -59,6 +66,9 @@ for direction in ("rx", "tx"):
         rf"logic\s*\[STREAM_DATA_BITS-1:0\]\s+{direction}_data\s*\[", source
     ):
         sys.exit(f"R5 {direction} packet data regressed to an unpacked register array")
+
+if re.search(r"incremented\s*=\s*keep\s*\+", source):
+    sys.exit("R5 final keep validation regressed to a wide carry chain")
 
 for forbidden_storage in ("tx_packet_memory", "rx_data", "rx_keep", "rx_last"):
     if re.search(rf"\b{forbidden_storage}\s*\[", source):
