@@ -120,54 +120,48 @@ module aurora_width_adapter_tb;
             $fatal(1, "NFC resume was not issued");
         @(posedge clk);
 
-        // Four consecutive push-only Aurora halves produce two consecutive
-        // packed FIFO writes without an inserted destination-clock bubble.
+        // Four consecutive push-only Aurora halves produce two registered
+        // packed FIFO writes without losing line-rate input.
         @(negedge clk);
         rx_s_data = {8{32'haaaa_0001}};
         rx_s_keep = '1;
         rx_s_last = 1'b0;
         rx_s_valid = 1'b1;
-        #1;
-        if (rx_m_valid)
-            $fatal(1, "RX emitted an incomplete low half");
         @(posedge clk);
         @(negedge clk);
         rx_s_data = {8{32'hbbbb_0002}};
-        #1;
-        if (!rx_m_valid || rx_m_data[31:0] != 32'haaaa_0001 ||
-            rx_m_data[287:256] != 32'hbbbb_0002 || rx_m_last || rx_overflow)
-            $fatal(1, "first packed RX beat mismatch");
         @(posedge clk);
         @(negedge clk);
         rx_s_data = {8{32'hcccc_0003}};
         #1;
-        if (rx_m_valid)
-            $fatal(1, "RX emitted the next incomplete low half");
+        if (!rx_m_valid || rx_m_data[31:0] != 32'haaaa_0001 ||
+            rx_m_data[287:256] != 32'hbbbb_0002 || rx_m_last || rx_overflow)
+            $fatal(1, "first registered packed RX beat mismatch");
         @(posedge clk);
         @(negedge clk);
         rx_s_data = {8{32'hdddd_0004}};
         rx_s_last = 1'b1;
+        @(posedge clk);
+        @(negedge clk);
+        rx_s_valid = 1'b0;
         #1;
         if (!rx_m_valid || rx_m_data[31:0] != 32'hcccc_0003 ||
             rx_m_data[287:256] != 32'hdddd_0004 || !rx_m_last || rx_overflow)
-            $fatal(1, "second packed RX beat mismatch");
-        @(posedge clk);
+            $fatal(1, "second registered packed RX beat mismatch");
 
-        // FIFO refusal is reported on the exact completed packed beat.
-        @(negedge clk);
+        // A completed beat may wait in the local register. Refusal is reported
+        // only when another completion arrives before that beat is accepted.
         rx_m_ready = 1'b0;
+        rx_s_valid = 1'b1;
         rx_s_data = {8{32'heeee_0005}};
         rx_s_last = 1'b0;
-        #1;
-        if (rx_m_valid)
-            $fatal(1, "RX emitted the refused record's incomplete low half");
         @(posedge clk);
         @(negedge clk);
         rx_s_data = {8{32'hffff_0006}};
         rx_s_last = 1'b1;
         #1;
-        if (!rx_m_valid || !rx_overflow)
-            $fatal(1, "RX refusal was not reported");
+        if (!rx_overflow)
+            $fatal(1, "RX refusal was not reported at the registered boundary");
         @(posedge clk);
         @(negedge clk);
         rx_s_valid = 1'b0;

@@ -32,10 +32,8 @@ module aurora_tx_512_to_256 (
 
     always_ff @(posedge aclk) begin
         if (!aresetn) begin
+            // High-half payload is inaccessible while valid is clear.
             high_valid <= 1'b0;
-            high_data <= '0;
-            high_keep <= '0;
-            high_last <= 1'b0;
         end else begin
             if (high_valid && m_tready)
                 high_valid <= 1'b0;
@@ -103,25 +101,48 @@ module aurora_rx_256_to_512 (
     logic         have_low;
     logic [255:0] low_data;
     logic [31:0]  low_keep;
+    logic         completed_valid;
+    logic [511:0] completed_data;
+    logic [63:0]  completed_keep;
+    logic         completed_last;
+    logic         completion;
+    logic         completion_ready;
 
-    assign m_tvalid = s_tvalid && (have_low || s_tlast);
-    assign m_tdata = have_low ? {s_tdata, low_data} : {256'b0, s_tdata};
-    assign m_tkeep = have_low ? {s_tkeep, low_keep} : {32'b0, s_tkeep};
-    assign m_tlast = s_tlast;
-    assign overflow = m_tvalid && !m_tready;
+    assign completion = s_tvalid && (have_low || s_tlast);
+    assign completion_ready = !completed_valid || m_tready;
+    assign m_tvalid = completed_valid;
+    assign m_tdata = completed_data;
+    assign m_tkeep = completed_keep;
+    assign m_tlast = completed_last;
+    assign overflow = completion && !completion_ready;
 
     always_ff @(posedge aclk) begin
         if (!aresetn) begin
+            // Payload is inaccessible while the corresponding valid bit is
+            // clear. Keep reset off both wide packing registers.
             have_low <= 1'b0;
-            low_data <= '0;
-            low_keep <= '0;
-        end else if (s_tvalid) begin
-            if (have_low || s_tlast) begin
-                have_low <= 1'b0;
-            end else begin
-                have_low <= 1'b1;
-                low_data <= s_tdata;
-                low_keep <= s_tkeep;
+            completed_valid <= 1'b0;
+        end else begin
+            if (completed_valid && m_tready)
+                completed_valid <= 1'b0;
+
+            if (completion && completion_ready) begin
+                completed_valid <= 1'b1;
+                completed_data <= have_low ?
+                    {s_tdata, low_data} : {256'b0, s_tdata};
+                completed_keep <= have_low ?
+                    {s_tkeep, low_keep} : {32'b0, s_tkeep};
+                completed_last <= s_tlast;
+            end
+
+            if (s_tvalid) begin
+                if (have_low || s_tlast) begin
+                    have_low <= 1'b0;
+                end else begin
+                    have_low <= 1'b1;
+                    low_data <= s_tdata;
+                    low_keep <= s_tkeep;
+                end
             end
         end
     end
