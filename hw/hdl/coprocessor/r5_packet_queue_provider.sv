@@ -300,6 +300,7 @@ module r5_packet_queue_provider #(
     logic [31:0] rx_dropped;
     logic [31:0] rx_malformed;
     logic [31:0] tx_rejected;
+    logic tx_rejection_event;
     logic [15:0] command_serial;
     logic [7:0] last_command_opcode;
     logic [7:0] last_command_result;
@@ -898,6 +899,7 @@ module r5_packet_queue_provider #(
             rx_dropped <= '0;
             rx_malformed <= '0;
             tx_rejected <= '0;
+            tx_rejection_event <= 1'b0;
             command_serial <= '0;
             last_command_opcode <= CMD_NONE;
             last_command_result <= RESULT_OK;
@@ -959,6 +961,9 @@ module r5_packet_queue_provider #(
             provider_selected_d <= provider_selected;
             active_generation_d <= active_generation;
             tx_memory_write_enable <= 1'b0;
+            tx_rejection_event <= 1'b0;
+            if (tx_rejection_event)
+                tx_rejected <= saturating_increment(tx_rejected);
 
             if (s_axi_bvalid && s_axi_bready) begin
                 s_axi_bvalid <= 1'b0;
@@ -1182,9 +1187,8 @@ module r5_packet_queue_provider #(
                     endcase
                 end
 
-                if (write_opcode == CMD_TX_COMMIT && !tx_commit_success) begin
-                    tx_rejected <= saturating_increment(tx_rejected);
-                end
+                if (write_opcode == CMD_TX_COMMIT && !tx_commit_success)
+                    tx_rejection_event <= 1'b1;
             end
 
             if (rx_handshake && !rx_malformed_event) begin

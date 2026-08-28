@@ -29,6 +29,8 @@ source_required = {
     "registered transmit write address": r"tx_memory_write_address\s*<=",
     "registered transmit byte enables": r"tx_memory_write_bytes\s*<=",
     "registered transmit write data": r"tx_memory_write_data\s*<=",
+    "registered transmit rejection event": r"tx_rejection_event\s*<=\s*1'b1",
+    "rejection counter event boundary": r"if\s*\(tx_rejection_event\)\s*tx_rejected\s*<=",
     "staging-local keep metadata": r"tx_stage_keep",
     "lazy per-beat metadata initialization": r"tx_metadata_current",
 }
@@ -45,6 +47,12 @@ if memory_control_match is None:
     sys.exit("R5 packet memory control block is missing")
 if re.search(r"tx_memory_write_(?:enable|address|bytes|data)\s*=", memory_control_match.group("body")):
     sys.exit("R5 transmit BRAM write command regressed to combinational pins")
+if re.search(
+    r"write_opcode\s*==\s*CMD_TX_COMMIT.*?tx_rejected\s*<=",
+    source,
+    flags=re.DOTALL,
+):
+    sys.exit("R5 transmit rejection counter regressed into commit qualification")
 
 for direction in ("rx", "tx"):
     if re.search(
