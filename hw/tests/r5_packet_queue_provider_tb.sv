@@ -475,6 +475,7 @@ module r5_packet_queue_provider_tb;
     logic [31:0] status;
     integer index;
     integer received_beats;
+    logic [63:0] keep_mask;
 
     initial begin
         resetn = 1'b0;
@@ -527,6 +528,13 @@ module r5_packet_queue_provider_tb;
         assert(value[7:0] == 8'd4) else $fatal(1, "stale generation was accepted");
         axil_write(16'h001c, 32'd7, 1, 2'b00);
         request_generation = 32'd7;
+
+        // Every legal final keep mask must decode to its exact byte count.
+        for (index = 1; index <= 64; index = index + 1) begin
+            keep_mask = index == 64 ? ~64'd0 : (64'd1 << index) - 1'b1;
+            assert(dut.final_keep_byte_count(keep_mask) == index)
+                else $fatal(1, "final keep byte decode mismatch at %0d", index);
+        end
 
         // Missing data, keep, or attributes must reject without consuming the stage token.
         axil_read(16'h0144, token, 2'b00);
@@ -590,6 +598,8 @@ module r5_packet_queue_provider_tb;
         send_request_beat(packet1, 64'h0000_0000_0001_ffff, 6'd10, 1'b1);
         axil_read(16'h010c, value, 2'b00);
         assert(value == 2) else $fatal(1, "wrong RX beat count");
+        axil_read(16'h0110, value, 2'b00);
+        assert(value == 81) else $fatal(1, "wrong RX byte count");
         axil_read(16'h0104, token, 2'b00);
         axil_read(16'h1000, value, 2'b00);
         assert(value == packet0[31:0]) else $fatal(1, "RX data window mismatch");
@@ -598,6 +608,18 @@ module r5_packet_queue_provider_tb;
         axil_write(16'h0114, token + 1, 2, 2'b00);
         axil_read(16'h010c, value, 2'b00);
         assert(value == 2) else $fatal(1, "bad token popped RX");
+        axil_write(16'h0114, token, 0, 2'b00);
+
+        // The largest legal packet must preserve exact byte accounting across
+        // the protected completion pipeline.
+        for (index = 0; index < 63; index = index + 1)
+            send_request_beat(packet0 ^ index, ~64'd0, index[5:0], 1'b0);
+        send_request_beat(packet1, 64'h1f, 6'd63, 1'b1);
+        axil_read(16'h010c, value, 2'b00);
+        assert(value == 64) else $fatal(1, "maximum RX beat count mismatch");
+        axil_read(16'h0110, value, 2'b00);
+        assert(value == 4037) else $fatal(1, "maximum RX byte count mismatch");
+        axil_read(16'h0104, token, 2'b00);
         axil_write(16'h0114, token, 0, 2'b00);
 
         axil_read(16'h0144, token, 2'b00);
@@ -647,9 +669,23 @@ module r5_packet_queue_provider_tb;
         assert(value == 32'hd00d_f00d) else $fatal(1, "MMIO read high mismatch");
         axil_write(16'h01ac, token, 0, 2'b00);
 
+        // Four single-beat packets complete on consecutive cycles. Tokens
+        // and descriptor bytes must remain distinct while both completion
+        // stages are occupied.
+        @(negedge clk);
+        request_tvalid = 1'b1;
+        request_tlast = 1'b1;
         for (index = 0; index < 4; index = index + 1) begin
-            send_request_beat(packet0 ^ index, ~64'd0, index[5:0], 1'b1);
+            request_tdata = packet0 ^ index;
+            request_tkeep = (64'd1 << (index + 1)) - 1'b1;
+            request_tid = index[5:0];
+            @(posedge clk);
+            assert(request_tready)
+                else $fatal(1, "back-to-back completion unexpectedly stalled");
+            @(negedge clk);
         end
+        request_tvalid = 1'b0;
+        wait_cycles(3);
         request_tdata = packet1;
         request_tkeep = ~64'd0;
         request_tid = 6'd31;
@@ -660,6 +696,14 @@ module r5_packet_queue_provider_tb;
         request_tvalid = 1'b0;
         for (index = 0; index < 4; index = index + 1) begin
             axil_read(16'h0104, token, 2'b00);
+            if (index != 0)
+                assert(token == value + index)
+                    else $fatal(1, "back-to-back RX token mismatch");
+            else
+                value = token;
+            axil_read(16'h0110, status, 2'b00);
+            assert(status == index + 1)
+                else $fatal(1, "back-to-back RX byte mismatch");
             axil_write(16'h0114, token, index % 3, 2'b00);
         end
 

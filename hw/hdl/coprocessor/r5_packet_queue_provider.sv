@@ -218,9 +218,16 @@ module r5_packet_queue_provider #(
     logic [PACKET_MEMORY_ADDR_BITS-1:0] rx_memory_read_address;
     logic [PACKET_MEMORY_BITS-1:0] rx_memory_read_data;
     logic rx_memory_read_issued;
+    // Receive descriptors are a shallow control FIFO. Keep every field in
+    // flip-flops so completion arithmetic cannot be retimed into LUTRAM data
+    // pins. The packet payload remains in block RAM below.
+    (* ram_style = "registers" *)
     logic [GENERATION_BITS-1:0] rx_generation [0:QUEUE_DEPTH-1];
+    (* ram_style = "registers" *)
     logic [31:0] rx_token [0:QUEUE_DEPTH-1];
+    (* ram_style = "registers" *)
     logic [PACKET_BEAT_COUNT_BITS-1:0] rx_beats [0:QUEUE_DEPTH-1];
+    (* ram_style = "registers" *)
     logic [12:0] rx_bytes [0:QUEUE_DEPTH-1];
 
     // Register the complete byte-memory command before it reaches BRAM pins.
@@ -359,11 +366,29 @@ module r5_packet_queue_provider #(
     logic tx_commit_validation_active;
     logic [PACKET_BEAT_COUNT_BITS-1:0] tx_commit_validation_beat;
     logic tx_commit_apply;
-    logic rx_completion_valid;
+    // Packet completion crosses two protected register stages before it can
+    // write descriptor storage. This boundary is intentionally stronger than
+    // an ordinary pipeline: synthesis retiming across the former single
+    // register recreated the final-keep carry cone at the descriptor input.
+    (* keep = "true", dont_touch = "true" *) logic rx_completion_capture_valid;
+    (* keep = "true", dont_touch = "true" *)
+    logic [PACKET_BEAT_COUNT_BITS-1:0] rx_completion_capture_beats;
+    (* keep = "true", dont_touch = "true" *)
+    logic [PACKET_BEAT_COUNT_BITS-1:0] rx_completion_capture_prior_beats;
+    (* keep = "true", dont_touch = "true" *)
+    logic [6:0] rx_completion_capture_final_bytes;
+    (* keep = "true", dont_touch = "true" *)
+    logic [GENERATION_BITS-1:0] rx_completion_capture_generation;
+    (* keep = "true", dont_touch = "true" *)
+    logic [31:0] rx_completion_capture_token;
+
+    (* keep = "true", dont_touch = "true" *) logic rx_completion_valid;
+    (* keep = "true", dont_touch = "true" *)
     logic [PACKET_BEAT_COUNT_BITS-1:0] rx_completion_beats;
-    logic [12:0] rx_completion_bytes;
-    logic [31:0] rx_completion_generation;
-    logic [31:0] rx_completion_token;
+    (* keep = "true", dont_touch = "true" *) logic [12:0] rx_completion_bytes;
+    (* keep = "true", dont_touch = "true" *)
+    logic [GENERATION_BITS-1:0] rx_completion_generation;
+    (* keep = "true", dont_touch = "true" *) logic [31:0] rx_completion_token;
     logic tx_cancel_success;
     logic identity_publish_success;
     logic generation_ack_success;
@@ -387,6 +412,47 @@ module r5_packet_queue_provider #(
             // putting a KEEP_BITS-wide increment carry chain in packet accept.
             invalid_zero_to_one_transitions = (~keep) & (keep >> 1);
             final_keep_valid = keep[0] && !(|invalid_zero_to_one_transitions);
+        end
+    endfunction
+
+    function automatic logic [3:0] keep_octet_byte_count(
+        input logic [7:0] keep
+    );
+        begin
+            // Only contiguous low-lane masks reach this encoder. Explicit
+            // octet decoding has bounded depth and avoids a 64-input popcount.
+            case (keep)
+                8'h00: keep_octet_byte_count = 4'd0;
+                8'h01: keep_octet_byte_count = 4'd1;
+                8'h03: keep_octet_byte_count = 4'd2;
+                8'h07: keep_octet_byte_count = 4'd3;
+                8'h0f: keep_octet_byte_count = 4'd4;
+                8'h1f: keep_octet_byte_count = 4'd5;
+                8'h3f: keep_octet_byte_count = 4'd6;
+                8'h7f: keep_octet_byte_count = 4'd7;
+                8'hff: keep_octet_byte_count = 4'd8;
+                default: keep_octet_byte_count = 4'd0;
+            endcase
+        end
+    endfunction
+
+    function automatic logic [6:0] final_keep_byte_count(
+        input logic [KEEP_BITS-1:0] keep
+    );
+        logic [5:0] lower_half;
+        logic [5:0] upper_half;
+        begin
+            lower_half =
+                (keep_octet_byte_count(keep[7:0]) +
+                 keep_octet_byte_count(keep[15:8])) +
+                (keep_octet_byte_count(keep[23:16]) +
+                 keep_octet_byte_count(keep[31:24]));
+            upper_half =
+                (keep_octet_byte_count(keep[39:32]) +
+                 keep_octet_byte_count(keep[47:40])) +
+                (keep_octet_byte_count(keep[55:48]) +
+                 keep_octet_byte_count(keep[63:56]));
+            final_keep_byte_count = lower_half + upper_half;
         end
     endfunction
 
@@ -730,7 +796,10 @@ module r5_packet_queue_provider #(
     always_comb begin
         s_axis_request_tready = provider_selected && identity_valid && fault_code == 0 &&
                                 !provider_abort &&
-                                (rx_packet_open || (!provider_quiesce && rx_count < QUEUE_DEPTH));
+                                (rx_packet_open ||
+                                 (!provider_quiesce &&
+                                  rx_count + rx_completion_capture_valid +
+                                      rx_completion_valid < QUEUE_DEPTH));
 
         m_axis_response_tvalid = tx_output_valid && provider_selected && identity_valid &&
                                  fault_code == 0 && !provider_abort;
@@ -918,6 +987,7 @@ module r5_packet_queue_provider #(
             tx_commit_validation_active <= 1'b0;
             tx_commit_validation_beat <= '0;
             tx_commit_apply <= 1'b0;
+            rx_completion_capture_valid <= 1'b0;
             rx_completion_valid <= 1'b0;
             tx_metadata_current <= '0;
             tx_intermediate_valid <= '0;
@@ -961,7 +1031,20 @@ module r5_packet_queue_provider #(
             rx_memory_write_data <= rx_memory_write_data_next;
             tx_memory_write_enable <= 1'b0;
             tx_commit_apply <= 1'b0;
-            rx_completion_valid <= 1'b0;
+            // Completion descriptors advance every cycle, including
+            // back-to-back one-beat packets. The capture stage contains only
+            // registered keep-decoder output; the commit stage contains the
+            // final narrow byte-count addition.
+            rx_completion_capture_valid <= 1'b0;
+            rx_completion_valid <= rx_completion_capture_valid;
+            if (rx_completion_capture_valid) begin
+                rx_completion_generation <= rx_completion_capture_generation;
+                rx_completion_token <= rx_completion_capture_token;
+                rx_completion_beats <= rx_completion_capture_beats;
+                rx_completion_bytes <=
+                    {rx_completion_capture_prior_beats, 6'b0} +
+                    rx_completion_capture_final_bytes;
+            end
             tx_rejection_event <= 1'b0;
             if (tx_rejection_event)
                 tx_rejected <= saturating_increment(tx_rejected);
@@ -1244,13 +1327,19 @@ module r5_packet_queue_provider #(
                 if (s_axis_request_tlast) begin
                     rx_packet_open <= 1'b0;
                     rx_input_beat <= '0;
-                    rx_completion_valid <= 1'b1;
-                    rx_completion_generation <= active_generation;
-                    rx_completion_token <= next_rx_token;
-                    rx_completion_beats <= rx_input_beat + 1'b1;
-                    rx_completion_bytes <=
-                        rx_input_beat * KEEP_BITS +
-                        13'($countones(s_axis_request_tkeep));
+                    rx_completion_capture_valid <= 1'b1;
+                    rx_completion_capture_generation <= active_generation;
+                    rx_completion_capture_token <= next_rx_token;
+                    rx_completion_capture_beats <= rx_input_beat + 1'b1;
+                    rx_completion_capture_prior_beats <= rx_input_beat;
+                    rx_completion_capture_final_bytes <=
+                        final_keep_byte_count(s_axis_request_tkeep);
+                    if (&next_rx_token) begin
+                        fault_code <= 32'h0002_0001;
+                        fault_detail <= next_rx_token;
+                    end else begin
+                        next_rx_token <= next_rx_token + 1'b1;
+                    end
                 end else begin
                     rx_input_beat <= rx_input_beat + 1'b1;
                 end
@@ -1261,12 +1350,6 @@ module r5_packet_queue_provider #(
                 rx_beats[rx_tail] <= rx_completion_beats;
                 rx_bytes[rx_tail] <= rx_completion_bytes;
                 rx_tail <= next_slot(rx_tail);
-                if (&rx_completion_token) begin
-                    fault_code <= 32'h0002_0001;
-                    fault_detail <= rx_completion_token;
-                end else begin
-                    next_rx_token <= rx_completion_token + 1'b1;
-                end
             end
             if (rx_malformed_event) begin
                 rx_packet_open <= 1'b0;
@@ -1403,6 +1486,8 @@ module r5_packet_queue_provider #(
                 rx_head <= '0;
                 rx_tail <= '0;
                 rx_count <= '0;
+                rx_completion_capture_valid <= 1'b0;
+                rx_completion_valid <= 1'b0;
                 tx_head <= '0;
                 tx_tail <= '0;
                 tx_count <= '0;
@@ -1435,6 +1520,8 @@ module r5_packet_queue_provider #(
                 rx_head <= '0;
                 rx_tail <= '0;
                 rx_count <= '0;
+                rx_completion_capture_valid <= 1'b0;
+                rx_completion_valid <= 1'b0;
                 tx_head <= '0;
                 tx_tail <= '0;
                 tx_count <= '0;
@@ -1470,6 +1557,8 @@ module r5_packet_queue_provider #(
                 rx_head <= '0;
                 rx_tail <= '0;
                 rx_count <= '0;
+                rx_completion_capture_valid <= 1'b0;
+                rx_completion_valid <= 1'b0;
                 tx_head <= '0;
                 tx_tail <= '0;
                 tx_count <= '0;
