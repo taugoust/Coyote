@@ -20,20 +20,21 @@ module aurora_axis_skid_buffer #(
     output logic              m_tvalid,
     input  logic              m_tready
 );
-    logic [DATA_W-1:0] queue_data [0:1];
-    logic [KEEP_W-1:0] queue_keep [0:1];
-    logic queue_last [0:1];
-    logic read_pointer;
-    logic write_pointer;
+    logic [DATA_W-1:0] head_data;
+    logic [KEEP_W-1:0] head_keep;
+    logic head_last;
+    logic [DATA_W-1:0] tail_data;
+    logic [KEEP_W-1:0] tail_keep;
+    logic tail_last;
     logic [1:0] queue_count;
     logic enqueue;
     logic dequeue;
 
     always_comb begin
         s_tready = aresetn && (queue_count != 2'd2);
-        m_tdata = queue_data[read_pointer];
-        m_tkeep = queue_keep[read_pointer];
-        m_tlast = queue_last[read_pointer];
+        m_tdata = head_data;
+        m_tkeep = head_keep;
+        m_tlast = head_last;
         m_tvalid = aresetn && (queue_count != 0);
         enqueue = s_tvalid && s_tready;
         dequeue = m_tvalid && m_tready;
@@ -41,25 +42,45 @@ module aurora_axis_skid_buffer #(
 
     always_ff @(posedge aclk) begin
         if (!aresetn) begin
-            read_pointer <= 1'b0;
-            write_pointer <= 1'b0;
             queue_count <= '0;
         end else begin
             case ({enqueue, dequeue})
-                2'b10: queue_count <= queue_count + 1'b1;
-                2'b01: queue_count <= queue_count - 1'b1;
+                2'b10: begin
+                    queue_count <= queue_count + 1'b1;
+                    if (queue_count == 0) begin
+                        head_data <= s_tdata;
+                        head_keep <= s_tkeep;
+                        head_last <= s_tlast;
+                    end else begin
+                        tail_data <= s_tdata;
+                        tail_keep <= s_tkeep;
+                        tail_last <= s_tlast;
+                    end
+                end
+                2'b01: begin
+                    queue_count <= queue_count - 1'b1;
+                    if (queue_count == 2) begin
+                        head_data <= tail_data;
+                        head_keep <= tail_keep;
+                        head_last <= tail_last;
+                    end
+                end
+                2'b11: begin
+                    if (queue_count == 1) begin
+                        head_data <= s_tdata;
+                        head_keep <= s_tkeep;
+                        head_last <= s_tlast;
+                    end else begin
+                        head_data <= tail_data;
+                        head_keep <= tail_keep;
+                        head_last <= tail_last;
+                        tail_data <= s_tdata;
+                        tail_keep <= s_tkeep;
+                        tail_last <= s_tlast;
+                    end
+                end
                 default: queue_count <= queue_count;
             endcase
-
-            if (enqueue) begin
-                queue_data[write_pointer] <= s_tdata;
-                queue_keep[write_pointer] <= s_tkeep;
-                queue_last[write_pointer] <= s_tlast;
-                write_pointer <= ~write_pointer;
-            end
-
-            if (dequeue)
-                read_pointer <= ~read_pointer;
         end
     end
 
