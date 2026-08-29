@@ -167,6 +167,16 @@ set cfg(build_opt) 0
 set implementation_calls {}
 finalize_post_route_optimization
 require_equal $implementation_calls {} "unoptimized compatibility finalization"
+set cfg(build_opt) 1
+array set mock_slack {max -0.100 min 0.010}
+array set routed_slack {max -0.050 min 0.010}
+set apply_routed_slack 1
+set implementation_calls {}
+finalize_post_route_optimization Explore ExtraNetDelay_high
+require_equal $implementation_calls \
+    {{write_checkpoint -force /build/checkpoints/routed_candidate.dcp} {phys_opt_design -directive Explore} {route_design -directive ExtraNetDelay_high}} \
+    "explicit post-route directives"
+set apply_routed_slack 0
 rename get_timing_paths {}
 rename get_property {}
 rename write_checkpoint {}
@@ -237,6 +247,18 @@ foreach required {
     {[format "%s_route_status%s.rpt" $prefix $report_suffix]}
 } {
     require_text $base $required $base_path
+}
+
+set pnr [read_source $pnr_path]
+foreach required {
+    {set opt_directive "${IMPLEMENTATION_OPT_DIRECTIVE}"}
+    {set place_directive "${IMPLEMENTATION_PLACE_DIRECTIVE}"}
+    {set phys_opt_directive "${IMPLEMENTATION_PHYS_OPT_DIRECTIVE}"}
+    {set route_directive "${IMPLEMENTATION_ROUTE_DIRECTIVE}"}
+    {"${IMPLEMENTATION_POST_ROUTE_PHYS_OPT_DIRECTIVE}"}
+    {"${IMPLEMENTATION_FINAL_ROUTE_DIRECTIVE}"}
+} {
+    require_text $pnr $required $pnr_path
 }
 
 foreach spec [list \

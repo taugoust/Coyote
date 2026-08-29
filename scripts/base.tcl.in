@@ -302,17 +302,24 @@ proc optimize_and_retain_best_routed_candidate {post_directive final_directive c
     file delete -force $candidate_checkpoint
 }
 
-proc finalize_post_route_optimization {} {
+proc finalize_post_route_optimization {{post_directive "project"} {final_directive "project"}} {
     upvar #0 cfg cnfg
-    if {$cnfg(build_opt) eq 1} {
-        if {![routed_design_needs_post_route_optimization]} {
-            puts "INFO: Skipping post-route physical optimization because setup and hold timing already pass."
-            return
-        }
-        set candidate_checkpoint [file join $cnfg(build_dir) checkpoints routed_candidate.dcp]
-        optimize_and_retain_best_routed_candidate \
-            AggressiveExplore "" $candidate_checkpoint
+    if {$post_directive eq "project"} {
+        set post_directive [expr {$cnfg(build_opt) eq 1 ? "AggressiveExplore" : ""}]
     }
+    if {$final_directive eq "project"} {
+        set final_directive ""
+    }
+    if {$post_directive eq ""} {
+        return
+    }
+    if {![routed_design_needs_post_route_optimization]} {
+        puts "INFO: Skipping post-route physical optimization because setup and hold timing already pass."
+        return
+    }
+    set candidate_checkpoint [file join $cnfg(build_dir) checkpoints routed_candidate.dcp]
+    optimize_and_retain_best_routed_candidate \
+        $post_directive $final_directive $candidate_checkpoint
 }
 
 proc report_bitstream_drc {run_name report_path} {
