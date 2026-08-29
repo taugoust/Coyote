@@ -443,16 +443,16 @@ module r5_packet_queue_provider #(
         logic [5:0] upper_half;
         begin
             lower_half =
-                (keep_octet_byte_count(keep[7:0]) +
-                 keep_octet_byte_count(keep[15:8])) +
-                (keep_octet_byte_count(keep[23:16]) +
-                 keep_octet_byte_count(keep[31:24]));
+                (6'(keep_octet_byte_count(keep[7:0])) +
+                 6'(keep_octet_byte_count(keep[15:8]))) +
+                (6'(keep_octet_byte_count(keep[23:16])) +
+                 6'(keep_octet_byte_count(keep[31:24])));
             upper_half =
-                (keep_octet_byte_count(keep[39:32]) +
-                 keep_octet_byte_count(keep[47:40])) +
-                (keep_octet_byte_count(keep[55:48]) +
-                 keep_octet_byte_count(keep[63:56]));
-            final_keep_byte_count = lower_half + upper_half;
+                (6'(keep_octet_byte_count(keep[39:32])) +
+                 6'(keep_octet_byte_count(keep[47:40]))) +
+                (6'(keep_octet_byte_count(keep[55:48])) +
+                 6'(keep_octet_byte_count(keep[63:56])));
+            final_keep_byte_count = 7'(lower_half) + 7'(upper_half);
         end
     endfunction
 
@@ -853,7 +853,9 @@ module r5_packet_queue_provider #(
                                    firmware_identity[1], firmware_identity[0]};
         provider_healthy = identity_valid && fault_code == 0;
         provider_idle = firmware_idle && rx_count == 0 && tx_count == 0 &&
-                        !rx_packet_open && !tx_stage_dirty && !mmio_busy && !mmio_done &&
+                        !rx_packet_open && !rx_completion_capture_valid &&
+                        !rx_completion_valid && !tx_stage_dirty &&
+                        !mmio_busy && !mmio_done &&
                         (!provider_quiesce || quiesce_acknowledged);
     end
 

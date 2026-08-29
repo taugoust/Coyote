@@ -596,6 +596,8 @@ module r5_packet_queue_provider_tb;
 
         send_request_beat(packet0, 64'hffff_ffff_ffff_ffff, 6'd9, 1'b0);
         send_request_beat(packet1, 64'h0000_0000_0001_ffff, 6'd10, 1'b1);
+        assert(!idle)
+            else $fatal(1, "provider became idle before RX completion committed");
         axil_read(16'h010c, value, 2'b00);
         assert(value == 2) else $fatal(1, "wrong RX beat count");
         axil_read(16'h0110, value, 2'b00);

@@ -31,6 +31,7 @@ source_required = {
     "protected completion commit": r'dont_touch\s*=\s*"true".*rx_completion_valid',
     "bounded final keep byte decoder": r"function\s+automatic\s+logic\s*\[6:0\]\s+final_keep_byte_count",
     "FF-backed receive byte descriptors": r'ram_style\s*=\s*"registers"\s*\*\)\s*logic\s*\[12:0\]\s+rx_bytes',
+    "completion-aware provider idle": r"provider_idle\s*=.*?!rx_completion_capture_valid.*?!rx_completion_valid",
 }
 for description, pattern in source_required.items():
     if re.search(pattern, source, flags=re.DOTALL) is None:
