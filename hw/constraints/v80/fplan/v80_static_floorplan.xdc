@@ -54,3 +54,22 @@ add_cells_to_pblock [get_pblocks pblock_static_axi_first_stage] \
 resize_pblock [get_pblocks pblock_static_axi_first_stage] -add \
     {CLOCKREGION_X2Y2:CLOCKREGION_X3Y3}
 set_property IS_SOFT FALSE [get_pblocks pblock_static_axi_first_stage]
+
+# Keep the small QDMA H2C metadata address/control set local to its EOP FIFO.
+# This avoids marginal control paths between replicated sink-FIFO addressing
+# and distributed metadata storage without constraining the complete QDMA.
+set qdma_h2c_critical_metadata [get_cells -quiet -hierarchical -filter {
+    IS_PRIMITIVE && (
+        NAME =~ "inst_static/inst_int_static/versal_cips_0/inst/cpm_0/inst/qdma_1_wrapper_i/AXIST.u_demux/mdma_axis_h2c_tl_slv/ch_sink_fifo[0].u_ch_fifo/sram_radr_reg*" ||
+        NAME =~ "inst_static/inst_int_static/versal_cips_0/inst/cpm_0/inst/qdma_1_wrapper_i/AXIST.u_demux/u_h2c_axis_desegmenter/u_eop_info_fifo/RAM_INST[0].u_ram/sram_reg[5]*"
+    )
+}]
+if {[llength $qdma_h2c_critical_metadata] == 0} {
+    error "V80 QDMA H2C critical metadata primitive cells were not found"
+}
+create_pblock pblock_qdma_h2c_critical_metadata
+add_cells_to_pblock [get_pblocks pblock_qdma_h2c_critical_metadata] \
+    $qdma_h2c_critical_metadata
+resize_pblock [get_pblocks pblock_qdma_h2c_critical_metadata] -add \
+    {SLICE_X68Y238:SLICE_X80Y260}
+set_property IS_SOFT FALSE [get_pblocks pblock_qdma_h2c_critical_metadata]
