@@ -60,7 +60,6 @@ module dcpl_static #(
 
     // Init after ccross
     logic [N_REG_STA_DCPL-1:0] decouple;
-    (* KEEP = "TRUE", DONT_TOUCH = "TRUE" *) logic decouple_axi_main;
     logic [14:0] usr_irq;
     AXI4 axi_main  ();
     AXI4S axis_dyn_out [N_SCHAN] (.*);
@@ -87,20 +86,6 @@ module dcpl_static #(
         end
     end
 
-    // Give the wide AXI decoupler its own protected final-stage control. It has
-    // the same latency as decouple[N_REG_STA_DCPL-1], but cannot be merged into
-    // a device-wide replica shared with unrelated dynamic interfaces.
-    if (N_REG_STA_DCPL > 1) begin : gen_axi_decouple_control
-        always_ff @(posedge aclk) begin
-            if (~aresetn)
-                decouple_axi_main <= 1'b0;
-            else
-                decouple_axi_main <= decouple[N_REG_STA_DCPL-2];
-        end
-    end else begin : gen_axi_decouple_passthrough
-        assign decouple_axi_main = s_decouple;
-    end
-
     // Slicing    
     logic_reg_array_static #(.N_STAGES(N_STAGES_0), .DATA_BITS(15)) inst_s0_usr_irq (.aclk(aclk), .aresetn(aresetn), .s_data(usr_irq), .m_data(m_usr_irq));
     axi_reg_array_static #(.N_STAGES(N_STAGES_0)) inst_s0_axi_main (.aclk(aclk), .aresetn(aresetn), .s_axi(s_axi_main), .m_axi(axi_main));
@@ -118,7 +103,7 @@ module dcpl_static #(
 
     // Decoupling
     logic_decoupler_static #(.DATA_BITS(15)) inst_s1_usr_irq (.decouple(decouple[N_REG_STA_DCPL-1]), .s_data(s_usr_irq), .m_data(usr_irq));
-    axi_decoupler_static inst_s1_axi_main (.decouple(decouple_axi_main), .s_axi(axi_main), .m_axi(m_axi_main));
+    axi_decoupler_static inst_s1_axi_main (.decouple(decouple[N_REG_STA_DCPL-1]), .s_axi(axi_main), .m_axi(m_axi_main));
 
     for(genvar i = 0; i < N_SCHAN; i++) begin
         axis_decoupler_static inst_s1_axis_dyn_out (.decouple(decouple[N_REG_STA_DCPL-1]), .s_axis(axis_dyn_out[i]), .m_axis(m_axis_dyn_out[i]));
