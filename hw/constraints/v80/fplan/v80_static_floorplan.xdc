@@ -38,3 +38,19 @@ resize_pblock [get_pblocks pblock_inst_shell] -add {URAM_CAS_DLY_X3Y2:URAM_CAS_D
 resize_pblock [get_pblocks pblock_inst_shell] -add {CLOCKREGION_X1Y11:CLOCKREGION_X7Y11 CLOCKREGION_X1Y7:CLOCKREGION_X8Y10 CLOCKREGION_X1Y5:CLOCKREGION_X9Y6 CLOCKREGION_X5Y3:CLOCKREGION_X9Y4 CLOCKREGION_X4Y1:CLOCKREGION_X8Y2 CLOCKREGION_X5Y0:CLOCKREGION_X10Y0}
 set_property SNAPPING_MODE ON [get_pblocks pblock_inst_shell]
 set_property IS_SOFT FALSE [get_pblocks pblock_inst_shell]
+
+# Keep the first static AXI register stage beside the static SmartConnect.
+# Otherwise the exclusionary shell partition can split this register slice
+# across the shell and turn its local payload-enable paths into device-wide
+# routes.
+set static_axi_first_stage [get_cells -quiet -hierarchical -filter \
+    {IS_PRIMITIVE && NAME =~ "inst_static/inst_cnvrt_static/inst_s0_axi_main/genblk1[0].inst_reg/*"}]
+if {[llength $static_axi_first_stage] == 0} {
+    error "V80 static AXI first-stage primitive cells were not found"
+}
+create_pblock pblock_static_axi_first_stage
+add_cells_to_pblock [get_pblocks pblock_static_axi_first_stage] \
+    $static_axi_first_stage
+resize_pblock [get_pblocks pblock_static_axi_first_stage] -add \
+    {CLOCKREGION_X2Y2:CLOCKREGION_X3Y3}
+set_property IS_SOFT FALSE [get_pblocks pblock_static_axi_first_stage]
