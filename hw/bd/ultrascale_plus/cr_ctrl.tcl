@@ -201,6 +201,7 @@ set_property -dict [list CONFIG.PRIM_IN_FREQ.VALUE_SRC USER] [get_bd_cells clk_w
 set cmd "set_property -dict \[list \
     CONFIG.USE_PHASE_ALIGNMENT {true} \
     CONFIG.OPTIMIZE_CLOCKING_STRUCTURE_EN {true} \
+    CONFIG.PRIM_SOURCE {No_buffer} \
     CONFIG.PRIM_IN_FREQ {250.000} \
     CONFIG.CLKOUT2_USED {true} \
     CONFIG.CLKOUT3_USED {true} \
