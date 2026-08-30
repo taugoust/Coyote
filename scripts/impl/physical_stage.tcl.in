@@ -51,23 +51,36 @@ if {[catch {
     # The U280 QSFP1 GT quad is in SLR2. Aurora's generic OOC constraints do
     # not keep the associated 402 MHz fabric with the board-selected quad,
     # which lets lane logic spill into SLR1 and creates multi-nanosecond routed
-    # paths. Keep the complete backend in the western half of the adjacent SLR;
-    # the prior full-SLR soft pblock still allowed a two-LUT 402 MHz path to
-    # span from SLICE_X9 to SLICE_X99 with 2.779 ns of routing delay.
+    # paths. Keep the complete backend in the western half of the adjacent SLR
+    # while implementing the outer shell. A DFX application configuration can
+    # reserve that same top-west region with EXCLUDE_PLACEMENT; in that context
+    # the shell-level Aurora pblock would leave its CDC BRAMs with no legal site,
+    # so let the configuration placer use the remaining shell-owned resources.
     if {$cfg(fdev) eq "u280" && $cfg(peer_backend) eq "aurora_qsfp1"} {
-        set aurora_backend [get_cells -quiet \
-            inst_shell/inst_peer_backend_aurora_qsfp1]
-        if {[llength $aurora_backend] != 1} {
-            error "Expected exactly one U280 Aurora peer backend, found [llength $aurora_backend]: $aurora_backend"
+        set application_exclusion_active 0
+        foreach candidate [get_pblocks -quiet] {
+            if {[get_property EXCLUDE_PLACEMENT $candidate]} {
+                set application_exclusion_active 1
+                break
+            }
         }
-        if {[llength [get_pblocks -quiet pblock_aurora_qsfp1]] == 0} {
-            create_pblock pblock_aurora_qsfp1
-            resize_pblock [get_pblocks pblock_aurora_qsfp1] -add \
-                {CLOCKREGION_X0Y8:CLOCKREGION_X3Y11}
-            set_property IS_SOFT FALSE [get_pblocks pblock_aurora_qsfp1]
+        if {$application_exclusion_active} {
+            puts "INFO: Skipping the outer-shell Aurora pblock because a DFX application exclusion is active"
+        } else {
+            set aurora_backend [get_cells -quiet \
+                inst_shell/inst_peer_backend_aurora_qsfp1]
+            if {[llength $aurora_backend] != 1} {
+                error "Expected exactly one U280 Aurora peer backend, found [llength $aurora_backend]: $aurora_backend"
+            }
+            if {[llength [get_pblocks -quiet pblock_aurora_qsfp1]] == 0} {
+                create_pblock pblock_aurora_qsfp1
+                resize_pblock [get_pblocks pblock_aurora_qsfp1] -add \
+                    {CLOCKREGION_X0Y8:CLOCKREGION_X3Y11}
+                set_property IS_SOFT FALSE [get_pblocks pblock_aurora_qsfp1]
+            }
+            add_cells_to_pblock [get_pblocks pblock_aurora_qsfp1] \
+                $aurora_backend
         }
-        add_cells_to_pblock [get_pblocks pblock_aurora_qsfp1] \
-            $aurora_backend
     }
     if {$incremental_reference_dcp ne ""} {
         read_checkpoint -incremental $incremental_reference_dcp
