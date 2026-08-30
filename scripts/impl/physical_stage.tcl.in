@@ -57,13 +57,12 @@ if {[catch {
     # the shell-level Aurora pblock would leave its CDC BRAMs with no legal site,
     # so let the configuration placer use the remaining shell-owned resources.
     if {$cfg(fdev) eq "u280" && $cfg(peer_backend) eq "aurora_qsfp1"} {
-        set application_exclusion_active 0
-        foreach candidate [get_pblocks -quiet] {
-            if {[get_property EXCLUDE_PLACEMENT $candidate]} {
-                set application_exclusion_active 1
-                break
-            }
-        }
+        set application_exclusion [get_pblocks -quiet \
+            pblock_inst_user_wrapper_0]
+        set application_exclusion_active [expr {
+            [llength $application_exclusion] == 1 &&
+            [get_property EXCLUDE_PLACEMENT $application_exclusion]
+        }]
         if {$application_exclusion_active} {
             puts "INFO: Skipping the outer-shell Aurora pblock because a DFX application exclusion is active"
         } else {

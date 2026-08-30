@@ -255,7 +255,8 @@ foreach required {
     {open_checkpoint $input_dcp}
     {pblock_aurora_qsfp1}
     {CLOCKREGION_X0Y8:CLOCKREGION_X3Y11}
-    {get_property EXCLUDE_PLACEMENT $candidate}
+    {pblock_inst_user_wrapper_0}
+    {get_property EXCLUDE_PLACEMENT $application_exclusion}
     {Skipping the outer-shell Aurora pblock because a DFX application exclusion is active}
     {Expected exactly one U280 Aurora peer backend}
     {switch -- $phase}
