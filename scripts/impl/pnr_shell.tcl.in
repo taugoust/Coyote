@@ -97,6 +97,47 @@ if {$cfg(peer_backend) eq "aurora_qsfp1"} {
         catch {reset_property LOC $c}
         set_property LOC $loc $c
     }
+
+    # The Aurora OOC checkpoint's stale PCIe-quad channel constraints can also
+    # clear the first XDMA quad's LOC properties while link_design resolves the
+    # collision. Restore the locations carried by the locked static checkpoint
+    # so integrated implementation retains legal hard-block constraints.
+    foreach {idx loc} {
+        0 GTYE4_CHANNEL_X1Y0
+        1 GTYE4_CHANNEL_X1Y1
+        2 GTYE4_CHANNEL_X1Y2
+        3 GTYE4_CHANNEL_X1Y3
+    } {
+        set c [get_cells -hierarchical -quiet -filter "NAME =~ inst_static/*xdma*gen_channel_container\[24\].*gen_gtye4_channel_inst\[$idx\].GTYE4_CHANNEL_PRIM_INST"]
+        if {[llength $c] != 1} {
+            error "Expected one U280 XDMA GT channel cell for generated index $idx, found [llength $c]: $c"
+        }
+        set_property LOC $loc $c
+    }
+
+    # The aggregate shell flow does not pass through physical_stage.tcl. Apply
+    # the same measured U280 Aurora locality used by staged implementation so
+    # generated TX logic remains in the SLR adjacent to the QSFP1 GT quad.
+    set application_exclusion [get_pblocks -quiet pblock_inst_user_wrapper_0]
+    set application_exclusion_active [expr {
+        [llength $application_exclusion] == 1 &&
+        [get_property EXCLUDE_PLACEMENT $application_exclusion]
+    }]
+    if {$application_exclusion_active} {
+        puts "INFO: Skipping the aggregate-flow Aurora pblock because a DFX application exclusion is active"
+    } else {
+        set aurora_backend [get_cells -quiet inst_shell/inst_peer_backend_aurora_qsfp1]
+        if {[llength $aurora_backend] != 1} {
+            error "Expected exactly one U280 Aurora peer backend, found [llength $aurora_backend]: $aurora_backend"
+        }
+        if {[llength [get_pblocks -quiet pblock_aurora_qsfp1]] == 0} {
+            create_pblock pblock_aurora_qsfp1
+            resize_pblock [get_pblocks pblock_aurora_qsfp1] -add \
+                {CLOCKREGION_X0Y8:CLOCKREGION_X3Y11}
+            set_property IS_SOFT FALSE [get_pblocks pblock_aurora_qsfp1]
+        }
+        add_cells_to_pblock [get_pblocks pblock_aurora_qsfp1] $aurora_backend
+    }
 }
 
 if {$cfg(build_opt) eq 1} {

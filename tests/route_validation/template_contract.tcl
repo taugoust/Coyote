@@ -210,6 +210,18 @@ foreach required {
     require_text $base $required $base_path
 }
 
+set pnr_source [read_source $pnr_path]
+foreach required {
+    {GTYE4_CHANNEL_X1Y0}
+    {GTYE4_CHANNEL_X1Y3}
+    {Expected one U280 XDMA GT channel cell}
+    {create_pblock pblock_aurora_qsfp1}
+    {CLOCKREGION_X0Y8:CLOCKREGION_X3Y11}
+    {add_cells_to_pblock [get_pblocks pblock_aurora_qsfp1] $aurora_backend}
+} {
+    require_text $pnr_source $required $pnr_path
+}
+
 foreach spec [list \
     [list $pnr_path 1 1] \
     [list $app_path 1 1] \
