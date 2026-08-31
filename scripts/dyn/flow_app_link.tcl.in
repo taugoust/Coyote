@@ -21,6 +21,11 @@ if {[catch {
         }
         add_files -fileset [get_filesets constrs_1] \
             "$hw_dir/constraints/$cfg(fdev)/dynamic/impl"
+        if {$cfg(fplan_path) != "0"} {
+            add_files -fileset [get_filesets constrs_1] "$cfg(fplan_path)"
+            set_property PROCESSING_ORDER LATE \
+                [get_files [file tail $cfg(fplan_path)]]
+        }
 
         set reconfig_partitions {}
         for {set j 0} {$j < $cfg(n_reg)} {incr j} {
