@@ -804,7 +804,16 @@ module shell_top (
         .s_axi(axi_service_ctrl_aclk), .m_axi(axi_service_ctrl)
     );
 {% else %}
-    `AXIL_ASSIGN(axi_service_ctrl_aclk, axi_service_ctrl)
+    // Keep the resident-service request and response channels on explicit
+    // registered boundaries. Besides isolating control timing, this prevents
+    // implementation from collapsing a rarely used read channel across the
+    // shell/resident-service hierarchy.
+    axil_reg_array #(.N_STAGES(1)) inst_service_control_reg (
+        .aclk(aclk),
+        .aresetn(aresetn),
+        .s_axi(axi_service_ctrl_aclk),
+        .m_axi(axi_service_ctrl)
+    );
 {% endif %}
 {% endif %}
 
