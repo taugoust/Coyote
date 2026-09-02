@@ -133,8 +133,12 @@ module aurora_module (
     wire         nfc_tready;
 
     // ---------------------------------------------------------------------
-    // Aurora IP uses big-endian [0:N-1] ordering on its tdata/tkeep/lane_up
-    // ports. Coyote AXIS is little-endian [N-1:0]. Bit-reverse on the boundary.
+    // Aurora declares its AXI vectors in ascending index order. Preserve AXI
+    // byte-lane identity explicitly: Aurora keep lane b and data byte b map to
+    // Coyote keep lane b and data byte b. A whole-vector reversal would move a
+    // partial final keep mask to the wrong side of the framed Aurora transfer;
+    // full-width traffic cannot expose that error. Bits are reversed only
+    // within each byte to bridge the opposite packed-vector declarations.
     // ---------------------------------------------------------------------
     wire [0:255] ip_tx_tdata;
     wire [0:31]  ip_tx_tkeep;
@@ -143,18 +147,21 @@ module aurora_module (
     wire [0:3]   ip_lane_up;
     wire [3:0]   lane_up_w;
 
-    genvar gi;
+    genvar byte_index;
+    genvar bit_index;
     generate
-        for (gi = 0; gi < 256; gi = gi + 1) begin : g_data_rev
-            assign ip_tx_tdata[gi]      = tx_tdata[255 - gi];
-            assign rx_tdata[255 - gi]   = ip_rx_tdata[gi];
+        for (byte_index = 0; byte_index < 32; byte_index = byte_index + 1) begin : g_byte_lane
+            assign ip_tx_tkeep[byte_index] = tx_tkeep[byte_index];
+            assign rx_tkeep[byte_index] = ip_rx_tkeep[byte_index];
+            for (bit_index = 0; bit_index < 8; bit_index = bit_index + 1) begin : g_byte_bit
+                assign ip_tx_tdata[byte_index * 8 + bit_index] =
+                    tx_tdata[byte_index * 8 + 7 - bit_index];
+                assign rx_tdata[byte_index * 8 + 7 - bit_index] =
+                    ip_rx_tdata[byte_index * 8 + bit_index];
+            end
         end
-        for (gi = 0; gi < 32; gi = gi + 1) begin : g_keep_rev
-            assign ip_tx_tkeep[gi]      = tx_tkeep[31 - gi];
-            assign rx_tkeep[31 - gi]    = ip_rx_tkeep[gi];
-        end
-        for (gi = 0; gi < 4; gi = gi + 1) begin : g_laneup_rev
-            assign lane_up_w[gi]        = ip_lane_up[3 - gi];
+        for (byte_index = 0; byte_index < 4; byte_index = byte_index + 1) begin : g_laneup_rev
+            assign lane_up_w[byte_index] = ip_lane_up[3 - byte_index];
         end
     endgenerate
 

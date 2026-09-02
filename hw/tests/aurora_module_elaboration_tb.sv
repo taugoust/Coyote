@@ -88,8 +88,8 @@ module aurora_loopback_ip (
     assign m_axi_rx_tkeep = '0;
     assign m_axi_rx_tlast = 1'b0;
     assign m_axi_rx_tvalid = 1'b0;
-    assign channel_up = 1'b0;
-    assign lane_up = '0;
+    assign channel_up = !reset_pb && !pma_init;
+    assign lane_up = channel_up ? '1 : '0;
     assign hard_err = 1'b0;
     assign soft_err = 1'b0;
     assign mmcm_not_locked_out = 1'b0;
@@ -151,6 +151,7 @@ module aurora_module_elaboration_tb;
     logic mmcm_not_locked;
     logic gt_pll_lock;
     logic rx_overflow;
+    logic saw_partial_final = 1'b0;
     AXI4S #(.AXI4S_DATA_BITS(512)) rx (.*);
     AXI4S #(.AXI4S_DATA_BITS(512)) tx (.*);
 
@@ -171,13 +172,60 @@ module aurora_module_elaboration_tb;
     );
 
     initial begin
+        logic [511:0] record_data;
+        int cycles;
+
         tx.tdata = '0;
         tx.tkeep = '0;
         tx.tlast = 1'b0;
         tx.tvalid = 1'b0;
         rx.tready = 1'b1;
+        record_data = {
+            256'hffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100,
+            256'h0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        };
+
         repeat (3) @(posedge aclk);
+        @(negedge init_clk);
+        sys_reset = 1'b0;
+        aresetn = 1'b1;
+
+        cycles = 0;
+        while (!channel_up && cycles < 12000) begin
+            @(posedge init_clk);
+            cycles++;
+        end
+        if (!channel_up)
+            $fatal(1, "Aurora behavioral link did not leave reset");
+
+        @(negedge aclk);
+        tx.tdata = record_data;
+        tx.tkeep = 64'h00ff_ffff_ffff_ffff;
+        tx.tlast = 1'b1;
+        tx.tvalid = 1'b1;
+        // The minimal FIFO stub is combinational and does not model an
+        // asynchronous handshake. Keep valid asserted until the user-clock
+        // side has emitted the saved high half.
+        cycles = 0;
+        while (!saw_partial_final && cycles < 32) begin
+            @(negedge init_clk);
+            cycles++;
+        end
+        tx.tvalid = 1'b0;
+        if (!saw_partial_final)
+            $fatal(1, "56-byte final transfer did not reach the Aurora core");
+
         $display("aurora_module_elaboration_tb: PASS");
         $finish;
+    end
+
+    // Aurora's ascending byte-lane convention places 24 valid bytes in the
+    // leftmost 24 keep indices, represented numerically as ffffff00.
+    always_ff @(posedge init_clk) begin
+        if (dut.tx_tvalid && dut.tx_tready && dut.tx_tlast) begin
+            if (dut.ip_tx_tkeep !== 32'hffff_ff00)
+                $fatal(1, "partial final keep reached the Aurora core on wrong lanes");
+            saw_partial_final <= 1'b1;
+        end
     end
 endmodule

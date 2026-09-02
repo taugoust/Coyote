@@ -96,6 +96,32 @@ module aurora_width_adapter_tb;
         if (tx_m_valid)
             $fatal(1, "TX high half did not retire");
 
+        // The 56-byte one-beat QSH2 record used by the hardware oracle must
+        // become one full low transfer followed by a 24-byte high transfer
+        // carrying TLAST. Observe both handshakes explicitly.
+        @(negedge clk);
+        tx_s_data = {256'hffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100,
+                     256'h0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef};
+        tx_s_keep = 64'h00ff_ffff_ffff_ffff;
+        tx_s_last = 1'b1;
+        tx_s_valid = 1'b1;
+        tx_m_ready = 1'b1;
+        #1;
+        if (!tx_s_ready || !tx_m_valid ||
+            tx_m_data != tx_s_data[255:0] ||
+            tx_m_keep != 32'hffff_ffff || tx_m_last)
+            $fatal(1, "56-byte TX low transfer mismatch");
+        @(posedge clk);
+        #1;
+        if (!tx_m_valid || tx_m_data != tx_s_data[511:256] ||
+            tx_m_keep != 32'h00ff_ffff || !tx_m_last)
+            $fatal(1, "56-byte TX final transfer mismatch");
+        tx_s_valid = 1'b0;
+        @(posedge clk);
+        #1;
+        if (tx_m_valid)
+            $fatal(1, "56-byte TX final transfer did not retire");
+
         // Crossing the FIFO safety threshold issues and refreshes an immediate
         // maximum pause; leaving it issues one zero-duration resume command.
         @(negedge clk);
@@ -118,6 +144,32 @@ module aurora_width_adapter_tb;
         #1;
         if (!nfc_command_valid || nfc_command_data != 16'h0000)
             $fatal(1, "NFC resume was not issued");
+        @(posedge clk);
+
+        // Reassemble the same partial final transfer and require exact logical
+        // keep/last recovery at the 512-bit boundary.
+        @(negedge clk);
+        rx_s_data = 256'h0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef;
+        rx_s_keep = 32'hffff_ffff;
+        rx_s_last = 1'b0;
+        rx_s_valid = 1'b1;
+        @(posedge clk);
+        @(negedge clk);
+        rx_s_data = 256'hffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100;
+        rx_s_keep = 32'h00ff_ffff;
+        rx_s_last = 1'b1;
+        @(posedge clk);
+        @(negedge clk);
+        rx_s_valid = 1'b0;
+        #1;
+        if (!rx_m_valid ||
+            rx_m_data[255:0] !=
+                256'h0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef ||
+            rx_m_data[511:256] !=
+                256'hffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100 ||
+            rx_m_keep != 64'h00ff_ffff_ffff_ffff || !rx_m_last ||
+            rx_overflow)
+            $fatal(1, "56-byte RX record-boundary reconstruction mismatch");
         @(posedge clk);
 
         // Four consecutive push-only Aurora halves produce two registered
