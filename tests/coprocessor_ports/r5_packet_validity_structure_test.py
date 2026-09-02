@@ -66,17 +66,20 @@ for forbidden_storage in ("tx_packet_memory", "rx_data", "rx_keep", "rx_last"):
     if re.search(rf"\b{forbidden_storage}\s*\[", source):
         sys.exit(f"R5 packet storage bypasses isolated byte memory: {forbidden_storage}")
 
-for template_name in (
-    "user_wrapper_tmplt.txt",
-    "shell_top_tmplt.txt",
-    "dynamic_top_tmplt.txt",
-):
-    template = (repository_root / "hw/templates/common" / template_name).read_text(
-        encoding="utf-8"
-    )
+common_templates = repository_root / "hw/templates/common"
+for template_name in ("user_wrapper_tmplt.txt", "dynamic_top_tmplt.txt"):
+    template = (common_templates / template_name).read_text(encoding="utf-8")
     if re.search(r"logic\[15:0\].*s_axi_debug_hub_wstrb", template) is None:
-        sys.exit(f"{template_name} does not expose the 16-bit debug-hub write strobe")
-    if re.search(r"logic\[16:0\].*s_axi_debug_hub_wstrb", template):
-        sys.exit(f"{template_name} regressed to a 17-bit debug-hub write strobe")
+        sys.exit(f"{template_name} does not expose the 16-bit internal write strobe")
+
+shell_template = (common_templates / "shell_top_tmplt.txt").read_text(encoding="utf-8")
+if re.search(r"logic\[16:0\].*s_axi_debug_hub_wstrb", shell_template) is None:
+    sys.exit("shell_top does not preserve the published 17-bit checkpoint boundary")
+if ".s_axi_debug_hub_wstrb(s_axi_debug_hub_wstrb[15:0])" not in shell_template:
+    sys.exit("shell_top does not discard the unused checkpoint WSTRB bit")
+
+cyt_template = (common_templates / "cyt_top_tmplt.txt").read_text(encoding="utf-8")
+if ".s_axi_debug_hub_wstrb(axi_debug_hub_st2sh.wstrb)" not in cyt_template:
+    sys.exit("cyt_top does not preserve the generated static checkpoint boundary")
 
 print("r5_packet_validity_structure_test: PASS")
