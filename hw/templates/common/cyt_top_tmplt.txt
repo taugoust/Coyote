@@ -780,7 +780,7 @@ module cyt_top (
         .s_axi_debug_hub_rvalid(axi_debug_hub_st2sh.rvalid),
         .s_axi_debug_hub_wdata(axi_debug_hub_st2sh.wdata),
         .s_axi_debug_hub_wlast(axi_debug_hub_st2sh.wlast),
-        .s_axi_debug_hub_wstrb(axi_debug_hub_st2sh.wstrb),
+        .s_axi_debug_hub_wstrb(axi_debug_hub_st2sh.wstrb[15:0]),
         .s_axi_debug_hub_wready(axi_debug_hub_st2sh.wready),
         .s_axi_debug_hub_wvalid(axi_debug_hub_st2sh.wvalid),
         .s_axi_debug_hub_bid(axi_debug_hub_st2sh.bid),
