@@ -219,12 +219,17 @@ module aurora_module_elaboration_tb;
         $finish;
     end
 
-    // Aurora's ascending byte-lane convention places 24 valid bytes in the
-    // leftmost 24 keep indices, represented numerically as ffffff00.
+    // Check the established IP-facing wire representation directly rather
+    // than deriving an expectation through the receive mapping. The byte-
+    // asymmetric data pattern and partial keep mask both detect byte-lane
+    // remapping while preserving the whole-vector declaration conversion.
     always_ff @(posedge init_clk) begin
         if (dut.tx_tvalid && dut.tx_tready && dut.tx_tlast) begin
-            if (dut.ip_tx_tkeep !== 32'hffff_ff00)
-                $fatal(1, "partial final keep reached the Aurora core on wrong lanes");
+            if (dut.ip_tx_tdata !==
+                256'hffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100)
+                $fatal(1, "partial final data changed at the Aurora wire boundary");
+            if (dut.ip_tx_tkeep !== 32'h00ff_ffff)
+                $fatal(1, "partial final keep changed at the Aurora wire boundary");
             saw_partial_final <= 1'b1;
         end
     end
