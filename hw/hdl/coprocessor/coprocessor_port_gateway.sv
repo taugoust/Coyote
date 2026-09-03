@@ -145,6 +145,12 @@ module coprocessor_port_gateway #(
 
     localparam integer PROVIDER_INDEX_BITS = N_PROVIDERS <= 1 ? 1 : $clog2(N_PROVIDERS);
     localparam integer PACKET_COUNT_BITS = MAX_PACKET_BEATS <= 1 ? 1 : $clog2(MAX_PACKET_BEATS + 1);
+    localparam integer STREAM_KEEP_BITS = STREAM_DATA_BITS / 8;
+    localparam integer CAPTURE_GROUP_BITS = 32;
+    localparam integer DATA_CAPTURE_GROUPS =
+        (STREAM_DATA_BITS + CAPTURE_GROUP_BITS - 1) / CAPTURE_GROUP_BITS;
+    localparam integer KEEP_CAPTURE_GROUPS =
+        (STREAM_KEEP_BITS + CAPTURE_GROUP_BITS - 1) / CAPTURE_GROUP_BITS;
 
     logic [PROVIDER_INDEX_BITS-1:0] selected_index;
     logic selected_valid;
@@ -167,6 +173,30 @@ module coprocessor_port_gateway #(
     logic [STREAM_ID_BITS-1:0] recv_buffer_id;
     logic recv_buffer_last;
     logic [GENERATION_BITS-1:0] recv_buffer_generation;
+
+    logic application_send_keep_valid;
+    logic selected_provider_recv_keep_valid;
+    logic application_send_handshake;
+    logic selected_provider_recv_handshake;
+    logic selected_provider_recv_generation_valid;
+    (* max_fanout = 32 *) logic send_capture;
+    (* max_fanout = 32 *) logic recv_capture;
+    (* keep = "true", dont_touch = "true", max_fanout = 32 *)
+    logic [DATA_CAPTURE_GROUPS-1:0] send_data_capture_enable;
+    (* keep = "true", dont_touch = "true", max_fanout = 32 *)
+    logic [KEEP_CAPTURE_GROUPS-1:0] send_keep_capture_enable;
+    (* keep = "true", dont_touch = "true", max_fanout = 32 *)
+    logic send_route_capture_enable;
+    (* keep = "true", dont_touch = "true", max_fanout = 32 *)
+    logic send_generation_capture_enable;
+    (* keep = "true", dont_touch = "true", max_fanout = 32 *)
+    logic [DATA_CAPTURE_GROUPS-1:0] recv_data_capture_enable;
+    (* keep = "true", dont_touch = "true", max_fanout = 32 *)
+    logic [KEEP_CAPTURE_GROUPS-1:0] recv_keep_capture_enable;
+    (* keep = "true", dont_touch = "true", max_fanout = 32 *)
+    logic recv_route_capture_enable;
+    (* keep = "true", dont_touch = "true", max_fanout = 32 *)
+    logic recv_generation_capture_enable;
 
     logic mmio_write_active;
     logic mmio_read_active;
@@ -199,12 +229,131 @@ module coprocessor_port_gateway #(
         input logic [STREAM_DATA_BITS/8-1:0] keep,
         input logic last
     );
-        logic [STREAM_DATA_BITS/8-1:0] incremented;
+        logic [STREAM_DATA_BITS/8-1:0] invalid_zero_to_one_transitions;
         begin
-            incremented = keep + 1'b1;
-            valid_keep = last ? ((keep != '0) && ((keep & incremented) == '0)) : (&keep);
+            // A legal final mask is a nonempty run of ones from lane zero.
+            // Detect any one above a zero directly, without an increment carry chain.
+            invalid_zero_to_one_transitions = (~keep) & (keep >> 1);
+            valid_keep = last ? (keep[0] && !(|invalid_zero_to_one_transitions)) : (&keep);
         end
     endfunction
+
+    always_comb begin
+        application_send_keep_valid = valid_keep(application_send_tkeep, application_send_tlast);
+        selected_provider_recv_keep_valid = selected_valid &&
+            valid_keep(provider_recv_tkeep[selected_index], provider_recv_tlast[selected_index]);
+        selected_provider_recv_generation_valid = selected_valid &&
+            provider_recv_generation[selected_index] ==
+                (provider_recv_open ? provider_packet_generation : binding_generation);
+    end
+
+    always_comb begin
+        application_send_handshake = application_send_tvalid && application_send_tready;
+        selected_provider_recv_handshake = selected_valid &&
+            provider_recv_tvalid[selected_index] && provider_recv_tready[selected_index];
+        send_capture = application_send_handshake && application_send_keep_valid;
+        recv_capture = selected_provider_recv_handshake &&
+                       selected_provider_recv_keep_valid &&
+                       selected_provider_recv_generation_valid;
+
+        // Preserve one bounded enable branch per payload slice. Keeping these
+        // aliases distinct prevents one accepted-beat term from becoming the
+        // clock enable for the complete data, keep, and provenance record.
+        send_data_capture_enable = {DATA_CAPTURE_GROUPS{send_capture}};
+        send_keep_capture_enable = {KEEP_CAPTURE_GROUPS{send_capture}};
+        send_route_capture_enable = send_capture;
+        send_generation_capture_enable = send_capture;
+        recv_data_capture_enable = {DATA_CAPTURE_GROUPS{recv_capture}};
+        recv_keep_capture_enable = {KEEP_CAPTURE_GROUPS{recv_capture}};
+        recv_route_capture_enable = recv_capture;
+        recv_generation_capture_enable = recv_capture;
+    end
+
+    generate
+        for (
+            genvar send_data_group = 0;
+            send_data_group < DATA_CAPTURE_GROUPS;
+            send_data_group = send_data_group + 1
+        ) begin : gen_send_data_capture
+            localparam integer GROUP_LSB = send_data_group * CAPTURE_GROUP_BITS;
+            localparam integer GROUP_BITS =
+                GROUP_LSB + CAPTURE_GROUP_BITS <= STREAM_DATA_BITS ?
+                    CAPTURE_GROUP_BITS : STREAM_DATA_BITS - GROUP_LSB;
+            always_ff @(posedge aclk) begin
+                if (send_data_capture_enable[send_data_group])
+                    send_buffer_data[GROUP_LSB+:GROUP_BITS] <= application_send_tdata[GROUP_LSB+:GROUP_BITS];
+            end
+        end
+        for (
+            genvar send_keep_group = 0;
+            send_keep_group < KEEP_CAPTURE_GROUPS;
+            send_keep_group = send_keep_group + 1
+        ) begin : gen_send_keep_capture
+            localparam integer GROUP_LSB = send_keep_group * CAPTURE_GROUP_BITS;
+            localparam integer GROUP_BITS =
+                GROUP_LSB + CAPTURE_GROUP_BITS <= STREAM_KEEP_BITS ?
+                    CAPTURE_GROUP_BITS : STREAM_KEEP_BITS - GROUP_LSB;
+            always_ff @(posedge aclk) begin
+                if (send_keep_capture_enable[send_keep_group])
+                    send_buffer_keep[GROUP_LSB+:GROUP_BITS] <= application_send_tkeep[GROUP_LSB+:GROUP_BITS];
+            end
+        end
+        for (
+            genvar recv_data_group = 0;
+            recv_data_group < DATA_CAPTURE_GROUPS;
+            recv_data_group = recv_data_group + 1
+        ) begin : gen_recv_data_capture
+            localparam integer GROUP_LSB = recv_data_group * CAPTURE_GROUP_BITS;
+            localparam integer GROUP_BITS =
+                GROUP_LSB + CAPTURE_GROUP_BITS <= STREAM_DATA_BITS ?
+                    CAPTURE_GROUP_BITS : STREAM_DATA_BITS - GROUP_LSB;
+            always_ff @(posedge aclk) begin
+                if (recv_data_capture_enable[recv_data_group])
+                    recv_buffer_data[GROUP_LSB +: GROUP_BITS] <=
+                        provider_recv_tdata[selected_index][GROUP_LSB +: GROUP_BITS];
+            end
+        end
+        for (
+            genvar recv_keep_group = 0;
+            recv_keep_group < KEEP_CAPTURE_GROUPS;
+            recv_keep_group = recv_keep_group + 1
+        ) begin : gen_recv_keep_capture
+            localparam integer GROUP_LSB = recv_keep_group * CAPTURE_GROUP_BITS;
+            localparam integer GROUP_BITS =
+                GROUP_LSB + CAPTURE_GROUP_BITS <= STREAM_KEEP_BITS ?
+                    CAPTURE_GROUP_BITS : STREAM_KEEP_BITS - GROUP_LSB;
+            always_ff @(posedge aclk) begin
+                if (recv_keep_capture_enable[recv_keep_group])
+                    recv_buffer_keep[GROUP_LSB +: GROUP_BITS] <=
+                        provider_recv_tkeep[selected_index][GROUP_LSB +: GROUP_BITS];
+            end
+        end
+    endgenerate
+
+    always_ff @(posedge aclk) begin
+        if (!aresetn) begin
+            send_buffer_index <= '0;
+            send_buffer_id <= '0;
+            send_buffer_last <= 1'b0;
+            send_buffer_generation <= '0;
+            recv_buffer_id <= '0;
+            recv_buffer_last <= 1'b0;
+            recv_buffer_generation <= '0;
+        end else begin
+            if (send_route_capture_enable) begin
+                send_buffer_index <= selected_index;
+                send_buffer_id <= application_send_tid;
+                send_buffer_last <= application_send_tlast;
+            end
+            if (send_generation_capture_enable) send_buffer_generation <= binding_generation;
+            if (recv_route_capture_enable) begin
+                recv_buffer_id   <= provider_recv_tid[selected_index];
+                recv_buffer_last <= provider_recv_tlast[selected_index];
+            end
+            if (recv_generation_capture_enable)
+                recv_buffer_generation <= provider_recv_generation[selected_index];
+        end
+    end
 
     logic read_candidate_valid;
     logic [PROVIDER_INDEX_BITS-1:0] read_candidate_index;
@@ -435,9 +584,8 @@ module coprocessor_port_gateway #(
         if (selected_valid && !binding_fault_event && !application_decoupled &&
             (binding_state == STATE_READY ||
              (binding_state == STATE_QUIESCING && application_send_open)) &&
-            !send_buffer_valid) begin
-            application_send_tready = valid_keep(application_send_tkeep, application_send_tlast) ?
-                                      1'b1 : application_send_tvalid;
+            (!send_buffer_valid || provider_send_tready[send_buffer_index])) begin
+            application_send_tready = application_send_keep_valid ? 1'b1 : application_send_tvalid;
         end
 
         // A provider may have several complete responses committed before the
@@ -446,7 +594,7 @@ module coprocessor_port_gateway #(
         // and emptied its pre-fence queue.
         if (selected_valid && !binding_fault_event && !application_decoupled &&
             (binding_state == STATE_READY || binding_state == STATE_QUIESCING) &&
-            !recv_buffer_valid &&
+            (!recv_buffer_valid || application_recv_tready) &&
             provider_recv_generation[selected_index] ==
                 (provider_recv_open ? provider_packet_generation : binding_generation)) begin
             provider_recv_tready[selected_index] = 1'b1;
@@ -472,18 +620,7 @@ module coprocessor_port_gateway #(
             provider_recv_beats <= '0;
             provider_packet_generation <= '0;
             send_buffer_valid <= 1'b0;
-            send_buffer_index <= '0;
-            send_buffer_data <= '0;
-            send_buffer_keep <= '0;
-            send_buffer_id <= '0;
-            send_buffer_last <= 1'b0;
-            send_buffer_generation <= '0;
             recv_buffer_valid <= 1'b0;
-            recv_buffer_data <= '0;
-            recv_buffer_keep <= '0;
-            recv_buffer_id <= '0;
-            recv_buffer_last <= 1'b0;
-            recv_buffer_generation <= '0;
             stale_response_fault <= 1'b0;
             packet_fault <= 1'b0;
         end else begin
@@ -494,39 +631,12 @@ module coprocessor_port_gateway #(
             if (recv_buffer_valid && application_recv_tready) begin
                 recv_buffer_valid <= 1'b0;
             end
-            if (application_send_tvalid && application_send_tready &&
-                valid_keep(application_send_tkeep, application_send_tlast)) begin
-                send_buffer_valid <= 1'b1;
-                send_buffer_index <= selected_index;
-                send_buffer_data <= application_send_tdata;
-                send_buffer_keep <= application_send_tkeep;
-                send_buffer_id <= application_send_tid;
-                send_buffer_last <= application_send_tlast;
-                send_buffer_generation <= binding_generation;
-            end
-            if (selected_valid && provider_recv_tvalid[selected_index] &&
-                provider_recv_tready[selected_index] &&
-                valid_keep(provider_recv_tkeep[selected_index], provider_recv_tlast[selected_index]) &&
-                provider_recv_generation[selected_index] ==
-                    (provider_recv_open ? provider_packet_generation : binding_generation)) begin
-                recv_buffer_valid <= 1'b1;
-                recv_buffer_data <= provider_recv_tdata[selected_index];
-                recv_buffer_keep <= provider_recv_tkeep[selected_index];
-                recv_buffer_id <= provider_recv_tid[selected_index];
-                recv_buffer_last <= provider_recv_tlast[selected_index];
-                recv_buffer_generation <= provider_recv_generation[selected_index];
-            end
-            if (application_send_tvalid && application_send_tready &&
-                !valid_keep(application_send_tkeep, application_send_tlast)) begin
+            if (send_capture) send_buffer_valid <= 1'b1;
+            if (recv_capture) recv_buffer_valid <= 1'b1;
+            if (application_send_handshake && !application_send_keep_valid) packet_fault <= 1'b1;
+            if (selected_provider_recv_handshake && !selected_provider_recv_keep_valid)
                 packet_fault <= 1'b1;
-            end
-            if (selected_valid && provider_recv_tvalid[selected_index] &&
-                provider_recv_tready[selected_index] &&
-                !valid_keep(provider_recv_tkeep[selected_index], provider_recv_tlast[selected_index])) begin
-                packet_fault <= 1'b1;
-            end
-            if (application_send_tvalid && application_send_tready &&
-                valid_keep(application_send_tkeep, application_send_tlast)) begin
+            if (send_capture) begin
                 if (!application_send_open) begin
                     application_send_open <= !application_send_tlast;
                     application_send_beats <= 1;
