@@ -312,6 +312,9 @@ foreach required {
     link_design
     {write_checkpoint -force}
     {file delete -force "$dcp_dir/app_link_complete"}
+    {if {$cfg(fplan_path) != "0"}}
+    {add_files -fileset [get_filesets constrs_1] "$cfg(fplan_path)"}
+    {set_property PROCESSING_ORDER LATE}
 } {
     require_text $app_link $required $app_link_path
 }
