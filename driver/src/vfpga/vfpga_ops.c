@@ -33,19 +33,28 @@ struct hlist_head hpid_ctid_map[MAX_N_REGIONS][1 << (PID_HASH_TABLE_ORDER)];
 int vfpga_dev_open(struct inode *inode, struct file *file) {
     // Parse inode arg into vfpga_dev struct and check it's non-null (BUG_ON)
     int minor = iminor(inode);
+    uint32_t ref_cnt;
     struct vfpga_dev *device = container_of(inode->i_cdev, struct vfpga_dev, cdev);
     BUG_ON(!device);
-    dbg_info("vFPGA device %d opened, hpid %d, ref_cnt %d\n", minor, current->pid, device->ref_cnt);
+
+    // Serialize the open count with last-close ownership transfer.
+    mutex_lock(&device->pid_lock);
+    ref_cnt = ++device->ref_cnt;
+    mutex_unlock(&device->pid_lock);
 
     // Set file private data, so the attributes of the opened vfpga_dev can be accessed in other methods
     file->private_data = (void *) device;
-    device->ref_cnt++;
+    dbg_info("vFPGA device %d opened, hpid %d, ref_cnt %d\n", minor, current->pid, ref_cnt);
 
     return 0;
 }
 
 int vfpga_dev_release(struct inode *inode, struct file *file) {
     int bkt;
+    int ret_val = 0;
+    int minor = iminor(inode);
+    uint32_t ref_cnt;
+    struct hlist_node *tmp_h_node;
     struct hpid_ctid_pages *tmp_h_entry;
     struct list_head *l_p, *l_n;
 
@@ -53,48 +62,62 @@ int vfpga_dev_release(struct inode *inode, struct file *file) {
     struct vfpga_dev *device = container_of(inode->i_cdev, struct vfpga_dev, cdev);
     BUG_ON(!device);
 
-    // Traverse all Coyote threads for this vFPGA device and free their resources
-    if(--device->ref_cnt == 0) {
-        hash_for_each(hpid_ctid_map[device->id], bkt, tmp_h_entry, entry) {
+    // pid_lock makes exactly one close the owner of last-close teardown and
+    // excludes concurrent CTID registration/unregistration. mmu_lock then
+    // drains any in-flight mapping operation before pages are unpublished.
+    mutex_lock(&device->pid_lock);
+    if(WARN_ON_ONCE(device->ref_cnt == 0)) {
+        mutex_unlock(&device->pid_lock);
+        return -EINVAL;
+    }
+
+    ref_cnt = --device->ref_cnt;
+    if(ref_cnt == 0) {
+        mutex_lock(&device->mmu_lock);
+        change_tlb_lock(device);
+
+        hash_for_each_safe(hpid_ctid_map[device->id], bkt, tmp_h_node, tmp_h_entry, entry) {
             list_for_each_safe(l_p, l_n, &tmp_h_entry->ctid_list) {
-                // entry
+                int cleanup_ret = 0;
                 struct ctid_entry *l_entry = list_entry(l_p, struct ctid_entry, list);
 
-                // Unamp all leftover user pages
                 #ifdef HMM_KERNEL
-                    if(en_hmm) 
+                    if(en_hmm)
                         free_card_mem(device, l_entry->ctid);
-                    else 
-                #endif                            
-                    tlb_put_user_pages_ctid(device, l_entry->ctid, tmp_h_entry->hpid, 1);
+                    else
+                #endif
+                    cleanup_ret = tlb_put_user_pages_ctid(device, l_entry->ctid, tmp_h_entry->hpid, 1);
 
-                // Unregister Coyote thread (if registered)
+                if(cleanup_ret && !ret_val)
+                    ret_val = cleanup_ret;
+
                 device->ctid_chunks[l_entry->ctid].next = device->pid_alloc;
                 device->pid_alloc = &device->ctid_chunks[l_entry->ctid];
+                device->pid_array[l_entry->ctid] = 0;
 
-                // Delete entry
-                list_del(&l_entry->list); 
-
-                // Remove notifier and entry if all cThreads for this HPID are gone
-                if(list_empty(&tmp_h_entry->ctid_list)) {
-                    #ifdef HMM_KERNEL                        
-                        // remove notifier
-                        if(en_hmm) {
-                            dbg_info("releasing notifier for hpid %d\n", tmp_h_entry->hpid);
-                            mmu_interval_notifier_remove(&tmp_h_entry->mmu_not);
-                        }
-                    #endif 
-
-                    hash_del(&tmp_h_entry->entry);
-                }
+                list_del(&l_entry->list);
+                kfree(l_entry);
             }
-        }
-    }
-    
-    int minor = iminor(inode);
-    dbg_info("vFPGA device %d released, spid %d, ref cnt %d\n", minor, current->pid, device->ref_cnt);
 
-    return 0;
+            #ifdef HMM_KERNEL
+                if(en_hmm) {
+                    dbg_info("releasing notifier for hpid %d\n", tmp_h_entry->hpid);
+                    mmu_interval_notifier_remove(&tmp_h_entry->mmu_not);
+                }
+            #endif
+
+            hash_del(&tmp_h_entry->entry);
+            kfree(tmp_h_entry);
+        }
+
+        change_tlb_lock(device);
+        mutex_unlock(&device->mmu_lock);
+    }
+    mutex_unlock(&device->pid_lock);
+
+    dbg_info("vFPGA device %d released, spid %d, ref cnt %d\n", minor, current->pid, ref_cnt);
+
+    return ret_val;
 }
 
 long vfpga_dev_ioctl(struct file *file, unsigned int command, unsigned long arg) {
@@ -224,18 +247,30 @@ long vfpga_dev_ioctl(struct file *file, unsigned int command, unsigned long arg)
                             l_entry = list_entry(l_p, struct ctid_entry, list);
 
                             if(l_entry->ctid == ctid) {
-                                // Unmap any leftover user pages for this Coyot thread
+                                int cleanup_ret = 0;
+
+                                // Exclude page-fault/map/unmap work and lock the
+                                // hardware TLB while ownership is torn down.
+                                mutex_lock(&device->mmu_lock);
+                                change_tlb_lock(device);
                                 #ifdef HMM_KERNEL
                                     if(en_hmm)
                                         free_card_mem(device, ctid);
-                                    else 
-                                #endif                            
-                                    tlb_put_user_pages_ctid(device, ctid, hpid, 1);
+                                    else
+                                #endif
+                                    cleanup_ret = tlb_put_user_pages_ctid(device, ctid, hpid, 1);
+                                change_tlb_lock(device);
+                                mutex_unlock(&device->mmu_lock);
 
-                                // Unregister Coyote thread and delete entry from list
+                                if(cleanup_ret && !ret_val)
+                                    ret_val = cleanup_ret;
+
+                                // Unregister Coyote thread and delete its owner.
                                 device->ctid_chunks[l_entry->ctid].next = device->pid_alloc;
                                 device->pid_alloc = &device->ctid_chunks[l_entry->ctid];
-                                list_del(&l_entry->list);   
+                                device->pid_array[l_entry->ctid] = 0;
+                                list_del(&l_entry->list);
+                                kfree(l_entry);
                             }
                         }
 
@@ -248,7 +283,9 @@ long vfpga_dev_ioctl(struct file *file, unsigned int command, unsigned long arg)
                                 }
                             #endif 
                             hash_del(&tmp_h_entry->entry);
+                            kfree(tmp_h_entry);
                         }
+                        break;
                     }
                 }
 
