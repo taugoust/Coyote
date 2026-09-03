@@ -53,13 +53,16 @@ proc cr_bd_design_ctrl { parentCell } {
     CONFIG.PROTOCOL {AXI4LITE} \
   ] $axi_cnfg
 
+  # Host BAR accesses arrive as 32- or 64-bit transfers on this 512-bit AXI
+  # interface. Advertise narrow-transfer support so the AXI-to-AXI-Lite width
+  # converter preserves both dword lanes and their response status.
   set axi_main [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:aximm_rtl:1.0 axi_main ]
   set_property -dict [list \
     CONFIG.MAX_BURST_LENGTH {16} \
     CONFIG.ID_WIDTH {6} \
     CONFIG.NUM_WRITE_OUTSTANDING {8} \
     CONFIG.NUM_READ_OUTSTANDING {8} \
-    CONFIG.SUPPORTS_NARROW_BURST {0} \
+    CONFIG.SUPPORTS_NARROW_BURST {1} \
     CONFIG.ADDR_WIDTH {64} \
     CONFIG.PROTOCOL {AXI4} \
     CONFIG.DATA_WIDTH {512} \
