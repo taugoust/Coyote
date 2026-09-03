@@ -1239,8 +1239,13 @@ macro(gen_scripts)
     configure_file(${CYT_DIR}/scripts/cr_prjcts/write_hdl.py.in ${CMAKE_BINARY_DIR}/write_hdl.py)
     configure_file(${CYT_DIR}/scripts/impl/fix_bif.py.in ${CMAKE_BINARY_DIR}/fix_bif.py)
 
-    # Base script
+    # Base script and application-link integrity helpers
     configure_file(${CYT_DIR}/scripts/base.tcl.in ${CMAKE_BINARY_DIR}/base.tcl)
+    configure_file(
+        ${CYT_DIR}/scripts/dyn/app_link_integrity.tcl
+        ${CMAKE_BINARY_DIR}/app_link_integrity.tcl
+        COPYONLY
+    )
 
     # HLS & SpinalHDL scripts
     configure_file(${CYT_DIR}/scripts/apps/comp_hls.tcl.in ${CMAKE_BINARY_DIR}/comp_hls.tcl)
@@ -1454,9 +1459,13 @@ macro(gen_dep_lists)
     endforeach()
     set(DEP_DCP_DYN_COMPLETION ${CMAKE_BINARY_DIR}/checkpoints/dynamic_route_complete)
     set(DEP_DCP_LIST_APP_LINK "")
+    set(DEP_APP_LINK_EVIDENCE "")
     foreach(i RANGE ${NN_CONFIG})
         list(APPEND DEP_DCP_LIST_APP_LINK
             ${CMAKE_BINARY_DIR}/checkpoints/config_${i}/shell_linked_c${i}.dcp)
+        list(APPEND DEP_APP_LINK_EVIDENCE
+            ${CMAKE_BINARY_DIR}/reports/config_${i}/app_link_partition_pins_c${i}.json
+            ${CMAKE_BINARY_DIR}/reports/config_${i}/app_link_integrity_c${i}.json)
     endforeach()
     set(DEP_DCP_APP_LINK_COMPLETION ${CMAKE_BINARY_DIR}/checkpoints/app_link_complete)
     set(DEP_DCP_DYN_LINK_COMPLETION ${CMAKE_BINARY_DIR}/checkpoints/dynamic_link_complete)
@@ -1827,12 +1836,13 @@ macro(gen_targets)
         add_custom_target(app_link DEPENDS ${DEP_DCP_APP_LINK_COMPLETION})
         add_custom_command(
             OUTPUT ${DEP_DCP_APP_LINK_COMPLETION}
-            BYPRODUCTS ${DEP_DCP_LIST_APP_LINK}
+            BYPRODUCTS ${DEP_DCP_LIST_APP_LINK} ${DEP_APP_LINK_EVIDENCE}
             ${APP_LINK_CMD}
             DEPENDS
                 ${DEP_DCP_LIST_COMP}
                 ${DEP_IMPLEMENTATION_INPUTS}
                 ${CMAKE_BINARY_DIR}/base.tcl
+                ${CMAKE_BINARY_DIR}/app_link_integrity.tcl
                 ${CMAKE_BINARY_DIR}/flow_app_link.tcl
         )
     endif()

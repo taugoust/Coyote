@@ -4,14 +4,45 @@
 
 if {[catch {
     source "${CMAKE_BINARY_DIR}/base.tcl"
+    source "${CMAKE_BINARY_DIR}/app_link_integrity.tcl"
     file delete -force "$dcp_dir/app_link_complete"
     if {$cfg(n_config) != 1 || $cfg(n_reg) != 1} {
         error "Immutable packaged application flow currently requires one configuration and one region"
     }
 
+    set shell_checkpoint "$cfg(shell_path)/checkpoints/shell_routed_locked.dcp"
+    set shell_contract "$cfg(shell_path)/export.cmake"
+    set shell_checkpoint_sha256 [app_link_integrity_sha256_file $shell_checkpoint]
+    set shell_contract_sha256 [app_link_integrity_sha256_file $shell_contract]
+    set reconfig_partitions {}
+    for {set j 0} {$j < $cfg(n_reg)} {incr j} {
+        lappend reconfig_partitions \
+            "inst_shell/inst_dynamic/inst_user_wrapper_$j"
+    }
+
     for {set i 0} {$i < $cfg(n_config)} {incr i} {
+        set evidence_dir "$rprt_dir/config_$i"
+        set scratch_dir "$evidence_dir/.app_link_integrity"
+        set partition_manifest \
+            "$evidence_dir/app_link_partition_pins_c$i.json"
+        set integrity_summary \
+            "$evidence_dir/app_link_integrity_c$i.json"
+        file delete -force $scratch_dir
+        file mkdir $scratch_dir
+
+        # Establish the physical ABI and protected-static reference directly
+        # from the exact routed/locked shell consumed by this link.
+        open_checkpoint $shell_checkpoint
+        set before_boundary [app_link_integrity_capture_boundary \
+            $reconfig_partitions "$scratch_dir/before_partition_pins.txt"]
+        set before_static [app_link_integrity_capture_protected_static \
+            $reconfig_partitions \
+            "$scratch_dir/before_static_placement.txt" \
+            "$scratch_dir/before_static_routing.txt"]
+        close_project
+
         create_project -in_memory -part $part
-        add_file "$cfg(shell_path)/checkpoints/shell_routed_locked.dcp"
+        add_file $shell_checkpoint
         for {set j 0} {$j < $cfg(n_reg)} {incr j} {
             set user_dcp "$dcp_dir/config_$i/user_synthed_c$i\_$j.dcp"
             add_files $user_dcp
@@ -27,15 +58,31 @@ if {[catch {
                 [get_files [file tail $cfg(fplan_path)]]
         }
 
-        set reconfig_partitions {}
-        for {set j 0} {$j < $cfg(n_reg)} {incr j} {
-            lappend reconfig_partitions \
-                "inst_shell/inst_dynamic/inst_user_wrapper_$j"
-        }
         link_design -mode default -reconfig_partitions $reconfig_partitions \
             -part $part -top cyt_top
+        set after_boundary [app_link_integrity_capture_boundary \
+            $reconfig_partitions "$scratch_dir/after_partition_pins.txt"]
+        set after_static [app_link_integrity_capture_protected_static \
+            $reconfig_partitions \
+            "$scratch_dir/after_static_placement.txt" \
+            "$scratch_dir/after_static_routing.txt"]
+        set evidence_metadata [dict create \
+            board $cfg(fdev) \
+            architecture $cfg(fpga_arch) \
+            part $part \
+            configuration $i \
+            vivadoVersion [version -short] \
+            shellContractSha256 $shell_contract_sha256 \
+            shellCheckpointSha256 $shell_checkpoint_sha256]
+        app_link_integrity_validate_and_write \
+            $partition_manifest $integrity_summary $evidence_metadata \
+            $before_boundary $after_boundary $before_static $after_static
+
+        # No linked checkpoint is published until both the RP physical ABI and
+        # every locked static placement/route object are proven unchanged.
         write_checkpoint -force \
             "$dcp_dir/config_$i/shell_linked_c$i.dcp"
+        file delete -force $scratch_dir
         close_project
     }
 
