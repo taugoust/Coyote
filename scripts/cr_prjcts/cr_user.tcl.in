@@ -37,6 +37,29 @@ unset ::env(PYTHONHOME)
 
 source "${CMAKE_BINARY_DIR}/base.tcl"
 
+# Vivado's automatic source management evaluates conditional dependencies while
+# source trees are added. Make the active, generated configuration markers
+# visible to that first analysis without disabling unused-source pruning.
+proc expose_generated_marker_defines {package_path fileset} {
+    if {![file isfile $package_path]} {
+        error "Generated HDL package does not exist: $package_path"
+    }
+
+    set package_handle [open $package_path r]
+    set package_source [read $package_handle]
+    close $package_handle
+
+    set fileset_defines [get_property verilog_define $fileset]
+    foreach line [split $package_source "\n"] {
+        if {[regexp {^[[:space:]]*`define[[:space:]]+([[:alpha:]_][[:alnum:]_]*)[[:space:]]*$} $line _ marker] &&
+            [lsearch -exact $fileset_defines $marker] < 0} {
+            lappend fileset_defines $marker
+        }
+    }
+    set_property verilog_define $fileset_defines $fileset
+    return $fileset_defines
+}
+
 puts "[color $clr_flow "** Creating user projects ..."]"
 puts "[color $clr_flow "**"]"
 
@@ -63,6 +86,7 @@ for {set i 0}  {$i < $cfg(n_config)} {incr i} {
         # SET PROJECT PROPERTIES
         ########################################################################################################
         #set_property "board_part" $board_part                      $proj
+        set_property "source_mgmt_mode" "All"                       $proj
         set_property "default_lib" "xil_defaultlib"                 $proj
         set_property "ip_cache_permissions" "read write"            $proj
         set_property "ip_output_repo" "$proj_dir/$project.cache/ip" $proj
@@ -85,6 +109,10 @@ for {set i 0}  {$i < $cfg(n_config)} {incr i} {
             puts $output
         }
         call_write_hdl $build_dir 2 $i $j
+
+        # Mirror the generated package's active marker defines onto the fileset
+        # before add_files triggers automatic source analysis.
+        expose_generated_marker_defines "$proj_dir/hdl/lynx_pkg.sv" [current_fileset]
 
         # Add source files
         add_files "$hw_dir/hdl/pkg"
