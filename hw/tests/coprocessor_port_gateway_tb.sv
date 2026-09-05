@@ -305,6 +305,51 @@ module coprocessor_port_gateway_tb;
         end
     endtask
 
+    task automatic send_invalid_application_beat(
+        input logic [STREAM_DATA_BITS-1:0] data,
+        input logic [STREAM_DATA_BITS/8-1:0] keep
+    );
+        @(negedge aclk);
+        application_send_tdata = data;
+        application_send_tkeep = keep;
+        application_send_tid = 4'ha;
+        application_send_tlast = 1'b1;
+        application_send_tvalid = 1'b1;
+        @(posedge aclk);
+        if (!application_send_tready) begin
+            $fatal(1, "invalid application beat was not consumed");
+        end
+        @(negedge aclk);
+        application_send_tvalid = 1'b0;
+        if (provider_send_tvalid != '0) begin
+            $fatal(1, "invalid application beat was published");
+        end
+    endtask
+
+    task automatic send_invalid_provider_beat(
+        input integer source,
+        input logic [GENERATION_BITS-1:0] generation,
+        input logic [STREAM_DATA_BITS-1:0] data,
+        input logic [STREAM_DATA_BITS/8-1:0] keep
+    );
+        @(negedge aclk);
+        provider_recv_tdata[source] = data;
+        provider_recv_tkeep[source] = keep;
+        provider_recv_tid[source] = 4'hb;
+        provider_recv_tlast[source] = 1'b1;
+        provider_recv_generation[source] = generation;
+        provider_recv_tvalid[source] = 1'b1;
+        @(posedge aclk);
+        if (!provider_recv_tready[source]) begin
+            $fatal(1, "invalid provider beat was not consumed");
+        end
+        @(negedge aclk);
+        provider_recv_tvalid[source] = 1'b0;
+        if (application_recv_tvalid) begin
+            $fatal(1, "invalid provider beat reached application");
+        end
+    endtask
+
     task automatic mmio_read(
         input integer source,
         input logic [MMIO_ADDR_BITS-1:0] address,
@@ -664,6 +709,28 @@ module coprocessor_port_gateway_tb;
         provider_mmio_awvalid[1] = 1'b0;
         provider_fault[1] = 1'b0;
         issue_command(3'd4, 0, 8'd8, 0, 4'd0);
+
+        issue_command(3'd1, 8'd1, 0, 8'd1, 4'd0);
+        if (binding_generation != 9) begin
+            $fatal(1, "unexpected generation before invalid application keep test");
+        end
+        send_invalid_application_beat(64'h88aa, 8'b1010_1111);
+        repeat (2) @(posedge aclk);
+        if (binding_state != 4 || provider_send_tvalid != '0 || !streams_idle) begin
+            $fatal(1, "invalid application keep did not fault without publication");
+        end
+        issue_command(3'd4, 0, 8'd9, 0, 4'd0);
+
+        issue_command(3'd1, 8'd2, 0, 8'd2, 4'd0);
+        if (binding_generation != 10) begin
+            $fatal(1, "unexpected generation before invalid provider keep test");
+        end
+        send_invalid_provider_beat(1, 8'd10, 64'h99bb, 8'b0101_1111);
+        repeat (2) @(posedge aclk);
+        if (binding_state != 4 || application_recv_tvalid || !streams_idle) begin
+            $fatal(1, "invalid provider keep did not fault without application publication");
+        end
+        issue_command(3'd4, 0, 8'd10, 0, 4'd0);
 
         $display("COPROCESSOR_PORT_GATEWAY_PASS");
         $finish;

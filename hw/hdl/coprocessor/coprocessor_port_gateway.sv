@@ -230,6 +230,11 @@ module coprocessor_port_gateway #(
     logic selected_provider_fault;
     logic binding_fault_event;
     logic packet_fault;
+    logic application_send_accept;
+    logic application_send_keep_valid;
+    logic provider_recv_accept;
+    logic provider_recv_generation_matches;
+    logic provider_recv_keep_valid;
 
     always_comb begin
         selected_provider_idle = 1'b1;
@@ -436,8 +441,7 @@ module coprocessor_port_gateway #(
             (binding_state == STATE_READY ||
              (binding_state == STATE_QUIESCING && application_send_open)) &&
             !send_buffer_valid) begin
-            application_send_tready = valid_keep(application_send_tkeep, application_send_tlast) ?
-                                      1'b1 : application_send_tvalid;
+            application_send_tready = 1'b1;
         end
 
         // A provider may have several complete responses committed before the
@@ -463,6 +467,17 @@ module coprocessor_port_gateway #(
             end
         end
     end
+
+    assign application_send_accept = application_send_tvalid && application_send_tready;
+    assign application_send_keep_valid = valid_keep(application_send_tkeep, application_send_tlast);
+    assign provider_recv_accept = selected_valid && provider_recv_tvalid[selected_index] &&
+                                  provider_recv_tready[selected_index];
+    assign provider_recv_generation_matches = selected_valid &&
+                                              provider_recv_generation[selected_index] ==
+                                                  (provider_recv_open ? provider_packet_generation :
+                                                                        binding_generation);
+    assign provider_recv_keep_valid = valid_keep(provider_recv_tkeep[selected_index],
+                                                 provider_recv_tlast[selected_index]);
 
     always_ff @(posedge aclk) begin
         if (!aresetn) begin
@@ -494,9 +509,8 @@ module coprocessor_port_gateway #(
             if (recv_buffer_valid && application_recv_tready) begin
                 recv_buffer_valid <= 1'b0;
             end
-            if (application_send_tvalid && application_send_tready &&
-                valid_keep(application_send_tkeep, application_send_tlast)) begin
-                send_buffer_valid <= 1'b1;
+            if (application_send_accept) begin
+                send_buffer_valid <= application_send_keep_valid;
                 send_buffer_index <= selected_index;
                 send_buffer_data <= application_send_tdata;
                 send_buffer_keep <= application_send_tkeep;
@@ -504,29 +518,22 @@ module coprocessor_port_gateway #(
                 send_buffer_last <= application_send_tlast;
                 send_buffer_generation <= binding_generation;
             end
-            if (selected_valid && provider_recv_tvalid[selected_index] &&
-                provider_recv_tready[selected_index] &&
-                valid_keep(provider_recv_tkeep[selected_index], provider_recv_tlast[selected_index]) &&
-                provider_recv_generation[selected_index] ==
-                    (provider_recv_open ? provider_packet_generation : binding_generation)) begin
-                recv_buffer_valid <= 1'b1;
+            if (provider_recv_accept && provider_recv_generation_matches) begin
+                recv_buffer_valid <= provider_recv_keep_valid;
                 recv_buffer_data <= provider_recv_tdata[selected_index];
                 recv_buffer_keep <= provider_recv_tkeep[selected_index];
                 recv_buffer_id <= provider_recv_tid[selected_index];
                 recv_buffer_last <= provider_recv_tlast[selected_index];
                 recv_buffer_generation <= provider_recv_generation[selected_index];
             end
-            if (application_send_tvalid && application_send_tready &&
-                !valid_keep(application_send_tkeep, application_send_tlast)) begin
+            if (application_send_accept && !application_send_keep_valid) begin
                 packet_fault <= 1'b1;
             end
-            if (selected_valid && provider_recv_tvalid[selected_index] &&
-                provider_recv_tready[selected_index] &&
-                !valid_keep(provider_recv_tkeep[selected_index], provider_recv_tlast[selected_index])) begin
+            if (provider_recv_accept && provider_recv_generation_matches &&
+                !provider_recv_keep_valid) begin
                 packet_fault <= 1'b1;
             end
-            if (application_send_tvalid && application_send_tready &&
-                valid_keep(application_send_tkeep, application_send_tlast)) begin
+            if (application_send_accept && application_send_keep_valid) begin
                 if (!application_send_open) begin
                     application_send_open <= !application_send_tlast;
                     application_send_beats <= 1;
