@@ -446,6 +446,7 @@ set(EXTERNAL_DYNAMIC_SERVICE_SOURCES "")
 set(EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS "")
 set(EXTERNAL_DYNAMIC_SERVICE_INIT_TCL "")
 set(APPLICATION_SOURCE_DIRS "")
+set(COYOTE_HLS_REQUIRED 0)
 
 ############################################
 ##        SOFTWARE DEPENDENCIES           ##
@@ -453,11 +454,6 @@ set(APPLICATION_SOURCE_DIRS "")
 find_package(Vivado REQUIRED)
 if (NOT VIVADO_FOUND)
    message(FATAL_ERROR "Vivado not found.")
-endif()
-
-find_package(VitisHLS REQUIRED)
-if (NOT VITIS_HLS_FOUND)
-  message(FATAL_ERROR "Vitis HLS not found.")
 endif()
 
 ############################################
@@ -498,6 +494,22 @@ function(_coyote_collect_files out_var)
     endforeach()
     list(REMOVE_DUPLICATES result)
     set(${out_var} "${result}" PARENT_SCOPE)
+endfunction()
+
+# A user HLS kernel is represented by a directory below <app>/hls. Empty HLS
+# directories do not request a tool because comp_hls.tcl would have no work.
+function(_coyote_source_requires_hls out_var source_dir)
+    set(required 0)
+    if(IS_DIRECTORY "${source_dir}/hls")
+        file(GLOB hls_entries LIST_DIRECTORIES true "${source_dir}/hls/*")
+        foreach(entry IN LISTS hls_entries)
+            if(IS_DIRECTORY "${entry}")
+                set(required 1)
+                break()
+            endif()
+        endforeach()
+    endif()
+    set(${out_var} ${required} PARENT_SCOPE)
 endfunction()
 
 # Register one optional out-of-tree service in the dynamic layer. Relative paths
@@ -1213,6 +1225,10 @@ macro(load_apps)
                     get_filename_component(vf_app_source_abs "${vf_app_source_dir}"
                         ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
                     list(APPEND APPLICATION_SOURCE_DIRS "${vf_app_source_abs}")
+                    _coyote_source_requires_hls(source_requires_hls "${vf_app_source_abs}")
+                    if(source_requires_hls)
+                        set(COYOTE_HLS_REQUIRED 1)
+                    endif()
                 endforeach()
                 MATH(EXPR t_idx "${t_idx}+1")
             endforeach()
@@ -1576,12 +1592,14 @@ macro(gen_targets)
         set(NET_SYNTH_CMD COMMAND make services)
     endif()
 
-    if(LOAD_APPS)
+    if(COYOTE_HLS_REQUIRED)
         if(VITIS_HLS_MODE STREQUAL "vitis_hls")
             set(HLS_SYNTH_CMD COMMAND ${VITIS_HLS_BINARY} -f comp_hls.tcl)
         else()
             set(HLS_SYNTH_CMD COMMAND ${VITIS_HLS_BINARY} --tcl comp_hls.tcl --mode hls)
         endif()
+    endif()
+    if(LOAD_APPS)
         set(SPINAL_HDL_GEN_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/comp_spinal.tcl -notrace)
     endif()
 
@@ -2045,6 +2063,21 @@ endmacro()
 # Create build
 macro(create_hw)
     _validate_external_dynamic_service()
+
+    # Network services and configured user HLS kernels genuinely require the
+    # HLS frontend. Pure RTL/SpinalHDL projects remain Vivado-only.
+    if(EN_NET OR COYOTE_HLS_REQUIRED)
+        find_package(VitisHLS REQUIRED)
+        if(NOT VITIS_HLS_FOUND)
+            message(FATAL_ERROR "Vitis HLS not found for a configuration that requires HLS generation.")
+        endif()
+    else()
+        set(VITIS_HLS 0)
+        set(VITIS_HLS_FOUND FALSE)
+        set(VITIS_HLS_MODE "")
+        set(VITIS_HLS_BINARY "")
+    endif()
+
     gen_scripts()
     gen_targets()
 
