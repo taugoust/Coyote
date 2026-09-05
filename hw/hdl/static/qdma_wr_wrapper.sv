@@ -91,6 +91,7 @@ logic [15:0] curr_dma_wr_len_C, curr_dma_wr_len_N;
 // Additionally, keep track of the number of data beats required to write, 
 // So that, tlast can be correctly asserted and in_flight_cmd can be de-asserted
 logic [10:0] curr_dma_wr_beats_req_C, curr_dma_wr_beats_req_N;
+logic [10:0] curr_dma_last_beat_C, curr_dma_last_beat_N;
 
 // The number of data beats sent to the QDMA
 logic [10:0] curr_dma_beat_cnt;
@@ -140,6 +141,7 @@ always_ff @(posedge aclk) begin
         curr_ch_idx_C <= 0;
         curr_dma_wr_len_C <= 'X;
         curr_dma_wr_beats_req_C <= 'X;
+        curr_dma_last_beat_C <= 'X;
 
         // Data beat counter
         curr_dma_beat_cnt <= 0;
@@ -153,10 +155,11 @@ always_ff @(posedge aclk) begin
         curr_ch_idx_C <= curr_ch_idx_N;
         curr_dma_wr_len_C <= curr_dma_wr_len_N;
         curr_dma_wr_beats_req_C <= curr_dma_wr_beats_req_N;
+        curr_dma_last_beat_C <= curr_dma_last_beat_N;
 
         // Data beat counter
         if (qdma_in.tvalid && qdma_in.tready) begin
-            if (curr_dma_beat_cnt == (curr_dma_wr_beats_req_N - 1)) begin
+            if (curr_dma_beat_cnt == curr_dma_last_beat_C) begin
                 curr_dma_beat_cnt <= 0;
             end else begin
                 curr_dma_beat_cnt <= curr_dma_beat_cnt + 1;
@@ -179,6 +182,7 @@ always_comb begin
     curr_ch_idx_N = curr_ch_idx_C;
     curr_dma_wr_len_N = curr_dma_wr_len_C;
     curr_dma_wr_beats_req_N = curr_dma_wr_beats_req_C;
+    curr_dma_last_beat_N = curr_dma_last_beat_C;
 
     // Always constant
     m_qdma_c2h_cmd.req.func      = 0;    // Coyote only supports one PF (for now...)
@@ -212,6 +216,10 @@ always_comb begin
             m_qdma_c2h_cmd.req.addr         = s_dma_wr_reqs[curr_ch_idx_N].paddr;
             curr_dma_wr_len_N               = s_dma_wr_reqs[curr_ch_idx_N].len;
             curr_dma_wr_beats_req_N         = (s_dma_wr_reqs[curr_ch_idx_N].len + AXI_DATA_BYTES - 1) >> AXI_DATA_BYTES_BITS;
+            // Keep the data-phase TLAST comparator in the 333 MHz path as a
+            // register-to-compare boundary. Recomputing beats_req - 1 in the
+            // streaming cycle puts a subtractor on every C2H payload register.
+            curr_dma_last_beat_N            = curr_dma_wr_beats_req_N - 1'b1;
 
             // Queue, prefetch tag
             m_qdma_c2h_cmd.req.qid          = QDMA_WR_QUEUE_START_IDX + curr_ch_idx_N * N_QUEUES_PER_CHAN + chan_qid_C[curr_ch_idx_N];
@@ -269,7 +277,7 @@ always_comb begin
             * Additionally, the tlast signal must be set before the tvalid signal; if not, every now and then,
             * the QDMA will drop the packet (length mismatch error), likely indicating some race condition
             */
-            qdma_in.tlast                   = dyn_in_tvalids[curr_ch_idx_C] && qdma_in.tready && (curr_dma_beat_cnt == (curr_dma_wr_beats_req_C - 1));
+            qdma_in.tlast                   = dyn_in_tvalids[curr_ch_idx_C] && qdma_in.tready && (curr_dma_beat_cnt == curr_dma_last_beat_C);
 
             // Calculate the number of empty bytes from the TKEEP signal
             data_mty = 0;
