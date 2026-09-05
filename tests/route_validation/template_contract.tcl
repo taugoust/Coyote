@@ -36,6 +36,28 @@ proc count_text {source needle} {
 
 lassign $argv base_path pnr_path physical_path app_link_path dyn_link_ultrascale_path dyn_link_versal_path dyn_finalize_path app_path ultrascale_path versal_path bitgen_path cmake_path
 set base [read_source $base_path]
+set physical [read_source $physical_path]
+
+foreach {source path} [list $base $base_path $physical $physical_path] {
+    if {[regexp {\$\{(prefix|phase|report_suffix)\}} $source collision]} {
+        puts stderr "$path contains runtime report token '$collision' that configure_file would consume"
+        exit 1
+    }
+}
+
+set report_dir /reports/config_0
+set phase opt
+set report_suffix _c0
+set prefix [format "shell_%s" $phase]
+foreach {actual expected} [list \
+    [file join $report_dir [format "%s_utilization%s.rpt" $prefix $report_suffix]] /reports/config_0/shell_opt_utilization_c0.rpt \
+    [file join $report_dir [format "%s_timing_summary%s.rpt" $prefix $report_suffix]] /reports/config_0/shell_opt_timing_summary_c0.rpt \
+    [file join $report_dir [format "%s_qor_assessment%s.rpt" $prefix $report_suffix]] /reports/config_0/shell_opt_qor_assessment_c0.rpt] {
+    if {$actual ne $expected} {
+        puts stderr "opt report path '$actual' does not match '$expected'"
+        exit 1
+    }
+}
 
 foreach required {
     {proc finalize_post_route_optimization}
@@ -61,6 +83,10 @@ foreach required {
     report_timing_summary
     require_clean_bitstream_drc
     require_timing_closure
+    {[format "shell_%s" $phase]}
+    {[format "%s_utilization%s.rpt" $prefix $report_suffix]}
+    {[format "%s_timing_summary%s.rpt" $prefix $report_suffix]}
+    {[format "%s_qor_assessment%s.rpt" $prefix $report_suffix]}
 } {
     require_text $base $required $base_path
 }
@@ -102,7 +128,6 @@ foreach spec [list \
         }
     }
 }
-set physical [read_source $physical_path]
 foreach required {
     {set phase "${IMPLEMENTATION_PHASE}"}
     {if {$phase ni {opt place route validate}}}

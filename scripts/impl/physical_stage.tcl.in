@@ -102,7 +102,7 @@ if {[catch {
                 error "validate requires an explicit validation summary path"
             }
             report_bitstream_drc \
-                $drc_name "$report_dir/shell_drc_bitstream_checks${report_suffix}.rpt"
+                $drc_name [file join $report_dir [format "shell_drc_bitstream_checks%s.rpt" $report_suffix]]
             write_implementation_observations \
                 $phase $report_dir $report_suffix $telemetry_path $drc_name
             set outcome accepted
@@ -137,7 +137,7 @@ if {[catch {
 
     if {$incremental_mode eq "reference" && $phase in {place route}} {
         report_incremental_reuse \
-            -file "$report_dir/shell_${phase}_incremental_reuse${report_suffix}.rpt"
+            -file [file join $report_dir [format "shell_%s_incremental_reuse%s.rpt" $phase $report_suffix]]
     }
     if {$phase ne "validate"} {
         write_implementation_observations \

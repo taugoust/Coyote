@@ -251,9 +251,9 @@ proc require_timing_closure {label} {
 }
 
 proc report_routed_design {report_dir report_suffix} {
-    report_utilization -file "$report_dir/shell_utilization${report_suffix}.rpt"
-    report_route_status -file "$report_dir/shell_route_status${report_suffix}.rpt"
-    report_timing_summary -file "$report_dir/shell_timing_summary${report_suffix}.rpt"
+    report_utilization -file [file join $report_dir [format "shell_utilization%s.rpt" $report_suffix]]
+    report_route_status -file [file join $report_dir [format "shell_route_status%s.rpt" $report_suffix]]
+    report_timing_summary -file [file join $report_dir [format "shell_timing_summary%s.rpt" $report_suffix]]
 }
 
 proc implementation_json_escape {value} {
@@ -329,11 +329,11 @@ proc implementation_path_property {path property} {
 
 proc write_placement_diagnosis_evidence {report_dir report_suffix} {
     set prefix shell_place
-    set congestion_path "$report_dir/${prefix}_congestion${report_suffix}.rpt"
-    set complexity_path "$report_dir/${prefix}_complexity${report_suffix}.rpt"
-    set logic_levels_path "$report_dir/${prefix}_logic_levels${report_suffix}.rpt"
-    set high_fanout_path "$report_dir/${prefix}_high_fanout${report_suffix}.rpt"
-    set output_path "$report_dir/${prefix}_diagnosis${report_suffix}.json"
+    set congestion_path [file join $report_dir [format "%s_congestion%s.rpt" $prefix $report_suffix]]
+    set complexity_path [file join $report_dir [format "%s_complexity%s.rpt" $prefix $report_suffix]]
+    set logic_levels_path [file join $report_dir [format "%s_logic_levels%s.rpt" $prefix $report_suffix]]
+    set high_fanout_path [file join $report_dir [format "%s_high_fanout%s.rpt" $prefix $report_suffix]]
+    set output_path [file join $report_dir [format "%s_diagnosis%s.json" $prefix $report_suffix]]
 
     set setup_paths [get_timing_paths -delay_type max -max_paths 100 -nworst 100]
     report_design_analysis -congestion -file $congestion_path
@@ -398,10 +398,10 @@ proc write_implementation_observations {phase report_dir report_suffix output_pa
     if {$phase eq "validate"} {
         set prefix "shell"
     } else {
-        set prefix "shell_${phase}"
+        set prefix [format "shell_%s" $phase]
     }
-    set utilization_path "$report_dir/${prefix}_utilization${report_suffix}.rpt"
-    set timing_path "$report_dir/${prefix}_timing_summary${report_suffix}.rpt"
+    set utilization_path [file join $report_dir [format "%s_utilization%s.rpt" $prefix $report_suffix]]
+    set timing_path [file join $report_dir [format "%s_timing_summary%s.rpt" $prefix $report_suffix]]
     report_utilization -file $utilization_path
     report_timing_summary -file $timing_path
     set timing_summary [report_timing_summary -return_string]
@@ -412,7 +412,7 @@ proc write_implementation_observations {phase report_dir report_suffix output_pa
     set rqa ""
     set rqa_report ""
     if {$phase in {opt place}} {
-        set rqa_report "$report_dir/${prefix}_qor_assessment${report_suffix}.rpt"
+        set rqa_report [file join $report_dir [format "%s_qor_assessment%s.rpt" $prefix $report_suffix]]
         if {![catch {
             report_qor_assessment -file $rqa_report
             set rqa [get_assessment_score]
@@ -427,7 +427,7 @@ proc write_implementation_observations {phase report_dir report_suffix output_pa
     set route_errors ""
     set route_report ""
     if {$phase in {route validate}} {
-        set route_report "$report_dir/${prefix}_route_status${report_suffix}.rpt"
+        set route_report [file join $report_dir [format "%s_route_status%s.rpt" $prefix $report_suffix]]
         report_route_status -ignore_cache -file $route_report
         set unrouted [implementation_route_count UNROUTED]
         set partial [implementation_route_count PARTIAL]
@@ -501,7 +501,7 @@ proc report_and_validate_routed_design {label report_dir report_suffix drc_run_n
     upvar #0 cfg cnfg
     report_routed_design $report_dir $report_suffix
     report_bitstream_drc \
-        $drc_run_name "$report_dir/shell_drc_bitstream_checks${report_suffix}.rpt"
+        $drc_run_name [file join $report_dir [format "shell_drc_bitstream_checks%s.rpt" $report_suffix]]
     require_clean_bitstream_drc $drc_run_name
     if {$cnfg(en_timing_check) eq 1} {
         require_timing_closure $label
