@@ -98,6 +98,8 @@ logic [10:0] curr_dma_beat_cnt;
 
 // The QDMA doesn't use the standard TKEEP signal; intead it uses mty (empty) for the number of empty bytes
 logic [5:0] data_mty;
+logic data_beat_last;
+logic data_beat_fire;
 
 // Each C2H queue needs a prefetch tag, which is obtained from the driver by writting to a QDMA memory mapped register (0x140)
 // Once obtained, this value is propagated to Coyote's static layer, through the static_slave module
@@ -193,6 +195,8 @@ always_comb begin
     qdma_in.payload.has_cmpt     = 0;    // No completion is sent to the driver/software
     qdma_in.payload.marker       = 0;    // Used for flushing the queues, not needed here
     qdma_in.payload.port_id      = 0;    // port_id offers even finer granularity than qid --- UNUSED
+    data_beat_last               = 1'b0;
+    data_beat_fire               = 1'b0;
     
     unique case (state_C)
         // If there is no outstanding data, assign next DMA command to the QDMA interface
@@ -277,7 +281,9 @@ always_comb begin
             * Additionally, the tlast signal must be set before the tvalid signal; if not, every now and then,
             * the QDMA will drop the packet (length mismatch error), likely indicating some race condition
             */
-            qdma_in.tlast                   = dyn_in_tvalids[curr_ch_idx_C] && qdma_in.tready && (curr_dma_beat_cnt == curr_dma_last_beat_C);
+            data_beat_last                  = (curr_dma_beat_cnt == curr_dma_last_beat_C);
+            data_beat_fire                  = dyn_in_tvalids[curr_ch_idx_C] && qdma_in.tready;
+            qdma_in.tlast                   = dyn_in_tvalids[curr_ch_idx_C] && data_beat_last;
 
             // Calculate the number of empty bytes from the TKEEP signal
             data_mty = 0;
@@ -296,7 +302,7 @@ always_comb begin
             dyn_in_treadys[curr_ch_idx_C]   = qdma_in.tready;
 
             // If data packet is last, reset in_flight_cmd and update the queue ID for the next transfer
-            if (qdma_in.tlast) begin
+            if (data_beat_fire && data_beat_last) begin
                 state_N = ST_IDLE;
         
                 if (chan_qid_C[curr_ch_idx_C] == N_QUEUES_PER_CHAN - 1) begin
