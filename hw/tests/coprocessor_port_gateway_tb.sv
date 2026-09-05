@@ -243,6 +243,28 @@ module coprocessor_port_gateway_tb;
         end
     endtask
 
+    task automatic send_application_last_keep(
+        input logic [STREAM_DATA_BITS-1:0] data,
+        input logic [STREAM_DATA_BITS/8-1:0] keep,
+        input integer expected_provider
+    );
+        @(negedge aclk);
+        application_send_tdata = data;
+        application_send_tkeep = keep;
+        application_send_tid = 4'h7;
+        application_send_tlast = 1'b1;
+        application_send_tvalid = 1'b1;
+        do @(posedge aclk); while (!application_send_tready);
+        @(negedge aclk);
+        application_send_tvalid = 1'b0;
+        if (!provider_send_tvalid[expected_provider] ||
+            provider_send_tdata[expected_provider] !== data ||
+            provider_send_tkeep[expected_provider] !== keep ||
+            provider_send_tlast[expected_provider] !== 1'b1) begin
+            $fatal(1, "application partial keep routed incorrectly");
+        end
+    endtask
+
     task automatic send_application_backpressured(
         input logic [STREAM_DATA_BITS-1:0] data,
         input logic last,
@@ -302,6 +324,31 @@ module coprocessor_port_gateway_tb;
         end
         if (!expect_application && application_recv_tvalid) begin
             $fatal(1, "stale provider response reached application");
+        end
+    endtask
+
+    task automatic send_provider_last_keep(
+        input integer source,
+        input logic [GENERATION_BITS-1:0] generation,
+        input logic [STREAM_DATA_BITS-1:0] data,
+        input logic [STREAM_DATA_BITS/8-1:0] keep
+    );
+        @(negedge aclk);
+        provider_recv_tdata[source] = data;
+        provider_recv_tkeep[source] = keep;
+        provider_recv_tid[source] = 4'h8;
+        provider_recv_tlast[source] = 1'b1;
+        provider_recv_generation[source] = generation;
+        provider_recv_tvalid[source] = 1'b1;
+        @(posedge aclk);
+        if (!provider_recv_tready[source]) begin
+            $fatal(1, "provider partial keep was not accepted");
+        end
+        @(negedge aclk);
+        provider_recv_tvalid[source] = 1'b0;
+        if (!application_recv_tvalid || application_recv_tdata !== data ||
+            application_recv_tkeep !== keep || application_recv_tlast !== 1'b1) begin
+            $fatal(1, "provider partial keep was not delivered");
         end
     endtask
 
@@ -535,6 +582,8 @@ module coprocessor_port_gateway_tb;
             $fatal(1, "stale response was not recorded");
         end
         send_provider_beat(1, 8'd2, 64'hbeef, 1'b1, 1'b1);
+        send_application_last_keep(64'hca5e, 8'b0000_1111, 1);
+        send_provider_last_keep(1, 8'd2, 64'hface, 8'b0001_1111);
         mmio_write(0, 12'h010, 64'h2222, 2'b11);
         mmio_write(1, 12'h010, 64'h3333, 2'b00);
         mmio_read(1, 12'h010, 64'h3333, 2'b00);

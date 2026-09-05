@@ -199,10 +199,12 @@ module coprocessor_port_gateway #(
         input logic [STREAM_DATA_BITS/8-1:0] keep,
         input logic last
     );
-        logic [STREAM_DATA_BITS/8-1:0] incremented;
+        logic [STREAM_DATA_BITS/8-2:0] prefix_step_valid;
         begin
-            incremented = keep + 1'b1;
-            valid_keep = last ? ((keep != '0) && ((keep & incremented) == '0)) : (&keep);
+            for (int byte_index = 1; byte_index < STREAM_DATA_BITS/8; byte_index = byte_index + 1) begin
+                prefix_step_valid[byte_index-1] = !keep[byte_index] || keep[byte_index-1];
+            end
+            valid_keep = last ? (keep[0] && (&prefix_step_valid)) : (&keep);
         end
     endfunction
 
