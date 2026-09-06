@@ -186,6 +186,7 @@ module coprocessor_port_gateway #(
     logic [N_PROVIDERS-1:0] error_rvalid;
     logic [N_PROVIDERS-1:0][1:0] error_rresp;
     logic [N_PROVIDERS-1:0][MMIO_DATA_BITS-1:0] error_rdata;
+    logic [N_PROVIDERS-1:0] error_rdata_from_application;
     logic [N_PROVIDERS-1:0] aw_held;
     logic [N_PROVIDERS-1:0] w_held;
     logic [N_PROVIDERS-1:0][MMIO_ADDR_BITS-1:0] held_awaddr;
@@ -511,8 +512,10 @@ module coprocessor_port_gateway #(
             if (recv_buffer_valid && application_recv_tready) begin
                 recv_buffer_valid <= 1'b0;
             end
-            if (application_send_accept) begin
-                send_buffer_valid <= application_send_keep_valid;
+            // Empty payload storage may sample without qualifying admission.
+            // Only the valid bit publishes an accepted beat; occupied storage
+            // remains stable under backpressure and through fault handling.
+            if (!send_buffer_valid) begin
                 send_buffer_index <= selected_index;
                 send_buffer_data <= application_send_tdata;
                 send_buffer_keep <= application_send_tkeep;
@@ -520,13 +523,18 @@ module coprocessor_port_gateway #(
                 send_buffer_last <= application_send_tlast;
                 send_buffer_generation <= binding_generation;
             end
-            if (provider_recv_accept && provider_recv_generation_matches) begin
-                recv_buffer_valid <= provider_recv_keep_valid;
+            if (!recv_buffer_valid) begin
                 recv_buffer_data <= provider_recv_tdata[selected_index];
                 recv_buffer_keep <= provider_recv_tkeep[selected_index];
                 recv_buffer_id <= provider_recv_tid[selected_index];
                 recv_buffer_last <= provider_recv_tlast[selected_index];
                 recv_buffer_generation <= provider_recv_generation[selected_index];
+            end
+            if (application_send_accept) begin
+                send_buffer_valid <= application_send_keep_valid;
+            end
+            if (provider_recv_accept && provider_recv_generation_matches) begin
+                recv_buffer_valid <= provider_recv_keep_valid;
             end
             if (application_send_accept && !application_send_keep_valid) begin
                 packet_fault <= 1'b1;
@@ -644,7 +652,8 @@ module coprocessor_port_gateway #(
             end
             if (error_rvalid[mmio_index]) begin
                 provider_mmio_rresp[mmio_index] = error_rresp[mmio_index];
-                provider_mmio_rdata[mmio_index] = error_rdata[mmio_index];
+                provider_mmio_rdata[mmio_index] = error_rdata_from_application[mmio_index] ?
+                                                error_rdata[mmio_index] : '0;
             end
         end
 
@@ -679,6 +688,7 @@ module coprocessor_port_gateway #(
             error_rvalid <= '0;
             error_rresp <= '0;
             error_rdata <= '0;
+            error_rdata_from_application <= '0;
             aw_held <= '0;
             w_held <= '0;
             held_awaddr <= '0;
@@ -689,6 +699,12 @@ module coprocessor_port_gateway #(
             held_w_generation <= '0;
         end else begin
             for (int request_index = 0; request_index < N_PROVIDERS; request_index = request_index + 1) begin
+                // Capture response payload independently of fault/decouple.
+                // The registered publication selector below distinguishes a
+                // retained application response from a synthetic zero result.
+                if (!error_rvalid[request_index]) begin
+                    error_rdata[request_index] <= application_mmio_rdata;
+                end
                 if (provider_mmio_awvalid[request_index] && provider_mmio_awready[request_index]) begin
                     aw_held[request_index] <= 1'b1;
                     held_awaddr[request_index] <= provider_mmio_awaddr[request_index];
@@ -719,7 +735,7 @@ module coprocessor_port_gateway #(
                     end else begin
                         error_rvalid[request_index] <= 1'b1;
                         error_rresp[request_index] <= 2'b11;
-                        error_rdata[request_index] <= '0;
+                        error_rdata_from_application[request_index] <= 1'b0;
                     end
                 end
                 if ((aw_held[request_index] ||
@@ -801,7 +817,7 @@ module coprocessor_port_gateway #(
                           provider_mmio_rready[selected_index])) begin
                         error_rvalid[selected_index] <= 1'b1;
                         error_rresp[selected_index] <= 2'b10;
-                        error_rdata[selected_index] <= '0;
+                        error_rdata_from_application[selected_index] <= 1'b0;
                     end
                     mmio_write_active <= 1'b0;
                     mmio_read_active <= 1'b0;
@@ -848,9 +864,8 @@ module coprocessor_port_gateway #(
                             error_rresp[selected_index] <=
                                 (mmio_ar_sent && application_mmio_rvalid) ?
                                     application_mmio_rresp : 2'b10;
-                            error_rdata[selected_index] <=
-                                (mmio_ar_sent && application_mmio_rvalid) ?
-                                    application_mmio_rdata : '0;
+                            error_rdata_from_application[selected_index] <=
+                                mmio_ar_sent && application_mmio_rvalid;
                             if (mmio_ar_sent ||
                                 (application_mmio_arvalid && application_mmio_arready)) begin
                                 drain_read_response <= 1'b1;
