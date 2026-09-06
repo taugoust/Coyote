@@ -331,10 +331,10 @@ proc write_shell_import_checkpoint {checkpoint_path} {
     # must keep a 4 ns xclk timing clock.  When that OOC DCP is later linked
     # under the routed static/IP design, however, xclk is owned by the static
     # clocking/IP checkpoint.  Export a second implementation-import DCP by
-    # resetting and replaying the shell synthesis constraints with only that
-    # shell-boundary primary omitted; linked implementation then keeps the
-    # authoritative generated-clock lineage instead of importing an unrelated
-    # primary at inst_shell/xclk.
+    # resetting and replaying the shell synthesis constraints with its xclk
+    # and debug dclk boundary primaries omitted. Both clocks are driven by
+    # static clocking in the linked design; retaining either OOC primary
+    # severs that generated-clock lineage.
     if {$cnfg(fpga_arch) eq "ultrascale_plus" && $cnfg(fdev) eq "u280"} {
         set xclk_ports [get_ports -quiet xclk]
         if {[llength $xclk_ports] != 1} {
@@ -353,6 +353,7 @@ proc write_shell_import_checkpoint {checkpoint_path} {
             error "Expected exactly one 4 ns OOC xclk primary clock before writing $checkpoint_path; found [llength $owned_xclk_primary]"
         }
 
+        set dclk_ports [get_ports -quiet dclk]
         set constraint_files [get_files -quiet -of_objects [get_filesets constrs_1] -filter {FILE_TYPE == XDC}]
         if {[llength $constraint_files] == 0} {
             error "No shell synthesis constraints found before writing $checkpoint_path"
@@ -366,8 +367,7 @@ proc write_shell_import_checkpoint {checkpoint_path} {
             set out_path [file join $filtered_dir [file tail $constraint_file]]
             set out_fd [open $out_path w]
             while {[gets $in_fd line] >= 0} {
-                if {[regexp {^[[:space:]]*create_clock[[:space:]].*\[get_ports[[:space:]]+\{?/x?clk\}?\]} $line] ||
-                    [regexp {^[[:space:]]*create_clock[[:space:]].*\[get_ports[[:space:]]+\{?xclk\}?\]} $line]} {
+                if {[regexp {^[[:space:]]*create_clock[[:space:]].*\[get_ports[[:space:]]+\{?/?(xclk|dclk)\}?\]} $line]} {
                     puts $out_fd "# omitted for implementation import: $line"
                 } else {
                     puts $out_fd $line
@@ -380,7 +380,11 @@ proc write_shell_import_checkpoint {checkpoint_path} {
         if {[llength [get_clocks -quiet -of_objects $xclk_ports]] != 0} {
             error "Shell implementation-import checkpoint still has a clock on xclk"
         }
-        puts "** Removed shell-owned OOC xclk primary from implementation-import checkpoint $checkpoint_path"
+        if {[llength $dclk_ports] != 0 &&
+            [llength [get_clocks -quiet -of_objects $dclk_ports]] != 0} {
+            error "Shell implementation-import checkpoint still has a clock on dclk"
+        }
+        puts "** Removed shell-owned OOC xclk/dclk primaries from implementation-import checkpoint $checkpoint_path"
     }
 
     write_checkpoint -force $checkpoint_path
