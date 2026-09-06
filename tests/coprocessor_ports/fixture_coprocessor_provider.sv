@@ -1,0 +1,2 @@
+module fixture_coprocessor_provider;
+endmodule

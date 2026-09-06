@@ -170,6 +170,22 @@ set cfg(eos_time)               ${EOS_TIME}
 set cfg(n_wbs)                  ${N_WBS}
 set cfg(n_strm_axi)             ${N_STRM_AXI}
 set cfg(mult_strm_axi)          ${MULT_STRM_AXI}
+set cfg(n_coprocessor_ports)    ${N_COPROCESSOR_PORTS}
+set cfg(coprocessor_interface_version) ${COPROCESSOR_INTERFACE_VERSION}
+set cfg(coprocessor_stream_abi) ${COPROCESSOR_STREAM_ABI}
+set cfg(coprocessor_stream_data_bits) ${COPROCESSOR_STREAM_DATA_BITS}
+set cfg(coprocessor_stream_id_bits) ${COPROCESSOR_STREAM_ID_BITS}
+set cfg(coprocessor_max_packet_bytes) ${COPROCESSOR_MAX_PACKET_BYTES}
+set cfg(coprocessor_mmio_abi) ${COPROCESSOR_MMIO_ABI}
+set cfg(coprocessor_mmio_addr_bits) ${COPROCESSOR_MMIO_ADDR_BITS}
+set cfg(coprocessor_mmio_data_bits) ${COPROCESSOR_MMIO_DATA_BITS}
+set cfg(coprocessor_binding_generation_bits) ${COPROCESSOR_BINDING_GENERATION_BITS}
+set cfg(coprocessor_provider_count) ${COPROCESSOR_PROVIDER_COUNT}
+set cfg(en_v80_r5_provider)       ${EN_V80_R5_PROVIDER}
+set cfg(v80_r5_provider_base)     ${V80_R5_PROVIDER_BASE}
+set cfg(v80_r5_provider_bytes)    ${V80_R5_PROVIDER_BYTES}
+set cfg(v80_r5_provider_depth)    ${V80_R5_PROVIDER_QUEUE_DEPTH}
+set cfg(v80_r5_provider_endpoint) ${V80_R5_PROVIDER_ENDPOINT_ID}
 set cfg(n_card_axi)             ${N_CARD_AXI}
 set cfg(mult_card_axi)          ${MULT_CARD_AXI}
 set cfg(n_rdma_axi)             ${N_RDMA_AXI}
@@ -214,12 +230,96 @@ proc color {fore text} {
 
 # Post-route physical optimization can replicate or move routed logic. Finalize
 # routing again before any checkpoint is validated, locked, or used for images.
-proc finalize_post_route_optimization {} {
-    upvar #0 cfg cnfg
-    if {$cnfg(build_opt) eq 1} {
-        phys_opt_design -directive AggressiveExplore
+# Keep an already closed routed result unchanged: Vivado skips every optimization
+# when setup and hold pass, but a subsequent route_design can still perturb it.
+proc routed_design_worst_slacks {} {
+    set slacks {}
+    foreach delay_type {max min} {
+        set paths [get_timing_paths -delay_type $delay_type -max_paths 1 -nworst 1]
+        if {[llength $paths] == 0} {
+            error "No $delay_type timing path is available before post-route finalization"
+        }
+        lappend slacks [get_property SLACK [lindex $paths 0]]
+    }
+    return $slacks
+}
+
+proc routed_design_needs_post_route_optimization {} {
+    foreach slack [routed_design_worst_slacks] {
+        if {$slack < 0.0} {
+            return 1
+        }
+    }
+    return 0
+}
+
+# Prefer fewer failing setup/hold classes, then maximize the worst slack. The
+# sum is only a deterministic tie breaker. Detailed telemetry and canonical
+# validation remain responsible for reporting and accepting the selected DCP.
+proc routed_candidate_is_better {candidate_slacks current_slacks} {
+    set candidate_failures 0
+    set current_failures 0
+    foreach slack $candidate_slacks {
+        if {$slack < 0.0} { incr candidate_failures }
+    }
+    foreach slack $current_slacks {
+        if {$slack < 0.0} { incr current_failures }
+    }
+    if {$candidate_failures != $current_failures} {
+        return [expr {$candidate_failures < $current_failures}]
+    }
+
+    set candidate_worst [expr {min([lindex $candidate_slacks 0], [lindex $candidate_slacks 1])}]
+    set current_worst [expr {min([lindex $current_slacks 0], [lindex $current_slacks 1])}]
+    if {$candidate_worst != $current_worst} {
+        return [expr {$candidate_worst > $current_worst}]
+    }
+    set candidate_sum [expr {[lindex $candidate_slacks 0] + [lindex $candidate_slacks 1]}]
+    set current_sum [expr {[lindex $current_slacks 0] + [lindex $current_slacks 1]}]
+    return [expr {$candidate_sum > $current_sum}]
+}
+
+proc optimize_and_retain_best_routed_candidate {post_directive final_directive candidate_checkpoint} {
+    set candidate_slacks [routed_design_worst_slacks]
+    write_checkpoint -force $candidate_checkpoint
+    if {$post_directive ne ""} {
+        phys_opt_design -directive $post_directive
+    } else {
+        phys_opt_design
+    }
+    if {$final_directive ne ""} {
+        route_design -directive $final_directive
+    } else {
         route_design
     }
+
+    set optimized_slacks [routed_design_worst_slacks]
+    if {[routed_candidate_is_better $candidate_slacks $optimized_slacks]} {
+        puts "INFO: Restoring the better fully routed candidate after post-route optimization regressed timing."
+        close_design
+        open_checkpoint $candidate_checkpoint
+    }
+    file delete -force $candidate_checkpoint
+}
+
+proc finalize_post_route_optimization {{post_directive "project"} {final_directive "project"}} {
+    upvar #0 cfg cnfg
+    if {$post_directive eq "project"} {
+        set post_directive [expr {$cnfg(build_opt) eq 1 ? "AggressiveExplore" : ""}]
+    }
+    if {$final_directive eq "project"} {
+        set final_directive ""
+    }
+    if {$post_directive eq ""} {
+        return
+    }
+    if {![routed_design_needs_post_route_optimization]} {
+        puts "INFO: Skipping post-route physical optimization because setup and hold timing already pass."
+        return
+    }
+    set candidate_checkpoint [file join $cnfg(build_dir) checkpoints routed_candidate.dcp]
+    optimize_and_retain_best_routed_candidate \
+        $post_directive $final_directive $candidate_checkpoint
 }
 
 proc report_bitstream_drc {run_name report_path} {
@@ -251,9 +351,9 @@ proc require_timing_closure {label} {
 }
 
 proc report_routed_design {report_dir report_suffix} {
-    report_utilization -file "$report_dir/shell_utilization${report_suffix}.rpt"
-    report_route_status -file "$report_dir/shell_route_status${report_suffix}.rpt"
-    report_timing_summary -file "$report_dir/shell_timing_summary${report_suffix}.rpt"
+    report_utilization -file [file join $report_dir [format "shell_utilization%s.rpt" $report_suffix]]
+    report_route_status -file [file join $report_dir [format "shell_route_status%s.rpt" $report_suffix]]
+    report_timing_summary -file [file join $report_dir [format "shell_timing_summary%s.rpt" $report_suffix]]
 }
 
 proc implementation_json_escape {value} {
@@ -329,11 +429,11 @@ proc implementation_path_property {path property} {
 
 proc write_placement_diagnosis_evidence {report_dir report_suffix} {
     set prefix shell_place
-    set congestion_path "$report_dir/${prefix}_congestion${report_suffix}.rpt"
-    set complexity_path "$report_dir/${prefix}_complexity${report_suffix}.rpt"
-    set logic_levels_path "$report_dir/${prefix}_logic_levels${report_suffix}.rpt"
-    set high_fanout_path "$report_dir/${prefix}_high_fanout${report_suffix}.rpt"
-    set output_path "$report_dir/${prefix}_diagnosis${report_suffix}.json"
+    set congestion_path [file join $report_dir [format "%s_congestion%s.rpt" $prefix $report_suffix]]
+    set complexity_path [file join $report_dir [format "%s_complexity%s.rpt" $prefix $report_suffix]]
+    set logic_levels_path [file join $report_dir [format "%s_logic_levels%s.rpt" $prefix $report_suffix]]
+    set high_fanout_path [file join $report_dir [format "%s_high_fanout%s.rpt" $prefix $report_suffix]]
+    set output_path [file join $report_dir [format "%s_diagnosis%s.json" $prefix $report_suffix]]
 
     set setup_paths [get_timing_paths -delay_type max -max_paths 100 -nworst 100]
     report_design_analysis -congestion -file $congestion_path
@@ -398,10 +498,10 @@ proc write_implementation_observations {phase report_dir report_suffix output_pa
     if {$phase eq "validate"} {
         set prefix "shell"
     } else {
-        set prefix "shell_${phase}"
+        set prefix [format "shell_%s" $phase]
     }
-    set utilization_path "$report_dir/${prefix}_utilization${report_suffix}.rpt"
-    set timing_path "$report_dir/${prefix}_timing_summary${report_suffix}.rpt"
+    set utilization_path [file join $report_dir [format "%s_utilization%s.rpt" $prefix $report_suffix]]
+    set timing_path [file join $report_dir [format "%s_timing_summary%s.rpt" $prefix $report_suffix]]
     report_utilization -file $utilization_path
     report_timing_summary -file $timing_path
     set timing_summary [report_timing_summary -return_string]
@@ -412,10 +512,10 @@ proc write_implementation_observations {phase report_dir report_suffix output_pa
     set rqa ""
     set rqa_report ""
     if {$phase in {opt place}} {
-        set rqa_report "$report_dir/${prefix}_qor_assessment${report_suffix}.rpt"
+        set rqa_report [file join $report_dir [format "%s_qor_assessment%s.rpt" $prefix $report_suffix]]
         if {![catch {
             report_qor_assessment -file $rqa_report
-            set rqa [get_assessment_score]
+            set rqa [expr {int([get_assessment_score])}]
         }]} {
             if {![string is integer -strict $rqa] || $rqa < 1 || $rqa > 5} { set rqa "" }
         }
@@ -427,7 +527,7 @@ proc write_implementation_observations {phase report_dir report_suffix output_pa
     set route_errors ""
     set route_report ""
     if {$phase in {route validate}} {
-        set route_report "$report_dir/${prefix}_route_status${report_suffix}.rpt"
+        set route_report [file join $report_dir [format "%s_route_status%s.rpt" $prefix $report_suffix]]
         report_route_status -ignore_cache -file $route_report
         set unrouted [implementation_route_count UNROUTED]
         set partial [implementation_route_count PARTIAL]
@@ -501,7 +601,7 @@ proc report_and_validate_routed_design {label report_dir report_suffix drc_run_n
     upvar #0 cfg cnfg
     report_routed_design $report_dir $report_suffix
     report_bitstream_drc \
-        $drc_run_name "$report_dir/shell_drc_bitstream_checks${report_suffix}.rpt"
+        $drc_run_name [file join $report_dir [format "shell_drc_bitstream_checks%s.rpt" $report_suffix]]
     require_clean_bitstream_drc $drc_run_name
     if {$cnfg(en_timing_check) eq 1} {
         require_timing_closure $label

@@ -91,12 +91,15 @@ logic [15:0] curr_dma_wr_len_C, curr_dma_wr_len_N;
 // Additionally, keep track of the number of data beats required to write, 
 // So that, tlast can be correctly asserted and in_flight_cmd can be de-asserted
 logic [10:0] curr_dma_wr_beats_req_C, curr_dma_wr_beats_req_N;
+logic [10:0] curr_dma_last_beat_C, curr_dma_last_beat_N;
 
 // The number of data beats sent to the QDMA
 logic [10:0] curr_dma_beat_cnt;
 
 // The QDMA doesn't use the standard TKEEP signal; intead it uses mty (empty) for the number of empty bytes
 logic [5:0] data_mty;
+logic data_beat_last;
+logic data_beat_fire;
 
 // Each C2H queue needs a prefetch tag, which is obtained from the driver by writting to a QDMA memory mapped register (0x140)
 // Once obtained, this value is propagated to Coyote's static layer, through the static_slave module
@@ -140,6 +143,7 @@ always_ff @(posedge aclk) begin
         curr_ch_idx_C <= 0;
         curr_dma_wr_len_C <= 'X;
         curr_dma_wr_beats_req_C <= 'X;
+        curr_dma_last_beat_C <= 'X;
 
         // Data beat counter
         curr_dma_beat_cnt <= 0;
@@ -153,10 +157,11 @@ always_ff @(posedge aclk) begin
         curr_ch_idx_C <= curr_ch_idx_N;
         curr_dma_wr_len_C <= curr_dma_wr_len_N;
         curr_dma_wr_beats_req_C <= curr_dma_wr_beats_req_N;
+        curr_dma_last_beat_C <= curr_dma_last_beat_N;
 
         // Data beat counter
         if (qdma_in.tvalid && qdma_in.tready) begin
-            if (curr_dma_beat_cnt == (curr_dma_wr_beats_req_N - 1)) begin
+            if (curr_dma_beat_cnt == curr_dma_last_beat_C) begin
                 curr_dma_beat_cnt <= 0;
             end else begin
                 curr_dma_beat_cnt <= curr_dma_beat_cnt + 1;
@@ -179,6 +184,7 @@ always_comb begin
     curr_ch_idx_N = curr_ch_idx_C;
     curr_dma_wr_len_N = curr_dma_wr_len_C;
     curr_dma_wr_beats_req_N = curr_dma_wr_beats_req_C;
+    curr_dma_last_beat_N = curr_dma_last_beat_C;
 
     // Always constant
     m_qdma_c2h_cmd.req.func      = 0;    // Coyote only supports one PF (for now...)
@@ -189,6 +195,8 @@ always_comb begin
     qdma_in.payload.has_cmpt     = 0;    // No completion is sent to the driver/software
     qdma_in.payload.marker       = 0;    // Used for flushing the queues, not needed here
     qdma_in.payload.port_id      = 0;    // port_id offers even finer granularity than qid --- UNUSED
+    data_beat_last               = 1'b0;
+    data_beat_fire               = 1'b0;
     
     unique case (state_C)
         // If there is no outstanding data, assign next DMA command to the QDMA interface
@@ -212,6 +220,10 @@ always_comb begin
             m_qdma_c2h_cmd.req.addr         = s_dma_wr_reqs[curr_ch_idx_N].paddr;
             curr_dma_wr_len_N               = s_dma_wr_reqs[curr_ch_idx_N].len;
             curr_dma_wr_beats_req_N         = (s_dma_wr_reqs[curr_ch_idx_N].len + AXI_DATA_BYTES - 1) >> AXI_DATA_BYTES_BITS;
+            // Keep the data-phase TLAST comparator in the 333 MHz path as a
+            // register-to-compare boundary. Recomputing beats_req - 1 in the
+            // streaming cycle puts a subtractor on every C2H payload register.
+            curr_dma_last_beat_N            = curr_dma_wr_beats_req_N - 1'b1;
 
             // Queue, prefetch tag
             m_qdma_c2h_cmd.req.qid          = QDMA_WR_QUEUE_START_IDX + curr_ch_idx_N * N_QUEUES_PER_CHAN + chan_qid_C[curr_ch_idx_N];
@@ -269,7 +281,9 @@ always_comb begin
             * Additionally, the tlast signal must be set before the tvalid signal; if not, every now and then,
             * the QDMA will drop the packet (length mismatch error), likely indicating some race condition
             */
-            qdma_in.tlast                   = dyn_in_tvalids[curr_ch_idx_C] && qdma_in.tready && (curr_dma_beat_cnt == (curr_dma_wr_beats_req_C - 1));
+            data_beat_last                  = (curr_dma_beat_cnt == curr_dma_last_beat_C);
+            data_beat_fire                  = dyn_in_tvalids[curr_ch_idx_C] && qdma_in.tready;
+            qdma_in.tlast                   = dyn_in_tvalids[curr_ch_idx_C] && data_beat_last;
 
             // Calculate the number of empty bytes from the TKEEP signal
             data_mty = 0;
@@ -288,7 +302,7 @@ always_comb begin
             dyn_in_treadys[curr_ch_idx_C]   = qdma_in.tready;
 
             // If data packet is last, reset in_flight_cmd and update the queue ID for the next transfer
-            if (qdma_in.tlast) begin
+            if (data_beat_fire && data_beat_last) begin
                 state_N = ST_IDLE;
         
                 if (chan_qid_C[curr_ch_idx_C] == N_QUEUES_PER_CHAN - 1) begin

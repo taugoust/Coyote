@@ -77,6 +77,10 @@ set(EN_STRM 1 CACHE STRING "Enable host streams")
 # Number of parallel streams from host (per vFPGA)
 set(N_STRM_AXI 1 CACHE STRING "Number of host streams")
 
+# Number of processor-neutral logical co-processor ports per vFPGA. Physical
+# processor providers are registered independently and bind at runtime.
+set(N_COPROCESSOR_PORTS 0 CACHE STRING "Number of logical co-processor ports")
+
 # Enable streams from card memory (HBM/DDR)
 set(EN_MEM 0 CACHE STRING "Enable memory streams")
 
@@ -204,6 +208,31 @@ set(SCLK_F 250 CACHE STRING "Static layer clock frequency")
 # Both offer the same theoretical throughput (32 GB/s), but can lead to different timing closure
 # Additionally, using PCIe Gen5x8 leaves room for one more QDMA core at Gen5x8, therefore up to 64 Gb/s
 set(PCIE_GEN 4 CACHE STRING "Versal PCIe configuration: Gen4x16 or Gen5x8")
+
+# Enable the V80 R5-0 hardware-platform slice in the persistent static layer.
+# This only exposes the processor and a bounded LPD scratch target; it does not
+# register R5 as a logical co-processor provider.
+set(EN_V80_R5_PLATFORM 0 CACHE STRING "Enable the V80 R5-0 static platform")
+set(V80_R5_PROCESSOR "psv_cortexr5_0")
+set(V80_R5_LPD_DATA_BITS 32)
+set(V80_R5_LPD_CLOCK_HZ 33333333)
+set(V80_R5_SCRATCH_BASE 2147483648) # 0x80000000
+set(V80_R5_SCRATCH_BYTES 4096)
+set(V80_R5_ATCM_BASE 0)
+set(V80_R5_ATCM_BYTES 65536)
+set(V80_R5_BTCM_BASE 131072) # 0x00020000
+set(V80_R5_BTCM_BYTES 65536)
+
+# Bind the V80 R5-0 platform to one processor-neutral logical port through the
+# shell-resident bounded polling backend. Static and shell builds must enable
+# this independently so their checkpoint boundary is identical.
+set(EN_V80_R5_PROVIDER 0 CACHE STRING "Enable the V80 R5-0 co-processor provider")
+set(V80_R5_PROVIDER_BASE 2147549184) # 0x80010000
+set(V80_R5_PROVIDER_BYTES 65536)
+set(V80_R5_PROVIDER_QUEUE_DEPTH 4)
+set(V80_R5_PROVIDER_ENDPOINT_ID 1)
+set(V80_R5_PROVIDER_RUNTIME_ABI "baremetal")
+set(V80_R5_PROVIDER_FIRMWARE_ABI "coyote-r5-provider-mmio-v1")
 
 # Clock uncertainty for HLS synthesis; default 27% since HLS estimates can be different from the actual PnR
 # Therefore, HLS synthesis should always be performed conservatively, with a higher clock uncertainty
@@ -446,6 +475,27 @@ set(EXTERNAL_DYNAMIC_SERVICE_SOURCES "")
 set(EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS "")
 set(EXTERNAL_DYNAMIC_SERVICE_INIT_TCL "")
 set(APPLICATION_SOURCE_DIRS "")
+set(COYOTE_HLS_REQUIRED 0)
+
+# Processor-neutral co-processor application interface. These dimensions form
+# one shell/application compatibility contract and remain independent of any
+# physical R5/A72 provider backend.
+set(COPROCESSOR_INTERFACE_PRESENT 0)
+set(COPROCESSOR_INTERFACE_VERSION 1)
+set(COPROCESSOR_STREAM_ABI 1)
+set(COPROCESSOR_STREAM_DATA_BITS 512)
+set(COPROCESSOR_STREAM_ID_BITS 6)
+set(COPROCESSOR_MAX_PACKET_BYTES 4096)
+set(COPROCESSOR_MMIO_ABI 1)
+set(COPROCESSOR_MMIO_ADDR_BITS 12)
+set(COPROCESSOR_MMIO_DATA_BITS 64)
+set(COPROCESSOR_BINDING_GENERATION_BITS 32)
+set(COPROCESSOR_PROVIDER_COUNT 0)
+set(COPROCESSOR_PROVIDER_DESCRIPTORS "")
+set(COPROCESSOR_PROVIDER_TOPS "")
+set(COPROCESSOR_PROVIDER_SOURCES "")
+set(COPROCESSOR_PROVIDER_INCLUDE_DIRS "")
+set(COPROCESSOR_PROVIDER_INIT_TCL "")
 
 ############################################
 ##        SOFTWARE DEPENDENCIES           ##
@@ -453,11 +503,6 @@ set(APPLICATION_SOURCE_DIRS "")
 find_package(Vivado REQUIRED)
 if (NOT VIVADO_FOUND)
    message(FATAL_ERROR "Vivado not found.")
-endif()
-
-find_package(VitisHLS REQUIRED)
-if (NOT VITIS_HLS_FOUND)
-  message(FATAL_ERROR "Vitis HLS not found.")
 endif()
 
 ############################################
@@ -498,6 +543,22 @@ function(_coyote_collect_files out_var)
     endforeach()
     list(REMOVE_DUPLICATES result)
     set(${out_var} "${result}" PARENT_SCOPE)
+endfunction()
+
+# A user HLS kernel is represented by a directory below <app>/hls. Empty HLS
+# directories do not request a tool because comp_hls.tcl would have no work.
+function(_coyote_source_requires_hls out_var source_dir)
+    set(required 0)
+    if(IS_DIRECTORY "${source_dir}/hls")
+        file(GLOB hls_entries LIST_DIRECTORIES true "${source_dir}/hls/*")
+        foreach(entry IN LISTS hls_entries)
+            if(IS_DIRECTORY "${entry}")
+                set(required 1)
+                break()
+            endif()
+        endforeach()
+    endif()
+    set(${out_var} ${required} PARENT_SCOPE)
 endfunction()
 
 # Register one optional out-of-tree service in the dynamic layer. Relative paths
@@ -608,6 +669,154 @@ function(register_dynamic_service)
     message("** External dynamic service ${SERVICE_NAME} (${service_description})")
 endfunction()
 
+# Register a physical provider implementation without changing the logical
+# application interface. Provider-free configurations are valid and exercise
+# deterministic unbound behavior without a physical hard CPU.
+function(register_coprocessor_provider)
+    if(BUILD_APP)
+        message(FATAL_ERROR "register_coprocessor_provider() is only valid for shell/static builds")
+    endif()
+
+    cmake_parse_arguments(
+        "PROVIDER"
+        ""
+        "NAME;TOP;ENDPOINT_ID;PROCESSOR_CLASS;RUNTIME_ABI;FIRMWARE_ABI;STREAM_ABI;MMIO_ABI;CAPACITY;TIMING_NS;INIT_TCL"
+        "SOURCES;INCLUDE_DIRS"
+        ${ARGN}
+    )
+    if(PROVIDER_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "Unknown register_coprocessor_provider() arguments: ${PROVIDER_UNPARSED_ARGUMENTS}")
+    endif()
+    foreach(required NAME TOP ENDPOINT_ID PROCESSOR_CLASS RUNTIME_ABI FIRMWARE_ABI STREAM_ABI MMIO_ABI)
+        if(NOT DEFINED PROVIDER_${required} OR PROVIDER_${required} STREQUAL "")
+            message(FATAL_ERROR "register_coprocessor_provider() requires ${required}")
+        endif()
+    endforeach()
+    foreach(token NAME PROCESSOR_CLASS RUNTIME_ABI FIRMWARE_ABI)
+        if(NOT PROVIDER_${token} MATCHES "^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
+            message(FATAL_ERROR "Co-processor provider ${token} contains unsupported characters")
+        endif()
+    endforeach()
+    if(NOT PROVIDER_TOP MATCHES "^[A-Za-z_][A-Za-z0-9_]*$")
+        message(FATAL_ERROR "Co-processor provider TOP must be a simple SystemVerilog module identifier")
+    endif()
+    foreach(numeric ENDPOINT_ID STREAM_ABI MMIO_ABI)
+        if(NOT PROVIDER_${numeric} MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "Co-processor provider ${numeric} must be a positive integer")
+        endif()
+    endforeach()
+
+    if(PROVIDER_ENDPOINT_ID GREATER 65535)
+        message(FATAL_ERROR "Co-processor provider ENDPOINT_ID must fit the 16-bit public contract")
+    endif()
+    if(NOT DEFINED PROVIDER_CAPACITY OR PROVIDER_CAPACITY STREQUAL "")
+        set(PROVIDER_CAPACITY 1)
+    endif()
+    if(NOT DEFINED PROVIDER_TIMING_NS OR PROVIDER_TIMING_NS STREQUAL "")
+        set(PROVIDER_TIMING_NS 0)
+    endif()
+    foreach(numeric CAPACITY TIMING_NS)
+        if(NOT PROVIDER_${numeric} MATCHES "^[0-9]+$")
+            message(FATAL_ERROR "Co-processor provider ${numeric} must be a nonnegative integer")
+        endif()
+    endforeach()
+    if(NOT PROVIDER_CAPACITY EQUAL 1)
+        message(FATAL_ERROR "Initial co-processor providers are exclusive and require CAPACITY 1")
+    endif()
+
+    if(COPROCESSOR_PROVIDER_DESCRIPTORS MATCHES "(^|;)${PROVIDER_ENDPOINT_ID}\\|")
+        message(FATAL_ERROR "Duplicate co-processor provider endpoint ID ${PROVIDER_ENDPOINT_ID}")
+    endif()
+
+    set(normalized_sources "")
+    foreach(path IN LISTS PROVIDER_SOURCES)
+        get_filename_component(path_abs "${path}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(NOT EXISTS "${path_abs}" OR IS_DIRECTORY "${path_abs}")
+            message(FATAL_ERROR "Co-processor provider RTL source does not exist: ${path_abs}")
+        endif()
+        list(APPEND normalized_sources "${path_abs}")
+    endforeach()
+    list(REMOVE_DUPLICATES normalized_sources)
+
+    set(normalized_include_dirs "")
+    foreach(path IN LISTS PROVIDER_INCLUDE_DIRS)
+        get_filename_component(path_abs "${path}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(NOT IS_DIRECTORY "${path_abs}")
+            message(FATAL_ERROR "Co-processor provider include directory does not exist: ${path_abs}")
+        endif()
+        list(APPEND normalized_include_dirs "${path_abs}")
+    endforeach()
+    list(REMOVE_DUPLICATES normalized_include_dirs)
+
+    set(init_tcl "")
+    if(DEFINED PROVIDER_INIT_TCL AND NOT PROVIDER_INIT_TCL STREQUAL "")
+        get_filename_component(init_tcl "${PROVIDER_INIT_TCL}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(NOT EXISTS "${init_tcl}" OR IS_DIRECTORY "${init_tcl}")
+            message(FATAL_ERROR "Co-processor provider INIT_TCL does not exist: ${init_tcl}")
+        endif()
+    endif()
+
+    set(descriptor "${PROVIDER_ENDPOINT_ID}|${PROVIDER_NAME}|${PROVIDER_PROCESSOR_CLASS}|${PROVIDER_RUNTIME_ABI}|${PROVIDER_FIRMWARE_ABI}|${PROVIDER_STREAM_ABI}|${PROVIDER_MMIO_ABI}|1|${PROVIDER_CAPACITY}|${PROVIDER_TIMING_NS}")
+    set(descriptors ${COPROCESSOR_PROVIDER_DESCRIPTORS})
+    list(APPEND descriptors "${descriptor}")
+    set(tops ${COPROCESSOR_PROVIDER_TOPS})
+    list(APPEND tops "${PROVIDER_TOP}")
+    set(sources ${COPROCESSOR_PROVIDER_SOURCES})
+    list(APPEND sources ${normalized_sources})
+    list(REMOVE_DUPLICATES sources)
+    set(include_dirs ${COPROCESSOR_PROVIDER_INCLUDE_DIRS})
+    list(APPEND include_dirs ${normalized_include_dirs})
+    list(REMOVE_DUPLICATES include_dirs)
+    set(init_scripts ${COPROCESSOR_PROVIDER_INIT_TCL})
+    if(NOT init_tcl STREQUAL "")
+        list(APPEND init_scripts "${init_tcl}")
+    endif()
+    list(REMOVE_DUPLICATES init_scripts)
+    math(EXPR provider_count "${COPROCESSOR_PROVIDER_COUNT} + 1")
+
+    set(COPROCESSOR_PROVIDER_COUNT ${provider_count} PARENT_SCOPE)
+    set(COPROCESSOR_PROVIDER_DESCRIPTORS "${descriptors}" PARENT_SCOPE)
+    set(COPROCESSOR_PROVIDER_TOPS "${tops}" PARENT_SCOPE)
+    set(COPROCESSOR_PROVIDER_SOURCES "${sources}" PARENT_SCOPE)
+    set(COPROCESSOR_PROVIDER_INCLUDE_DIRS "${include_dirs}" PARENT_SCOPE)
+    set(COPROCESSOR_PROVIDER_INIT_TCL "${init_scripts}" PARENT_SCOPE)
+    message("** Co-processor provider ${PROVIDER_NAME} (endpoint ${PROVIDER_ENDPOINT_ID}, class ${PROVIDER_PROCESSOR_CLASS})")
+endfunction()
+
+macro(_validate_coprocessor_interface)
+    if(NOT N_COPROCESSOR_PORTS MATCHES "^[0-9]+$")
+        message(FATAL_ERROR "N_COPROCESSOR_PORTS must be a nonnegative integer")
+    endif()
+    if(N_COPROCESSOR_PORTS GREATER 8)
+        message(FATAL_ERROR "At most eight logical co-processor ports are supported")
+    endif()
+    if(COPROCESSOR_PROVIDER_COUNT GREATER 0 AND N_COPROCESSOR_PORTS EQUAL 0)
+        message(FATAL_ERROR "Physical co-processor providers require at least one logical port")
+    endif()
+    if(N_COPROCESSOR_PORTS GREATER 0)
+        if((BUILD_SHELL OR BUILD_STATIC) AND NOT BUILD_APP)
+            set(COPROCESSOR_INTERFACE_PRESENT 1)
+        endif()
+        foreach(abi COPROCESSOR_STREAM_ABI COPROCESSOR_MMIO_ABI)
+            if(NOT ${abi} MATCHES "^[1-9][0-9]*$")
+                message(FATAL_ERROR "${abi} must be a positive integer")
+            endif()
+        endforeach()
+        if(NOT COPROCESSOR_INTERFACE_PRESENT EQUAL 1)
+            message(FATAL_ERROR "Enabled logical co-processor ports require a complete exported interface contract")
+        endif()
+        if(NOT COPROCESSOR_INTERFACE_VERSION EQUAL 1 OR
+           NOT COPROCESSOR_STREAM_DATA_BITS EQUAL 512 OR
+           NOT COPROCESSOR_STREAM_ID_BITS EQUAL 6 OR
+           NOT COPROCESSOR_MAX_PACKET_BYTES EQUAL 4096 OR
+           NOT COPROCESSOR_MMIO_ADDR_BITS EQUAL 12 OR
+           NOT COPROCESSOR_MMIO_DATA_BITS EQUAL 64 OR
+           NOT COPROCESSOR_BINDING_GENERATION_BITS EQUAL 32)
+            message(FATAL_ERROR "Unsupported logical co-processor interface dimensions")
+        endif()
+    endif()
+endmacro()
+
 macro(_validate_external_dynamic_service)
     if(EN_EXTERNAL_DYNAMIC_SERVICE_SLOT_STATUS AND NOT EN_EXTERNAL_DYNAMIC_SERVICE)
         message(FATAL_ERROR "External dynamic service slot status requires an external dynamic service")
@@ -681,6 +890,45 @@ macro(validation_checks_hw)
 
     if(NOT NN EQUAL 1)
         message(FATAL_ERROR "Choose one build flow.")
+    endif()
+
+    if(NOT EN_V80_R5_PLATFORM MATCHES "^[01]$")
+        message(FATAL_ERROR "EN_V80_R5_PLATFORM must be 0 or 1")
+    endif()
+    if(EN_V80_R5_PLATFORM)
+        if(NOT FDEV_NAME STREQUAL "v80")
+            message(FATAL_ERROR "The R5 hardware platform is available only on V80")
+        endif()
+        if(NOT BUILD_STATIC)
+            message(FATAL_ERROR "The R5 hardware platform changes CIPS and requires BUILD_STATIC=1")
+        endif()
+        if(EN_PR)
+            message(FATAL_ERROR "Static R5 platform builds do not support EN_PR=1")
+        endif()
+    endif()
+
+    if(NOT EN_V80_R5_PROVIDER MATCHES "^[01]$")
+        message(FATAL_ERROR "EN_V80_R5_PROVIDER must be 0 or 1")
+    endif()
+    if(EN_V80_R5_PROVIDER)
+        if(NOT FDEV_NAME STREQUAL "v80")
+            message(FATAL_ERROR "The R5 co-processor provider is available only on V80")
+        endif()
+        if(BUILD_APP)
+            message(FATAL_ERROR "Applications request logical co-processor ports; EN_V80_R5_PROVIDER belongs to static/shell builds")
+        endif()
+        if(BUILD_STATIC AND NOT EN_V80_R5_PLATFORM)
+            message(FATAL_ERROR "Static R5 provider builds require EN_V80_R5_PLATFORM=1")
+        endif()
+        if(NOT N_REGIONS EQUAL 1 OR NOT N_COPROCESSOR_PORTS EQUAL 1)
+            message(FATAL_ERROR "The initial R5 provider requires one region and one logical co-processor port")
+        endif()
+        if(EN_UCLK)
+            message(FATAL_ERROR "The initial R5 provider requires EN_UCLK=0 so its logical interfaces share the shell clock")
+        endif()
+        if(NOT COPROCESSOR_PROVIDER_COUNT EQUAL 1)
+            message(FATAL_ERROR "The initial R5 provider requires exactly one registered endpoint descriptor")
+        endif()
     endif()
 
     if(BUILD_SHELL OR BUILD_STATIC)
@@ -1133,8 +1381,54 @@ macro(validation_checks_hw)
         # Application implementation resources belong to the current build,
         # not to the historical shell-export recipe.
         set(_application_comp_cores "${COMP_CORES}")
+
+        set(COPROCESSOR_REQUESTED_PORTS ${N_COPROCESSOR_PORTS})
+        set(COPROCESSOR_REQUESTED_INTERFACE_VERSION ${COPROCESSOR_INTERFACE_VERSION})
+        set(COPROCESSOR_REQUESTED_STREAM_ABI ${COPROCESSOR_STREAM_ABI})
+        set(COPROCESSOR_REQUESTED_STREAM_DATA_BITS ${COPROCESSOR_STREAM_DATA_BITS})
+        set(COPROCESSOR_REQUESTED_STREAM_ID_BITS ${COPROCESSOR_STREAM_ID_BITS})
+        set(COPROCESSOR_REQUESTED_MAX_PACKET_BYTES ${COPROCESSOR_MAX_PACKET_BYTES})
+        set(COPROCESSOR_REQUESTED_MMIO_ABI ${COPROCESSOR_MMIO_ABI})
+        set(COPROCESSOR_REQUESTED_MMIO_ADDR_BITS ${COPROCESSOR_MMIO_ADDR_BITS})
+        set(COPROCESSOR_REQUESTED_MMIO_DATA_BITS ${COPROCESSOR_MMIO_DATA_BITS})
+        set(COPROCESSOR_REQUESTED_GENERATION_BITS ${COPROCESSOR_BINDING_GENERATION_BITS})
+
+        # Clear local defaults so an old or incomplete shell export cannot be
+        # mistaken for a compatible co-processor contract.
+        set(COPROCESSOR_INTERFACE_PRESENT 0)
+        set(N_COPROCESSOR_PORTS 0)
+        set(COPROCESSOR_INTERFACE_VERSION 0)
+        set(COPROCESSOR_STREAM_ABI 0)
+        set(COPROCESSOR_STREAM_DATA_BITS 0)
+        set(COPROCESSOR_STREAM_ID_BITS 0)
+        set(COPROCESSOR_MAX_PACKET_BYTES 0)
+        set(COPROCESSOR_MMIO_ABI 0)
+        set(COPROCESSOR_MMIO_ADDR_BITS 0)
+        set(COPROCESSOR_MMIO_DATA_BITS 0)
+        set(COPROCESSOR_BINDING_GENERATION_BITS 0)
+        set(COPROCESSOR_PROVIDER_COUNT 0)
+        set(COPROCESSOR_PROVIDER_DESCRIPTORS "")
         include("${SHELL_PATH}/export.cmake")
         set(COMP_CORES "${_application_comp_cores}")
+
+        if(COPROCESSOR_REQUESTED_PORTS GREATER 0 AND NOT COPROCESSOR_INTERFACE_PRESENT EQUAL 1)
+            message(FATAL_ERROR "Application requires logical co-processor ports, but the shell exports no complete co-processor contract")
+        endif()
+        if(COPROCESSOR_REQUESTED_PORTS GREATER N_COPROCESSOR_PORTS)
+            message(FATAL_ERROR "Application requires ${COPROCESSOR_REQUESTED_PORTS} logical co-processor ports, but the shell exports ${N_COPROCESSOR_PORTS}")
+        endif()
+        if(COPROCESSOR_REQUESTED_PORTS GREATER 0 AND
+           (NOT COPROCESSOR_REQUESTED_INTERFACE_VERSION EQUAL COPROCESSOR_INTERFACE_VERSION OR
+            NOT COPROCESSOR_REQUESTED_STREAM_ABI EQUAL COPROCESSOR_STREAM_ABI OR
+            NOT COPROCESSOR_REQUESTED_STREAM_DATA_BITS EQUAL COPROCESSOR_STREAM_DATA_BITS OR
+            NOT COPROCESSOR_REQUESTED_STREAM_ID_BITS EQUAL COPROCESSOR_STREAM_ID_BITS OR
+            NOT COPROCESSOR_REQUESTED_MAX_PACKET_BYTES EQUAL COPROCESSOR_MAX_PACKET_BYTES OR
+            NOT COPROCESSOR_REQUESTED_MMIO_ABI EQUAL COPROCESSOR_MMIO_ABI OR
+            NOT COPROCESSOR_REQUESTED_MMIO_ADDR_BITS EQUAL COPROCESSOR_MMIO_ADDR_BITS OR
+            NOT COPROCESSOR_REQUESTED_MMIO_DATA_BITS EQUAL COPROCESSOR_MMIO_DATA_BITS OR
+            NOT COPROCESSOR_REQUESTED_GENERATION_BITS EQUAL COPROCESSOR_BINDING_GENERATION_BITS))
+            message(FATAL_ERROR "Application co-processor interface is incompatible with the exported shell")
+        endif()
 
         if(EN_PR EQUAL 0)
             message(FATAL_ERROR "PR not enabled in the shell.")
@@ -1143,6 +1437,7 @@ macro(validation_checks_hw)
     endif()
 
     _validate_external_dynamic_service()
+    _validate_coprocessor_interface()
 endmacro()
 
 # Load applications
@@ -1213,6 +1508,10 @@ macro(load_apps)
                     get_filename_component(vf_app_source_abs "${vf_app_source_dir}"
                         ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
                     list(APPEND APPLICATION_SOURCE_DIRS "${vf_app_source_abs}")
+                    _coyote_source_requires_hls(source_requires_hls "${vf_app_source_abs}")
+                    if(source_requires_hls)
+                        set(COYOTE_HLS_REQUIRED 1)
+                    endif()
                 endforeach()
                 MATH(EXPR t_idx "${t_idx}+1")
             endforeach()
@@ -1234,13 +1533,22 @@ macro(gen_scripts)
     _coyote_paths_to_tcl(EXTERNAL_DYNAMIC_SERVICE_SOURCES_TCL ${EXTERNAL_DYNAMIC_SERVICE_SOURCES})
     _coyote_paths_to_tcl(EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS_TCL ${EXTERNAL_DYNAMIC_SERVICE_INCLUDE_DIRS})
     _coyote_paths_to_tcl(EXTERNAL_DYNAMIC_SERVICE_INIT_TCL_TCL ${EXTERNAL_DYNAMIC_SERVICE_INIT_TCL})
+    _coyote_paths_to_tcl(COPROCESSOR_PROVIDER_SOURCES_TCL ${COPROCESSOR_PROVIDER_SOURCES})
+    _coyote_paths_to_tcl(COPROCESSOR_PROVIDER_INCLUDE_DIRS_TCL ${COPROCESSOR_PROVIDER_INCLUDE_DIRS})
+    _coyote_paths_to_tcl(COPROCESSOR_PROVIDER_INIT_TCL_TCL ${COPROCESSOR_PROVIDER_INIT_TCL})
 
     # Python
     configure_file(${CYT_DIR}/scripts/cr_prjcts/write_hdl.py.in ${CMAKE_BINARY_DIR}/write_hdl.py)
     configure_file(${CYT_DIR}/scripts/impl/fix_bif.py.in ${CMAKE_BINARY_DIR}/fix_bif.py)
 
-    # Base script
+    # Base script. Keep disabled generation byte-equivalent by appending the
+    # processor-platform fragment only when the static R5 option is enabled.
     configure_file(${CYT_DIR}/scripts/base.tcl.in ${CMAKE_BINARY_DIR}/base.tcl)
+    if(EN_V80_R5_PLATFORM)
+        configure_file(${CYT_DIR}/scripts/v80-r5-platform-base.tcl.in ${CMAKE_BINARY_DIR}/v80-r5-platform-base.tcl)
+        file(READ ${CMAKE_BINARY_DIR}/v80-r5-platform-base.tcl v80_r5_platform_base)
+        file(APPEND ${CMAKE_BINARY_DIR}/base.tcl "\n${v80_r5_platform_base}")
+    endif()
 
     # HLS & SpinalHDL scripts
     configure_file(${CYT_DIR}/scripts/apps/comp_hls.tcl.in ${CMAKE_BINARY_DIR}/comp_hls.tcl)
@@ -1266,6 +1574,13 @@ macro(gen_scripts)
     # Place-and-Route scripts
     configure_file(${CYT_DIR}/scripts/impl/pnr_shell.tcl.in ${CMAKE_BINARY_DIR}/pnr_shell.tcl)
     configure_file(${CYT_DIR}/scripts/impl/physical_stage.tcl.in ${CMAKE_BINARY_DIR}/physical_stage.tcl)
+    if(EN_V80_R5_PLATFORM)
+        configure_file(${CYT_DIR}/scripts/impl/export_platform.tcl.in ${CMAKE_BINARY_DIR}/export_platform.tcl)
+        configure_file(${CYT_DIR}/scripts/checks/check_v80_r5_platform.tcl.in ${CMAKE_BINARY_DIR}/check_v80_r5_platform.tcl)
+    endif()
+    if(EN_V80_R5_PROVIDER)
+        configure_file(${CYT_DIR}/scripts/checks/check_v80_r5_provider_project.tcl.in ${CMAKE_BINARY_DIR}/check_v80_r5_provider_project.tcl)
+    endif()
 
     # Dynamic and app scripts
     if (FPGA_ARCH STREQUAL "versal")
@@ -1286,8 +1601,19 @@ macro(gen_scripts)
     # Bitgen
     configure_file(${CYT_DIR}/scripts/impl/bitgen.tcl.in ${CMAKE_BINARY_DIR}/bitgen.tcl)
 
-    # Export CMake config
+    # Export CMake config. Keep the disabled output byte-identical; the logical
+    # co-processor contract is appended only when ports are present.
     configure_file(${CYT_DIR}/scripts/export.cmake.in ${CMAKE_BINARY_DIR}/export.cmake)
+    if(N_COPROCESSOR_PORTS GREATER 0)
+        configure_file(${CYT_DIR}/scripts/coprocessor-export.cmake.in ${CMAKE_BINARY_DIR}/coprocessor-export.cmake)
+        file(READ ${CMAKE_BINARY_DIR}/coprocessor-export.cmake coprocessor_export)
+        file(APPEND ${CMAKE_BINARY_DIR}/export.cmake "\n${coprocessor_export}")
+    endif()
+    if(EN_V80_R5_PLATFORM)
+        configure_file(${CYT_DIR}/scripts/v80-r5-platform-export.cmake.in ${CMAKE_BINARY_DIR}/v80-r5-platform-export.cmake)
+        file(READ ${CMAKE_BINARY_DIR}/v80-r5-platform-export.cmake v80_r5_platform_export)
+        file(APPEND ${CMAKE_BINARY_DIR}/export.cmake "\n${v80_r5_platform_export}")
+    endif()
 endmacro()
 
 # Generate dependency lists
@@ -1567,12 +1893,14 @@ macro(gen_targets)
         set(NET_SYNTH_CMD COMMAND make services)
     endif()
 
-    if(LOAD_APPS)
+    if(COYOTE_HLS_REQUIRED)
         if(VITIS_HLS_MODE STREQUAL "vitis_hls")
             set(HLS_SYNTH_CMD COMMAND ${VITIS_HLS_BINARY} -f comp_hls.tcl)
         else()
             set(HLS_SYNTH_CMD COMMAND ${VITIS_HLS_BINARY} --tcl comp_hls.tcl --mode hls)
         endif()
+    endif()
+    if(LOAD_APPS)
         set(SPINAL_HDL_GEN_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/comp_spinal.tcl -notrace)
     endif()
 
@@ -1600,6 +1928,13 @@ macro(gen_targets)
     set(TIMING_ORACLE_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/timing_oracle.tcl -notrace)
     
     set(BGEN_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/bitgen.tcl -notrace)
+    if(EN_V80_R5_PLATFORM)
+        set(PLATFORM_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/export_platform.tcl -notrace)
+        set(PLATFORM_CHECK_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/check_v80_r5_platform.tcl -notrace)
+    endif()
+    if(EN_V80_R5_PROVIDER)
+        set(PROVIDER_PROJECT_CHECK_CMD COMMAND ${VIVADO_BINARY} -mode tcl -source ${CMAKE_BINARY_DIR}/check_v80_r5_provider_project.tcl -notrace)
+    endif()
 
     # Dependencies
     gen_dep_lists()
@@ -1763,6 +2098,24 @@ macro(gen_targets)
                     ${CMAKE_BINARY_DIR}/pnr_shell.tcl
             )
         endif()
+    endif()
+
+    # Fixed hardware platform
+    # -----------------------------------
+    if(EN_V80_R5_PROVIDER)
+        add_custom_target(provider-project-design-check ${PROVIDER_PROJECT_CHECK_CMD})
+        add_dependencies(provider-project-design-check project)
+    endif()
+    if(EN_V80_R5_PLATFORM)
+        set(V80_R5_PLATFORM_XSA ${CMAKE_BINARY_DIR}/platform/cyt_top.xsa)
+        add_custom_target(platform-design-check ${PLATFORM_CHECK_CMD})
+        add_dependencies(platform-design-check project)
+        add_custom_target(platform DEPENDS ${V80_R5_PLATFORM_XSA})
+        add_custom_command(
+            OUTPUT ${V80_R5_PLATFORM_XSA}
+            ${PLATFORM_CMD}
+            DEPENDS ${CMAKE_BINARY_DIR}/checkpoints/shell_routed.dcp
+        )
     endif()
 
     # Config-0 dynamic link/finalize boundaries used by immutable shell packages.
@@ -2035,6 +2388,21 @@ endmacro()
 # Create build
 macro(create_hw)
     _validate_external_dynamic_service()
+
+    # Network services and configured user HLS kernels genuinely require the
+    # HLS frontend. Pure RTL/SpinalHDL projects remain Vivado-only.
+    if(EN_NET OR COYOTE_HLS_REQUIRED)
+        find_package(VitisHLS REQUIRED)
+        if(NOT VITIS_HLS_FOUND)
+            message(FATAL_ERROR "Vitis HLS not found for a configuration that requires HLS generation.")
+        endif()
+    else()
+        set(VITIS_HLS 0)
+        set(VITIS_HLS_FOUND FALSE)
+        set(VITIS_HLS_MODE "")
+        set(VITIS_HLS_BINARY "")
+    endif()
+
     gen_scripts()
     gen_targets()
 

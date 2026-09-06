@@ -21,6 +21,18 @@ proc require_text {source needle path} {
     }
 }
 
+proc configured_templates {directory} {
+    set paths {}
+    foreach entry [glob -nocomplain -directory $directory *] {
+        if {[file isdirectory $entry]} {
+            set paths [concat $paths [configured_templates $entry]]
+        } elseif {[string match *.in $entry]} {
+            lappend paths $entry
+        }
+    }
+    return $paths
+}
+
 proc count_text {source needle} {
     set count 0
     set offset 0
@@ -34,12 +46,181 @@ proc count_text {source needle} {
     }
 }
 
+proc extract_proc {source name} {
+    set start [string first "proc $name " $source]
+    if {$start < 0} {
+        error "procedure $name is missing"
+    }
+    set candidate ""
+    foreach line [split [string range $source $start end] \n] {
+        append candidate $line \n
+        if {[info complete $candidate]} {
+            return $candidate
+        }
+    }
+    error "procedure $name is incomplete"
+}
+
+proc require_equal {actual expected label} {
+    if {$actual ne $expected} {
+        puts stderr "$label: expected '$expected', got '$actual'"
+        exit 1
+    }
+}
+
 lassign $argv base_path pnr_path physical_path app_link_path dyn_link_ultrascale_path dyn_link_versal_path dyn_finalize_path app_path ultrascale_path versal_path bitgen_path cmake_path
+set source_root [file dirname [file dirname $cmake_path]]
+set script_root [file join $source_root scripts]
+foreach path [configured_templates $script_root] {
+    set configured_template [read_source $path]
+    if {[regexp {\$\{[a-z_]} $configured_template collision]} {
+        puts stderr "$path contains Tcl runtime syntax '$collision' that configure_file would consume"
+        exit 1
+    }
+}
 set base [read_source $base_path]
 
+# Execute the post-route decision with mocked timing and implementation commands.
+# A closed routed design must remain untouched, while either setup or hold failure
+# requires physical optimization followed by routing. Missing timing evidence
+# fails closed instead of silently preserving an unverified result.
+eval [extract_proc $base routed_design_worst_slacks]
+eval [extract_proc $base routed_design_needs_post_route_optimization]
+eval [extract_proc $base routed_candidate_is_better]
+eval [extract_proc $base optimize_and_retain_best_routed_candidate]
+eval [extract_proc $base finalize_post_route_optimization]
+array set mock_slack {max 0.003 min 0.012}
+array set routed_slack {max 0.003 min 0.012}
+set mock_missing ""
+set apply_routed_slack 0
+set implementation_calls {}
+proc get_timing_paths {args} {
+    set delay_type [lindex $args [expr {[lsearch -exact $args -delay_type] + 1}]]
+    if {$delay_type eq $::mock_missing} {
+        return {}
+    }
+    return [list $delay_type]
+}
+proc get_property {property path} {
+    if {$property ne "SLACK"} {
+        error "unexpected property $property"
+    }
+    return $::mock_slack($path)
+}
+proc write_checkpoint {args} {
+    lappend ::implementation_calls [list write_checkpoint {*}$args]
+}
+proc phys_opt_design {args} {
+    lappend ::implementation_calls [list phys_opt_design {*}$args]
+}
+proc route_design {args} {
+    lappend ::implementation_calls [list route_design {*}$args]
+    if {$::apply_routed_slack} {
+        foreach delay_type {max min} {
+            set ::mock_slack($delay_type) $::routed_slack($delay_type)
+        }
+    }
+}
+proc close_design {} {
+    lappend ::implementation_calls close_design
+}
+proc open_checkpoint {path} {
+    lappend ::implementation_calls [list open_checkpoint $path]
+}
+set cfg(build_dir) /build
+set cfg(build_opt) 1
+finalize_post_route_optimization
+require_equal $implementation_calls {} "closed routed design finalization"
+foreach failing_type {max min} {
+    array set mock_slack {max 0.003 min 0.012}
+    set mock_slack($failing_type) -0.001
+    set implementation_calls {}
+    finalize_post_route_optimization
+    require_equal $implementation_calls \
+        {{write_checkpoint -force /build/checkpoints/routed_candidate.dcp} {phys_opt_design -directive AggressiveExplore} route_design} \
+        "$failing_type failure finalization"
+}
+require_equal [routed_candidate_is_better {-0.100 0.010} {-0.200 0.020}] 1 \
+    "better routed setup candidate"
+require_equal [routed_candidate_is_better {-0.100 -0.010} {-0.200 0.020}] 0 \
+    "candidate with more failing timing classes"
+array set mock_slack {max -0.100 min 0.010}
+array set routed_slack {max -0.200 min 0.020}
+set apply_routed_slack 1
+set implementation_calls {}
+finalize_post_route_optimization
+require_equal $implementation_calls \
+    {{write_checkpoint -force /build/checkpoints/routed_candidate.dcp} {phys_opt_design -directive AggressiveExplore} route_design close_design {open_checkpoint /build/checkpoints/routed_candidate.dcp}} \
+    "regressed routed candidate restoration"
+set apply_routed_slack 0
+array set mock_slack {max 0.003 min 0.012}
+set mock_missing min
+set implementation_calls {}
+if {![catch {finalize_post_route_optimization} missing_error] ||
+    [string first "No min timing path is available" $missing_error] < 0} {
+    puts stderr "missing timing evidence did not fail closed: $missing_error"
+    exit 1
+}
+require_equal $implementation_calls {} "missing timing evidence finalization"
+set mock_missing ""
+set cfg(build_opt) 0
+set implementation_calls {}
+finalize_post_route_optimization
+require_equal $implementation_calls {} "unoptimized compatibility finalization"
+set cfg(build_opt) 1
+array set mock_slack {max -0.100 min 0.010}
+array set routed_slack {max -0.050 min 0.010}
+set apply_routed_slack 1
+set implementation_calls {}
+finalize_post_route_optimization Explore ExtraNetDelay_high
+require_equal $implementation_calls \
+    {{write_checkpoint -force /build/checkpoints/routed_candidate.dcp} {phys_opt_design -directive Explore} {route_design -directive ExtraNetDelay_high}} \
+    "explicit post-route directives"
+set apply_routed_slack 0
+rename get_timing_paths {}
+rename get_property {}
+rename write_checkpoint {}
+rename phys_opt_design {}
+rename route_design {}
+rename close_design {}
+rename open_checkpoint {}
+
+set report_dir /reports
+set prefix shell_route
+set report_suffix _c0
+foreach {actual expected} [list \
+    [file join $report_dir [format "%s_utilization%s.rpt" $prefix $report_suffix]] /reports/shell_route_utilization_c0.rpt \
+    [file join $report_dir [format "%s_timing_summary%s.rpt" $prefix $report_suffix]] /reports/shell_route_timing_summary_c0.rpt \
+    [file join $report_dir [format "%s_route_status%s.rpt" $prefix $report_suffix]] /reports/shell_route_route_status_c0.rpt \
+    [file join $report_dir [format "shell_%s_incremental_reuse%s.rpt" route $report_suffix]] /reports/shell_route_incremental_reuse_c0.rpt \
+    [file join $report_dir [format "%s_utilization%s.rpt" shell_opt $report_suffix]] /reports/shell_opt_utilization_c0.rpt \
+    [file join $report_dir [format "%s_timing_summary%s.rpt" shell_opt $report_suffix]] /reports/shell_opt_timing_summary_c0.rpt \
+    [file join $report_dir [format "%s_qor_assessment%s.rpt" shell_opt $report_suffix]] /reports/shell_opt_qor_assessment_c0.rpt \
+    [file join $report_dir [format "%s_utilization%s.rpt" shell_place $report_suffix]] /reports/shell_place_utilization_c0.rpt \
+    [file join $report_dir [format "%s_timing_summary%s.rpt" shell_place $report_suffix]] /reports/shell_place_timing_summary_c0.rpt \
+    [file join $report_dir [format "%s_qor_assessment%s.rpt" shell_place $report_suffix]] /reports/shell_place_qor_assessment_c0.rpt \
+    [file join $report_dir [format "%s_diagnosis%s.json" shell_place $report_suffix]] /reports/shell_place_diagnosis_c0.json \
+    [file join $report_dir [format "%s_congestion%s.rpt" shell_place $report_suffix]] /reports/shell_place_congestion_c0.rpt \
+    [file join $report_dir [format "%s_complexity%s.rpt" shell_place $report_suffix]] /reports/shell_place_complexity_c0.rpt \
+    [file join $report_dir [format "%s_logic_levels%s.rpt" shell_place $report_suffix]] /reports/shell_place_logic_levels_c0.rpt \
+    [file join $report_dir [format "%s_high_fanout%s.rpt" shell_place $report_suffix]] /reports/shell_place_high_fanout_c0.rpt \
+    [file join $report_dir [format "%s_utilization%s.rpt" shell $report_suffix]] /reports/shell_utilization_c0.rpt \
+    [file join $report_dir [format "%s_timing_summary%s.rpt" shell $report_suffix]] /reports/shell_timing_summary_c0.rpt \
+    [file join $report_dir [format "%s_route_status%s.rpt" shell $report_suffix]] /reports/shell_route_status_c0.rpt \
+    [file join $report_dir [format "shell_drc_bitstream_checks%s.rpt" $report_suffix]] /reports/shell_drc_bitstream_checks_c0.rpt] {
+    if {$actual ne $expected} {
+        puts stderr "runtime report path '$actual' does not match '$expected'"
+        exit 1
+    }
+}
+
 foreach required {
+    {proc routed_design_worst_slacks}
+    {proc routed_design_needs_post_route_optimization}
+    {proc routed_candidate_is_better}
+    {proc optimize_and_retain_best_routed_candidate}
     {proc finalize_post_route_optimization}
-    {phys_opt_design -directive AggressiveExplore}
+    {if {![routed_design_needs_post_route_optimization]}}
     route_design
     {proc report_bitstream_drc}
     {proc require_clean_bitstream_drc}
@@ -56,13 +237,28 @@ foreach required {
     {report_high_fanout_nets -max_nets 100}
     {proc implementation_timing_totals}
     {proc implementation_route_count}
-    get_assessment_score
+    {set rqa [expr {int([get_assessment_score])}]}
     report_route_status
     report_timing_summary
     require_clean_bitstream_drc
     require_timing_closure
+    {[format "%s_utilization%s.rpt" $prefix $report_suffix]}
+    {[format "%s_timing_summary%s.rpt" $prefix $report_suffix]}
+    {[format "%s_route_status%s.rpt" $prefix $report_suffix]}
 } {
     require_text $base $required $base_path
+}
+
+set pnr [read_source $pnr_path]
+foreach required {
+    {set opt_directive "${IMPLEMENTATION_OPT_DIRECTIVE}"}
+    {set place_directive "${IMPLEMENTATION_PLACE_DIRECTIVE}"}
+    {set phys_opt_directive "${IMPLEMENTATION_PHYS_OPT_DIRECTIVE}"}
+    {set route_directive "${IMPLEMENTATION_ROUTE_DIRECTIVE}"}
+    {"${IMPLEMENTATION_POST_ROUTE_PHYS_OPT_DIRECTIVE}"}
+    {"${IMPLEMENTATION_FINAL_ROUTE_DIRECTIVE}"}
+} {
+    require_text $pnr $required $pnr_path
 }
 
 foreach spec [list \
@@ -124,6 +320,7 @@ foreach required {
     {set incremental_reference_dcp "${IMPLEMENTATION_INCREMENTAL_REFERENCE_DCP}"}
     {read_checkpoint -incremental $incremental_reference_dcp}
     {report_incremental_reuse}
+    {[format "shell_%s_incremental_reuse%s.rpt" $phase $report_suffix]}
     {set enforce_timing "${IMPLEMENTATION_ENFORCE_TIMING}"}
     {set outcome rejected}
     {write_checkpoint -force $output_dcp}

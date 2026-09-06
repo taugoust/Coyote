@@ -221,7 +221,7 @@ for {set i 1}  {$i < $cfg(n_config)} {incr i} {
     finalize_post_route_optimization
 
     report_and_validate_routed_design \
-        "config $i routed shell" "$rprt_dir/config_$i" "_c$i" config_${i}_bitstream_gate
+        "config $i routed shell" "$rprt_dir/config_$i" "_c$i" [format "config_%s_bitstream_gate" $i]
     write_checkpoint -force "$dcp_dir/config_$i/shell_routed_c$i.dcp"
     close_project
 }
