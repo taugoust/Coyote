@@ -20,6 +20,7 @@
  */
 
 #include "vfpga_gup.h"
+#include "vfpga_pin.h"
 
 /// A map of allocated user buffers, per vFPGA and Coyote thread
 struct hlist_head user_buff_map[MAX_N_REGIONS][N_CTID_MAX][1 << (USER_HASH_TABLE_ORDER)]; // main alloc
@@ -29,23 +30,52 @@ int mmu_handler_gup(struct vfpga_dev *device, uint64_t vaddr, uint64_t len, int3
     struct user_pages *user_pg;
     struct bus_driver_data *bd_data = device->bd_data;
 
-    // Find context (host process ID)
-    struct task_struct *curr_task = pid_task(find_vpid(hpid), PIDTYPE_PID);
-    dbg_info("hpid found = %d", hpid);
-    struct mm_struct *curr_mm = curr_task->mm;
+    struct task_struct *curr_task;
+    struct mm_struct *curr_mm;
+    struct vm_area_struct *vma_area_init;
+    int hugepages;
 
-    // Check if the request area is huge page or not
-    struct vm_area_struct *vma_area_init = find_vma(curr_mm, vaddr);
-    int hugepages = is_vm_hugetlb_page(vma_area_init);
+    if (!len || vaddr + len - 1 < vaddr || ctid < 0 || ctid >= N_CTID_MAX)
+        return -EINVAL;
+
+    // A queued fault can outlive the process. Own both references rather than
+    // dereferencing a borrowed task->mm after process exit.
+    // The retained PID object resolves in the registering process's namespace
+    // and cannot alias a different task after numeric PID reuse.
+    curr_task = get_pid_task(device->context_pid[ctid], PIDTYPE_PID);
+    if (!curr_task)
+        return -ESRCH;
+    curr_mm = get_task_mm(curr_task);
+    if (!curr_mm) {
+        put_task_struct(curr_task);
+        return -ESRCH;
+    }
+
+    mmap_read_lock(curr_mm);
+    vma_area_init = find_vma(curr_mm, vaddr);
+    if (!vma_area_init || vaddr < vma_area_init->vm_start ||
+        len > vma_area_init->vm_end - vaddr) {
+        mmap_read_unlock(curr_mm);
+        ret_val = -EFAULT;
+        goto out_mm;
+    }
+    hugepages = is_vm_hugetlb_page(vma_area_init);
+    mmap_read_unlock(curr_mm);
     struct tlb_metadata *tlb_meta = hugepages ? bd_data->ltlb_meta : bd_data->stlb_meta;
 
     // Align to a page boundary and calculate the number of pages bust on the buffer lenght (in bytes)
     struct pf_aligned_desc pf_desc;
     pf_desc.vaddr = (vaddr & tlb_meta->page_mask) >> tlb_meta->page_shift;
     uint64_t last = ((vaddr + len - 1) & tlb_meta->page_mask) >> tlb_meta->page_shift;
-    pf_desc.n_pages = last - pf_desc.vaddr + 1;
+    uint64_t page_count = last - pf_desc.vaddr + 1;
+    if (hugepages)
+        page_count *= bd_data->n_pages_in_huge;
+    if (!page_count || page_count > INT_MAX) {
+        ret_val = -E2BIG;
+        goto out_mm;
+    }
+    pf_desc.n_pages = page_count;
     if (hugepages) {
-        pf_desc.n_pages = pf_desc.n_pages * bd_data->n_pages_in_huge;
         pf_desc.vaddr = pf_desc.vaddr << bd_data->dif_order_page_shift;
     }
 
@@ -89,7 +119,8 @@ int mmu_handler_gup(struct vfpga_dev *device, uint64_t vaddr, uint64_t len, int3
         user_pg = tlb_get_user_pages(device, &pf_desc, hpid, curr_task, curr_mm, mem_block);
         if(!user_pg) {
             pr_err("user pages could not be obtained\n");
-            return -ENOMEM;
+            ret_val = -ENOMEM;
+            goto out_mm;
         }
 
         // In case there are caching effects, return a non-zero code to the user space
@@ -108,6 +139,9 @@ int mmu_handler_gup(struct vfpga_dev *device, uint64_t vaddr, uint64_t len, int3
         }
     }
 
+out_mm:
+    mmput(curr_mm);
+    put_task_struct(curr_task);
     return ret_val;
 }
 
@@ -264,6 +298,7 @@ void tlb_unmap_gup(struct vfpga_dev *device, struct user_pages *user_pg, pid_t h
 
 struct user_pages* tlb_get_user_pages(struct vfpga_dev *device, struct pf_aligned_desc *pf_desc, pid_t hpid, struct task_struct *curr_task, struct mm_struct *curr_mm, int32_t mem_block) {
     int ret_val = 0;
+    unsigned int mapped_pages = 0;
     int pg_inc, pg_size;
     struct bus_driver_data *bd_data = device->bd_data;
 
@@ -294,24 +329,14 @@ struct user_pages* tlb_get_user_pages(struct vfpga_dev *device, struct pf_aligne
     );
     dbg_info("pages=0x%p\n", user_pg->pages);
 
-    // Pin the pages
-    // On newer kernels, pin_user_pages_remote is preferred over get_user_pages_remote for DMA,
-    // as it guarantees that the pages remain pinned (and not just the page struct) until explicitly unpinned
-    #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
-        ret_val = pin_user_pages_remote(curr_mm, (unsigned long) pf_desc->vaddr << PAGE_SHIFT, pf_desc->n_pages, FOLL_WRITE | FOLL_LONGTERM, user_pg->pages, NULL);
-    #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
-        ret_val = pin_user_pages_remote(curr_mm, (unsigned long) pf_desc->vaddr << PAGE_SHIFT, pf_desc->n_pages, FOLL_WRITE | FOLL_LONGTERM, user_pg->pages, NULL, NULL);
-    #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
-        ret_val = pin_user_pages_remote(curr_task, curr_mm, (unsigned long) pf_desc->vaddr << PAGE_SHIFT, pf_desc->n_pages, FOLL_WRITE | FOLL_LONGTERM, user_pg->pages, NULL, NULL);
-    #else
-        ret_val = get_user_pages_remote(curr_task, curr_mm, (unsigned long) pf_desc->vaddr << PAGE_SHIFT, pf_desc->n_pages, 1, user_pg->pages, NULL, NULL);
-    #endif
-    dbg_info("pin_user_pages_remote(%llx, n_pages = %d, page start = %lx, hugepages = %d)\n", pf_desc->vaddr, pf_desc->n_pages, page_to_pfn(user_pg->pages[0]), pf_desc->hugepages);
-
-    if (ret_val < pf_desc->n_pages) {
+    ret_val = coyote_pin_pages(curr_task, curr_mm, pf_desc->vaddr << PAGE_SHIFT,
+                               pf_desc->n_pages, pf_desc->hugepages, user_pg->pages);
+    if (ret_val) {
         pr_warn("could not get all user pages, %d\n", ret_val);
         goto fail_host_alloc;
     }
+
+    dbg_info("pinned %u pages, first PFN %lx\n", pf_desc->n_pages, page_to_pfn(user_pg->pages[0]));
 
     // Flush cache
     for (int i = 0; i < pf_desc->n_pages; i++) {
@@ -353,12 +378,10 @@ struct user_pages* tlb_get_user_pages(struct vfpga_dev *device, struct pf_aligne
             // However, in some cases (e.g., migrating data between the host and FPGA memory)
             // Coyote still needs all the entries in the hpages array; since the transfers
             // are issued in 4k granularity from the driver
-            for (int j = i + 1; j < i + device->bd_data->n_pages_in_huge; j++) {
+            mapped_pages = i + device->bd_data->n_pages_in_huge;
+            for (int j = i + 1; j < pf_desc->n_pages && j < i + device->bd_data->n_pages_in_huge; j++) {
                 user_pg->hpages[j] = user_pg->hpages[i] + (j - i) * PAGE_SIZE;
 
-                if (j >= pf_desc->n_pages) {
-                    break;
-                }
             }
 
         }
@@ -384,6 +407,7 @@ struct user_pages* tlb_get_user_pages(struct vfpga_dev *device, struct pf_aligne
                 );
                 user_pg->needs_explicit_sync = true;
             }
+            mapped_pages = i + 1;
         }
     }
 
@@ -448,14 +472,7 @@ struct user_pages* tlb_get_user_pages(struct vfpga_dev *device, struct pf_aligne
     return user_pg;
 
 fail_host_alloc:
-    // Unpin the pages
-    #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
-        unpin_user_pages(user_pg->pages, ret_val);
-    #else
-        for(int i = 0; i < ret_val; i++) {
-            put_page(user_pg->pages[i]);
-        }
-    #endif
+    // coyote_pin_pages has already relinquished every partial pin.
 
     // Free the dynamically allocated memory
     vfree(user_pg->pages);
@@ -465,10 +482,10 @@ fail_host_alloc:
     return NULL;
 
 fail_dma_map:
-    // Unmap DMA
+    // Only completed DMA mappings are owned by this failure path.
     pg_inc = pf_desc->hugepages ? device->bd_data->n_pages_in_huge : 1;
     pg_size = pf_desc->hugepages ? device->bd_data->ltlb_meta->page_size : PAGE_SIZE;
-    for (int i = 0; i < pf_desc->n_pages; i+=pg_inc) {
+    for (int i = 0; i < mapped_pages; i+=pg_inc) {
         dma_unmap_single(&device->bd_data->pci_dev->dev, user_pg->hpages[i], pg_size, DMA_BIDIRECTIONAL);
     }
 
@@ -514,75 +531,75 @@ fail_card_alloc:
     return NULL;
 }
 
+static int release_user_pages_entry(struct vfpga_dev *device, struct user_pages *entry, pid_t hpid, int dirtied) {
+    int ret_val = 0;
+
+    // The caller must remove the entry from user_buff_map before invoking this
+    // helper. DMA-BUF detach and TLB invalidation can re-enter cleanup paths;
+    // unpublished ownership prevents a second teardown from finding this entry.
+    tlb_unmap_gup(device, entry, hpid);
+
+    if(device->bd_data->en_mem) {
+        free_card_memory(device, entry->cpages, entry->n_pages, entry->huge);
+        vfree(entry->cpages);
+    }
+
+    if(entry->dma_attach) {
+        #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)
+            dma_resv_lock(entry->buf->resv, NULL);
+            dma_buf_unmap_attachment(entry->dma_attach, entry->sgt, DMA_BIDIRECTIONAL);
+            dma_resv_unlock(entry->buf->resv);
+
+            kfree(entry->dma_attach->importer_priv);
+            dma_buf_detach(entry->buf, entry->dma_attach);
+            dma_buf_put(entry->buf);
+        #else
+            pr_warn("Error releasing user pages! DMA Bufs for Coyote GPU integration is only available on Linux >= 6.2.0. If you're seeing this message and your driver compiled: this is likely a bug; please report it to the Coyote team\n");
+            ret_val = -EOPNOTSUPP;
+        #endif
+    } else {
+        if(dirtied) {
+            for(int i = 0; i < entry->n_pages; i++) {
+                SetPageDirty(entry->pages[i]);
+            }
+        }
+
+        int pg_inc = entry->huge ? device->bd_data->n_pages_in_huge : 1;
+        int pg_size = entry->huge ? device->bd_data->ltlb_meta->page_size : PAGE_SIZE;
+        for(int i = 0; i < entry->n_pages; i += pg_inc) {
+            dma_unmap_single(&device->bd_data->pci_dev->dev, entry->hpages[i], pg_size, DMA_BIDIRECTIONAL);
+        }
+
+        #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
+            unpin_user_pages(entry->pages, entry->n_pages);
+        #else
+            for(int i = 0; i < entry->n_pages; i++) {
+                put_page(entry->pages[i]);
+            }
+        #endif
+
+        vfree(entry->pages);
+    }
+
+    vfree(entry->hpages);
+    kfree(entry);
+
+    return ret_val;
+}
+
 int tlb_put_user_pages(struct vfpga_dev *device, uint64_t vaddr, int32_t ctid, pid_t hpid, int dirtied) {
     BUG_ON(!device);
-    struct bus_driver_data * bd_data = device->bd_data;
+    struct bus_driver_data *bd_data = device->bd_data;
     BUG_ON(!bd_data);
 
     uint64_t vaddr_tmp = (vaddr & bd_data->stlb_meta->page_mask) >> bd_data->stlb_meta->page_shift;
 
     struct user_pages *tmp_entry;
     hash_for_each_possible(user_buff_map[device->id][ctid], tmp_entry, entry, vaddr_tmp) {
-        if(vaddr_tmp >= tmp_entry->vaddr && vaddr_tmp <= tmp_entry->vaddr + tmp_entry->n_pages) {
-            // Unmap from TLB
-            tlb_unmap_gup(device, tmp_entry, hpid);
-
-            // Release card memory
-            if(bd_data->en_mem) {
-                free_card_memory(device, tmp_entry->cpages, tmp_entry->n_pages, tmp_entry->huge);
-                vfree(tmp_entry->cpages);
-            }     
-            
-            // Release host pages
-            if(tmp_entry->dma_attach) {
-                #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)
-                    // Unmap buffer from vFPGA bus address space
-                    dma_resv_lock(tmp_entry->buf->resv, NULL);
-                    dma_buf_unmap_attachment(tmp_entry->dma_attach, tmp_entry->sgt, DMA_BIDIRECTIONAL);
-                    dma_resv_unlock(tmp_entry->buf->resv);
-
-                    // Detach vFPGA from DMABuff
-                    kfree(tmp_entry->dma_attach->importer_priv);
-                    dma_buf_detach(tmp_entry->buf, tmp_entry->dma_attach);
-
-                    // Decrease DMABuf refcount
-                    dma_buf_put(tmp_entry->buf);
-                #else
-                    pr_warn("Error releasing user pages! DMA Bufs for Coyote GPU integration is only available on Linux >= 6.2.0. If you're seeing this message and your driver compiled: this is likely a bug; please report it to the Coyote team\n");
-                    return -1;
-                #endif
-            } else {
-                if(dirtied) {
-                    for(int i = 0; i < tmp_entry->n_pages; i++) {
-                        SetPageDirty(tmp_entry->pages[i]);
-                    }
-                }
-
-                // Unmap DMA
-                int pg_inc = tmp_entry->huge ? device->bd_data->n_pages_in_huge : 1;
-                int pg_size = tmp_entry->huge ? device->bd_data->ltlb_meta->page_size : PAGE_SIZE;
-                for (int i = 0; i < tmp_entry->n_pages; i+=pg_inc) {
-                    dma_unmap_single(&device->bd_data->pci_dev->dev, tmp_entry->hpages[i], pg_size, DMA_BIDIRECTIONAL);
-                }
-                
-                // Unpin the pages
-                #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
-                    unpin_user_pages(tmp_entry->pages, tmp_entry->n_pages);
-                #else
-                    for(int i = 0; i < tmp_entry->n_pages; i++) {
-                        put_page(tmp_entry->pages[i]);
-                    }
-                #endif
-                
-                // Release memory to hold pages
-                vfree(tmp_entry->pages);
-            }
-
-            // Release memory to hold physical addresses
-            vfree(tmp_entry->hpages);
-
-            // Remove from map
+        if(vaddr_tmp >= tmp_entry->vaddr && vaddr_tmp < tmp_entry->vaddr + tmp_entry->n_pages) {
+            // Transfer ownership out of the shared map before destructive cleanup.
             hash_del(&tmp_entry->entry);
+            return release_user_pages_entry(device, tmp_entry, hpid, dirtied);
         }
     }
 
@@ -590,76 +607,27 @@ int tlb_put_user_pages(struct vfpga_dev *device, uint64_t vaddr, int32_t ctid, p
 }
 
 int tlb_put_user_pages_ctid(struct vfpga_dev *device, int32_t ctid, pid_t hpid, int dirtied) {
-    int i, bkt;
+    int bkt;
+    int ret_val = 0;
+    struct hlist_node *tmp_node;
     struct user_pages *tmp_entry;
 
     BUG_ON(!device);
-    struct bus_driver_data *bd_data = device->bd_data;
-    BUG_ON(!bd_data);
+    BUG_ON(!device->bd_data);
 
-    hash_for_each(user_buff_map[device->id][ctid], bkt, tmp_entry, entry) {
-        // Unmap from TLB
-        tlb_unmap_gup(device, tmp_entry, hpid);
-        
-        // Release card memory
-        if(bd_data->en_mem) {
-            free_card_memory(device, tmp_entry->cpages, tmp_entry->n_pages, tmp_entry->huge);
-            vfree(tmp_entry->cpages);
-        }
+    hash_for_each_safe(user_buff_map[device->id][ctid], bkt, tmp_node, tmp_entry, entry) {
+        int entry_ret;
 
-        if(tmp_entry->dma_attach) {
-            #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)  
-                // Unmap buffer from vFPGA bus address space
-                dma_resv_lock(tmp_entry->buf->resv, NULL);
-                dma_buf_unmap_attachment(tmp_entry->dma_attach, tmp_entry->sgt, DMA_BIDIRECTIONAL);
-                dma_resv_unlock(tmp_entry->buf->resv);
-
-                // Detach vFPGA from DMABuff
-                kfree(tmp_entry->dma_attach->importer_priv);
-                dma_buf_detach(tmp_entry->buf, tmp_entry->dma_attach);
-
-                // Decrease DMABuf refcount
-                dma_buf_put(tmp_entry->buf);
-            #else
-                pr_warn("Error releasing user pages! DMA Bufs for Coyote GPU integration is only available on Linux >= 6.2.0. If you're seeing this message and your driver compiled: this is likely a bug; please report it to the Coyote team\n");
-                return -1;
-            #endif
-        } else {
-            if (dirtied) {
-                for (i = 0; i < tmp_entry->n_pages; i++) {
-                    SetPageDirty(tmp_entry->pages[i]);
-                }
-            }
-            
-            // Unmap DMA
-            int pg_inc = tmp_entry->huge ? device->bd_data->n_pages_in_huge : 1;
-            int pg_size = tmp_entry->huge ? device->bd_data->ltlb_meta->page_size : PAGE_SIZE;
-            for (int i = 0; i < tmp_entry->n_pages; i+=pg_inc) {
-                dma_unmap_single(&device->bd_data->pci_dev->dev, tmp_entry->hpages[i], pg_size, DMA_BIDIRECTIONAL);
-            }
-            
-            // Unpin the pages
-            #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
-                unpin_user_pages(tmp_entry->pages, tmp_entry->n_pages);
-            #else
-                for(int i = 0; i < tmp_entry->n_pages; i++) {
-                    put_page(tmp_entry->pages[i]);
-                }
-            #endif
-                
-            
-            // Release memory to hold pages
-            vfree(tmp_entry->pages);
-        }
-
-        // Release memory to hold physical addresses
-        vfree(tmp_entry->hpages);
-
-        // Remove from map
+        // Safe traversal plus unlink-before-cleanup gives each mapping exactly
+        // one teardown owner, even when cleanup invokes re-entrant callbacks.
         hash_del(&tmp_entry->entry);
+        entry_ret = release_user_pages_entry(device, tmp_entry, hpid, dirtied);
+        if(entry_ret && !ret_val) {
+            ret_val = entry_ret;
+        }
     }
 
-    return 0;
+    return ret_val;
 }
 
 void migrate_to_card(struct vfpga_dev *device, struct user_pages *user_pg) {
@@ -997,7 +965,10 @@ int p2p_detach_dma_buf(struct vfpga_dev *device, uint64_t vaddr, int32_t ctid, i
 
     struct user_pages *tmp_entry;
     hash_for_each_possible(user_buff_map[device->id][ctid], tmp_entry, entry, vaddr_tmp) {
-        if(vaddr_tmp >= tmp_entry->vaddr && vaddr_tmp <= tmp_entry->vaddr + tmp_entry->n_pages) {
+        if(vaddr_tmp >= tmp_entry->vaddr && vaddr_tmp < tmp_entry->vaddr + tmp_entry->n_pages) {
+            // Unpublish before DMA-BUF callbacks or other cleanup can re-enter.
+            hash_del(&tmp_entry->entry);
+
             // Unmap from TLB
             tlb_unmap_gup(device, tmp_entry, hpid);
         
@@ -1019,11 +990,10 @@ int p2p_detach_dma_buf(struct vfpga_dev *device, uint64_t vaddr, int32_t ctid, i
             // Decrease DMABuf refcount
             dma_buf_put(tmp_entry->buf);
 
-            // Release host pages
+            // Release host pages and mapping owner
             vfree(tmp_entry->hpages);
-            
-            // Remove from map
-            hash_del(&tmp_entry->entry);
+            kfree(tmp_entry);
+            return 0;
         }
     }
     

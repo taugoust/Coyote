@@ -323,7 +323,7 @@ static struct kobj_type cyt_kobj_type = {
 int create_sysfs_entry(struct bus_driver_data *data) {
     int ret_val = 0;
     char sysfs_name[MAX_CHAR_FDEV];
-    sprintf(sysfs_name, "coyote_sysfs_%d", data->dev_id);
+    sprintf(sysfs_name, COYOTE_SYSFS_NAME "_%d", data->dev_id);
     
     dbg_info("creating sysfs entry...\n");
 
@@ -395,7 +395,7 @@ int alloc_vfpga_devices(struct bus_driver_data *data, dev_t dev) {
     data->vfpga_class->devnode = fpga_class_devnode;
 
     // Allocate memory for the vFPGA device structure, which holds its information, locks, wait-queues, maps etc.
-    data->vfpga_dev = kmalloc(data->n_fpga_reg * sizeof(struct vfpga_dev), GFP_KERNEL);
+    data->vfpga_dev = kcalloc(data->n_fpga_reg, sizeof(struct vfpga_dev), GFP_KERNEL);
     if (!data->vfpga_dev) {
         pr_err("could not allocate memory for vFPGAs\n");
         goto err_fpga_char_mem; // ERR_CHAR_MEM
@@ -603,11 +603,29 @@ end:
     return ret_val;
 }
 
+// Stop admitting fault work while completion IRQs and MMIO still exist.
+void quiesce_vfpga_faults(struct bus_driver_data *data) {
+    for (int i = 0; i < data->n_fpga_reg; i++) {
+        struct vfpga_dev *device = &data->vfpga_dev[i];
+        unsigned long flags;
+        spin_lock_irqsave(&device->irq_lock, flags);
+        WRITE_ONCE(device->stopping, true);
+        spin_unlock_irqrestore(&device->irq_lock, flags);
+    }
+    for (int i = 0; i < data->n_fpga_reg; i++)
+        flush_workqueue(data->vfpga_dev[i].wqueue_pfault);
+}
+
 void teardown_vfpga_devices(struct bus_driver_data *data) {
     // Iterate through all the vFPGA devices; releasing memory, work-queues etc.
     for (int i = 0; i < data->n_fpga_reg; i++) {
         device_destroy(data->vfpga_class, MKDEV(data->vfpga_major, i));
         cdev_del(&data->vfpga_dev[i].cdev);
+
+        // IRQ sources must already be stopped by the platform. Drain all work
+        // before releasing any register mapping or per-context storage.
+        destroy_workqueue(data->vfpga_dev[i].wqueue_notify);
+        destroy_workqueue(data->vfpga_dev[i].wqueue_pfault);
 
         // Unmap control register regions if they were mapped
         if (data->vfpga_dev[i].fpga_lTlb) {
@@ -628,8 +646,8 @@ void teardown_vfpga_devices(struct bus_driver_data *data) {
             dma_free_coherent(&data->pci_dev->dev, WB_SIZE, data->vfpga_dev[i].wb_addr_virt, data->vfpga_dev[i].wb_phys_addr);
         }
 
-        destroy_workqueue(data->vfpga_dev[i].wqueue_notify);
-        destroy_workqueue(data->vfpga_dev[i].wqueue_pfault);
+        for (int ctid = 0; ctid < N_CTID_MAX; ctid++)
+            put_pid(data->vfpga_dev[i].context_pid[ctid]);
 
         vfree(data->vfpga_dev[i].pid_array);
         vfree(data->vfpga_dev[i].ctid_chunks);

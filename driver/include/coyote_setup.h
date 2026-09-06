@@ -61,6 +61,7 @@ int alloc_vfpga_devices(struct bus_driver_data *data, dev_t device);
 int setup_vfpga_devices(struct bus_driver_data *data);
 
 /// Releases resources used by vFPGA char devices; destroys work queues etc., opposite of setup_vfpga_devices
+void quiesce_vfpga_faults(struct bus_driver_data *data);
 void teardown_vfpga_devices(struct bus_driver_data *data);
 
 /// Frees the allocated vFPGA char devices and unregisters it from the OS; opposite of alloc_vfpga_devices

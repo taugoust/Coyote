@@ -760,6 +760,8 @@ void shell_pci_remove(struct bus_driver_data *bd_data) {
         dbg_info("freed svm private pages");
     #endif
 
+    quiesce_vfpga_faults(bd_data);
+
     // Disable and remove vFPGA interrupts
     irq_teardown(bd_data, false);
     dbg_info("vfpga interrupts disabled\n");
@@ -980,6 +982,8 @@ void pci_remove(struct pci_dev *pdev) {
         free_mem_regions(bd_data);
         dbg_info("freed svm private pages");
     #endif
+
+    quiesce_vfpga_faults(bd_data);
 
     // Disable and remove interrupts
     irq_teardown(bd_data, true);

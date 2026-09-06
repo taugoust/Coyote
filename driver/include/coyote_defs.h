@@ -101,8 +101,21 @@ extern bool en_hmm;
  */
 
 // Driver constants
+#ifdef COYOTE_ISOLATED_VARIANT
+#ifdef PLATFORM_VERSAL
+#define COYOTE_DRIVER_NAME "coyote_driver_versal"
+#define DEV_FPGA_NAME "coyote_versal_fpga"
+#define COYOTE_SYSFS_NAME "coyote_versal_sysfs"
+#else
+#define COYOTE_DRIVER_NAME "coyote_driver_ultrascale_plus"
+#define DEV_FPGA_NAME "coyote_ultrascale_plus_fpga"
+#define COYOTE_SYSFS_NAME "coyote_ultrascale_plus_sysfs"
+#endif
+#else
 #define COYOTE_DRIVER_NAME "coyote_driver"
 #define DEV_FPGA_NAME "coyote_fpga"
+#define COYOTE_SYSFS_NAME "coyote_sysfs"
+#endif
 
 // Debug prints
 #define COYOTE_DEBUG 1
@@ -386,7 +399,7 @@ extern bool en_hmm;
 #define RECONFIG_DEV_MAJOR 0 
 
 // Maximum number of character devices
-#define MAX_CHAR_FDEV 32
+#define MAX_CHAR_FDEV 64
 
 // Offsets for memory-mapped regions
 #define MMAP_WB 0x0
@@ -928,6 +941,9 @@ struct vfpga_irq_pfault {
     /// Corresponding vFPGA device
     struct vfpga_dev *device;
 
+    /// Software context incarnation captured when the IRQ is queued
+    uint64_t generation;
+
     /// Virtual address for which the page fault was issued
     uint64_t vaddr;
 
@@ -1010,6 +1026,10 @@ struct vfpga_dev {
 
     /// Array that maps each Coyote thread ID (CTID) to a host process ID (hpid)
     pid_t *pid_array;
+    struct pid *context_pid[N_CTID_MAX];
+    // Generation publication is protected by irq_lock; ownership by pid_lock.
+    uint64_t context_generation[N_CTID_MAX];
+    bool stopping;
 
     /// Pointer to chunks used for Coyote threads; just an abstraction to keep track of active Coyote threads
     struct chunk *ctid_chunks;

@@ -7,6 +7,7 @@
  */
 
 #include <coyote/cResidentServiceControl.hpp>
+#include <coyote/cDeviceNamespace.hpp>
 
 #include <cerrno>
 #include <fcntl.h>
@@ -19,8 +20,7 @@
 namespace coyote {
 
 cResidentServiceControl::cResidentServiceControl(uint32_t device) {
-    const std::string dev_name =
-        "/dev/coyote_fpga_" + std::to_string(device) + "_reconfig";
+    const std::string dev_name = cDeviceNamespace().reconfigurationPath(device);
     reconfig_dev_fd = open(dev_name.c_str(), O_RDWR | O_SYNC);
     if (reconfig_dev_fd == -1) {
         throw std::system_error(

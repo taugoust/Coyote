@@ -59,10 +59,18 @@ irqreturn_t vfpga_isr(int irq, void *d) {
             // vFPGA issued page fault; issue asynchronous work via vfpga_pfault_handler to handle the page fault
             dbg_info("(irq=%d) page fault, vFPGA %d\n", irq, device->id);
             struct vfpga_irq_pfault *irq_pf = kzalloc(sizeof(struct vfpga_irq_pfault), GFP_ATOMIC);
-            BUG_ON(!irq_pf);
+            if (!irq_pf) {
+                pr_err("cannot allocate page-fault work\n");
+                break;
+            }
 
             irq_pf->device = device;
             read_irq_pfault(device, irq_pf);
+            if (device->stopping || irq_pf->ctid < 0 || irq_pf->ctid >= N_CTID_MAX) {
+                kfree(irq_pf);
+                break;
+            }
+            irq_pf->generation = device->context_generation[irq_pf->ctid];
 
             INIT_WORK(&irq_pf->work_pfault, vfpga_pfault_handler);
 
@@ -76,7 +84,8 @@ irqreturn_t vfpga_isr(int irq, void *d) {
             // vFPGA issued a user interrupt (notification); issue asynchronous work via vfpga_notify_handler to handle the user interrupt
             dbg_info("(irq=%d) notify, vFPGA %d\n", irq, device->id);
             struct vfpga_irq_notify *irq_not = kzalloc(sizeof(struct vfpga_irq_notify), GFP_ATOMIC);
-            BUG_ON(!irq_not);
+            if (!irq_not)
+                break;
 
             irq_not->device = device;
             read_irq_notify(device, irq_not);
@@ -160,13 +169,25 @@ void vfpga_pfault_handler(struct work_struct *work) {
     struct vfpga_dev *device = irq_pf->device;
     BUG_ON(!device);
 
+    int ret_val = -ESRCH;
+    pid_t hpid;
+
+    // Match registration/last-close lock order. A queued fault must not map
+    // pages after its context has been unpublished by teardown.
+    mutex_lock(&device->pid_lock);
     mutex_lock(&device->mmu_lock);
-    pid_t hpid = device->pid_array[irq_pf->ctid];
+    if (READ_ONCE(device->stopping) || irq_pf->ctid < 0 || irq_pf->ctid >= N_CTID_MAX ||
+        irq_pf->generation != device->context_generation[irq_pf->ctid])
+        goto err_mmu;
+    hpid = device->pid_array[irq_pf->ctid];
+    if (!hpid) {
+        drop_irq_pfault(device, irq_pf->wr, irq_pf->ctid);
+        goto err_mmu;
+    }
     dbg_info("page fault vFPGA %d, virtual address %llx, length %d, stream %d, ctid %d, hpid %d\n", 
         device->id, irq_pf->vaddr, irq_pf->len, irq_pf->stream, irq_pf->ctid, hpid
     );
 
-    int ret_val = -1;
     #ifdef HMM_KERNEL
         // User enabled unified memory (heteregenous memory management)
         if(en_hmm)
@@ -188,12 +209,14 @@ void vfpga_pfault_handler(struct work_struct *work) {
     // Restart MMU and unlock mutex
     restart_mmu(device, irq_pf->wr, irq_pf->ctid);
     mutex_unlock(&device->mmu_lock);
+    mutex_unlock(&device->pid_lock);
     dbg_info("page fault vFPGA %d handled\n", device->id);
     kfree(irq_pf);
     return;
 
 err_mmu:
     mutex_unlock(&device->mmu_lock);
+    mutex_unlock(&device->pid_lock);
     kfree(irq_pf);
     return;
 }
