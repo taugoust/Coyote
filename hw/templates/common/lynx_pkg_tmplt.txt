@@ -404,8 +404,8 @@ package lynxTypes;
     localparam integer N_CARD_AXI = {{ cnfg.n_card_axi }};
     localparam integer N_STRM_AXI = {{ cnfg.n_strm_axi }};
     localparam integer N_RDMA_AXI = {{ cnfg.n_rdma_axi }};
-{% if cnfg.n_coprocessor_ports > 0 %}
     localparam integer N_COPROCESSOR_PORTS = {{ cnfg.n_coprocessor_ports }};
+{% if cnfg.n_coprocessor_ports > 0 %}
     localparam integer COPROCESSOR_INTERFACE_VERSION = {{ cnfg.coprocessor_interface_version }};
     localparam integer COPROCESSOR_STREAM_ABI = {{ cnfg.coprocessor_stream_abi }};
     localparam integer COPROCESSOR_STREAM_DATA_BITS = {{ cnfg.coprocessor_stream_data_bits }};
