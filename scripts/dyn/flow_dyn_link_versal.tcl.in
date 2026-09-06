@@ -23,7 +23,7 @@ if {[catch {
     add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/static/impl"
     set_property SCOPED_TO_CELLS {inst_static} [get_files $static_dcp]
 
-    set shell_dcp "$dcp_dir/shell/shell_synthed.dcp"
+    set shell_dcp "$dcp_dir/shell/shell_synthed_import.dcp"
     add_files $shell_dcp
     set_property SCOPED_TO_CELLS {inst_shell} [get_files $shell_dcp]
     add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/shell/impl"

@@ -14,7 +14,7 @@ if {[catch {
         lappend subcells "inst_shell/inst_dynamic/inst_user_wrapper_$j"
     }
     pr_subdivide -cell inst_shell -subcells $subcells \
-        "$dcp_dir/shell/shell_synthed.dcp"
+        "$dcp_dir/shell/shell_synthed_import.dcp"
     write_checkpoint -force "$dcp_dir/shell_subdivided.dcp"
     close_project
 
