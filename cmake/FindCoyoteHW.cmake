@@ -1395,7 +1395,9 @@ macro(gen_dep_lists)
 
     # Synthesis
     set(DEP_DCP_LIST_SYNTH_STATIC ${CMAKE_BINARY_DIR}/checkpoints/static/static_synthed.dcp)
-    set(DEP_DCP_LIST_SYNTH_SHELL ${CMAKE_BINARY_DIR}/checkpoints/shell/shell_synthed.dcp)
+    set(DEP_DCP_LIST_SYNTH_SHELL
+        ${CMAKE_BINARY_DIR}/checkpoints/shell/shell_synthed.dcp
+        ${CMAKE_BINARY_DIR}/checkpoints/shell/shell_synthed_import.dcp)
     set(DEP_DCP_LIST_SYNTH_USER  "")
     foreach(i RANGE ${NN_CONFIG})
         foreach(j RANGE ${NN_REGIONS})

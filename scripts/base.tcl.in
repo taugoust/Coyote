@@ -222,6 +222,70 @@ proc finalize_post_route_optimization {} {
     }
 }
 
+proc write_shell_import_checkpoint {checkpoint_path} {
+    upvar #0 cfg cnfg
+    upvar #0 build_dir build_dir
+    upvar #0 project project
+
+    # The UltraScale+ shell is synthesized out-of-context, so its own project
+    # must keep a 4 ns xclk timing clock.  When that OOC DCP is later linked
+    # under the routed static/IP design, however, xclk is owned by the static
+    # clocking/IP checkpoint.  Export a second implementation-import DCP by
+    # resetting and replaying the shell synthesis constraints with only that
+    # shell-boundary primary omitted; linked implementation then keeps the
+    # authoritative generated-clock lineage instead of importing an unrelated
+    # primary at inst_shell/xclk.
+    if {$cnfg(fpga_arch) eq "ultrascale_plus" && $cnfg(fdev) eq "u280"} {
+        set xclk_ports [get_ports -quiet xclk]
+        if {[llength $xclk_ports] != 1} {
+            error "Expected exactly one shell OOC xclk port before writing $checkpoint_path"
+        }
+        set xclk_clocks [get_clocks -quiet -of_objects $xclk_ports]
+        set owned_xclk_primary {}
+        foreach clock $xclk_clocks {
+            set name [get_property NAME $clock]
+            set period [get_property PERIOD $clock]
+            if {$name eq "xclk" && [expr {abs(double($period) - 4.000)}] < 0.001} {
+                lappend owned_xclk_primary $clock
+            }
+        }
+        if {[llength $owned_xclk_primary] != 1} {
+            error "Expected exactly one 4 ns OOC xclk primary clock before writing $checkpoint_path; found [llength $owned_xclk_primary]"
+        }
+
+        set constraint_files [get_files -quiet -of_objects [get_filesets constrs_1] -filter {FILE_TYPE == XDC}]
+        if {[llength $constraint_files] == 0} {
+            error "No shell synthesis constraints found before writing $checkpoint_path"
+        }
+        reset_timing
+        set filtered_dir "$build_dir/$project\_shell/xdc_import"
+        file delete -force $filtered_dir
+        file mkdir $filtered_dir
+        foreach constraint_file $constraint_files {
+            set in_fd [open $constraint_file r]
+            set out_path [file join $filtered_dir [file tail $constraint_file]]
+            set out_fd [open $out_path w]
+            while {[gets $in_fd line] >= 0} {
+                if {[regexp {^[[:space:]]*create_clock[[:space:]].*\[get_ports[[:space:]]+\{?/x?clk\}?\]} $line] ||
+                    [regexp {^[[:space:]]*create_clock[[:space:]].*\[get_ports[[:space:]]+\{?xclk\}?\]} $line]} {
+                    puts $out_fd "# omitted for implementation import: $line"
+                } else {
+                    puts $out_fd $line
+                }
+            }
+            close $in_fd
+            close $out_fd
+            read_xdc $out_path
+        }
+        if {[llength [get_clocks -quiet -of_objects $xclk_ports]] != 0} {
+            error "Shell implementation-import checkpoint still has a clock on xclk"
+        }
+        puts "** Removed shell-owned OOC xclk primary from implementation-import checkpoint $checkpoint_path"
+    }
+
+    write_checkpoint -force $checkpoint_path
+}
+
 proc report_bitstream_drc {run_name report_path} {
     report_drc -ruledeck bitstream_checks -name $run_name -file $report_path
 }

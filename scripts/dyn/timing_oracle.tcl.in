@@ -221,8 +221,8 @@ if {$cfg(fpga_arch) eq "ultrascale_plus"} {
 
     add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/shell/impl"
     add_files -fileset [get_filesets constrs_1] "$hw_dir/constraints/$cfg(fdev)/dynamic/impl"
-    add_files "$dcp_dir/shell/shell_synthed.dcp"
-    set_property SCOPED_TO_CELLS {inst_shell} [get_files "$dcp_dir/shell/shell_synthed.dcp"]
+    add_files "$dcp_dir/shell/shell_synthed_import.dcp"
+    set_property SCOPED_TO_CELLS {inst_shell} [get_files "$dcp_dir/shell/shell_synthed_import.dcp"]
 
     for {set j 0} {$j < $cfg(n_reg)} {incr j} {
         set user_dcp "$dcp_dir/config_0/user_synthed_c0_$j.dcp"

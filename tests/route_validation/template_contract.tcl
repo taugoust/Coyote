@@ -61,6 +61,11 @@ foreach {actual expected} [list \
 
 foreach required {
     {proc finalize_post_route_optimization}
+    {proc write_shell_import_checkpoint}
+    reset_timing
+    {read_xdc $out_path}
+    {get_clocks -quiet -of_objects $xclk_ports}
+    {write_checkpoint -force $checkpoint_path}
     {phys_opt_design -directive AggressiveExplore}
     route_design
     {proc report_bitstream_drc}
@@ -189,6 +194,7 @@ foreach forbidden {opt_design place_design phys_opt_design route_design report_a
 foreach dyn_link_path [list $dyn_link_ultrascale_path $dyn_link_versal_path] {
     set dyn_link [read_source $dyn_link_path]
     require_text $dyn_link link_design $dyn_link_path
+    require_text $dyn_link {shell_synthed_import.dcp} $dyn_link_path
     require_text $dyn_link {dynamic_link_complete} $dyn_link_path
     foreach forbidden {opt_design place_design phys_opt_design route_design report_and_validate_routed_design write_bitstream write_device_image} {
         if {[string first $forbidden $dyn_link] >= 0} {
@@ -219,6 +225,7 @@ set cmake [read $cmake_fd]
 close $cmake_fd
 foreach required {
     {set(PROJECT_STAMP ${CMAKE_BINARY_DIR}/.coyote_project.stamp)}
+    {${CMAKE_BINARY_DIR}/checkpoints/shell/shell_synthed_import.dcp}
     {add_dependencies(synth project)}
     DEP_SOURCE_SYNTH_STATIC
     DEP_SOURCE_SYNTH_SHELL
@@ -281,5 +288,83 @@ foreach forbidden {
         exit 1
     }
 }
+
+set import_proc_start [string first {proc write_shell_import_checkpoint} $base]
+set import_proc_end [string first {proc report_bitstream_drc} $base $import_proc_start]
+if {$import_proc_start < 0 || $import_proc_end < 0} {
+    puts stderr "shell import checkpoint procedure not found in $base_path"
+    exit 1
+}
+set import_test_root [file normalize [file join [pwd] shell-import-clock-test-[pid]]]
+file delete -force $import_test_root
+file mkdir [file join $import_test_root test_shell xdc]
+set import_xdc [file join $import_test_root u280_shell_base.xdc]
+set import_xdc_fd [open $import_xdc w]
+puts $import_xdc_fd {create_clock -period 4.000 [get_ports xclk]}
+puts $import_xdc_fd {create_clock -period 10.000 [get_ports dclk]}
+close $import_xdc_fd
+array set cfg {fpga_arch ultrascale_plus fdev u280}
+set build_dir $import_test_root
+set project test
+set mock_constraint_files [list $import_xdc]
+set mock_xclk_clock_exists 1
+set mock_reset_timing 0
+set mock_read_xdc_paths {}
+set mock_written_checkpoint ""
+proc get_ports {args} {
+    if {[lsearch -exact $args xclk] >= 0} { return xclk_port }
+    return {}
+}
+proc get_clocks {args} {
+    global mock_xclk_clock_exists
+    if {$mock_xclk_clock_exists} { return xclk_clock }
+    return {}
+}
+proc get_property {property object} {
+    if {$property eq "NAME" && $object eq "xclk_clock"} { return xclk }
+    if {$property eq "PERIOD" && $object eq "xclk_clock"} { return 4.000 }
+    return ""
+}
+proc get_filesets {args} { return constrs_1 }
+proc get_files {args} {
+    global mock_constraint_files
+    return $mock_constraint_files
+}
+proc reset_timing {} {
+    global mock_xclk_clock_exists mock_reset_timing
+    set mock_xclk_clock_exists 0
+    incr mock_reset_timing
+}
+proc read_xdc {path} {
+    global mock_read_xdc_paths mock_xclk_clock_exists
+    lappend mock_read_xdc_paths $path
+    set fd [open $path r]
+    set text [read $fd]
+    close $fd
+    if {[regexp -line {^[[:space:]]*create_clock[[:space:]].*\[get_ports[[:space:]]+xclk\]} $text]} {
+        set mock_xclk_clock_exists 1
+    }
+}
+proc write_checkpoint {args} {
+    global mock_written_checkpoint
+    set mock_written_checkpoint [lindex $args end]
+}
+eval [string range $base $import_proc_start [expr {$import_proc_end - 1}]]
+write_shell_import_checkpoint [file join $import_test_root shell_synthed_import.dcp]
+set filtered_xdc [file join $import_test_root test_shell xdc_import u280_shell_base.xdc]
+if {$mock_reset_timing != 1 || $mock_written_checkpoint ne [file join $import_test_root shell_synthed_import.dcp] ||
+    [llength $mock_read_xdc_paths] != 1 || ![file exists $filtered_xdc]} {
+    puts stderr "shell import checkpoint did not reset/replay/write as expected"
+    exit 1
+}
+set filtered_fd [open $filtered_xdc r]
+set filtered_text [read $filtered_fd]
+close $filtered_fd
+if {[regexp -line {^[[:space:]]*create_clock[[:space:]].*\[get_ports[[:space:]]+xclk\]} $filtered_text] ||
+    [string first {create_clock -period 10.000 [get_ports dclk]} $filtered_text] < 0} {
+    puts stderr "shell import checkpoint did not filter only the xclk primary: $filtered_text"
+    exit 1
+}
+file delete -force $import_test_root
 
 puts "ROUTE_VALIDATION_TEMPLATE_PASS base=$base_path"
