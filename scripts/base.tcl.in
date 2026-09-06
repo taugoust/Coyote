@@ -331,7 +331,7 @@ proc write_shell_import_checkpoint {checkpoint_path} {
     # must keep a 4 ns xclk timing clock.  When that OOC DCP is later linked
     # under the routed static/IP design, however, xclk is owned by the static
     # clocking/IP checkpoint.  Export a second implementation-import DCP by
-    # resetting and replaying the shell synthesis constraints with its xclk
+    # resetting and replaying all effective timing constraints with its xclk
     # and debug dclk boundary primaries omitted. Both clocks are driven by
     # static clocking in the linked design; retaining either OOC primary
     # severs that generated-clock lineage.
@@ -345,7 +345,8 @@ proc write_shell_import_checkpoint {checkpoint_path} {
         foreach clock $xclk_clocks {
             set name [get_property NAME $clock]
             set period [get_property PERIOD $clock]
-            if {$name eq "xclk" && [expr {abs(double($period) - 4.000)}] < 0.001} {
+            if {$name eq "xclk" && ![get_property IS_GENERATED $clock] &&
+                [expr {abs(double($period) - 4.000)}] < 0.001} {
                 lappend owned_xclk_primary $clock
             }
         }
@@ -354,29 +355,39 @@ proc write_shell_import_checkpoint {checkpoint_path} {
         }
 
         set dclk_ports [get_ports -quiet dclk]
-        set constraint_files [get_files -quiet -of_objects [get_filesets constrs_1] -filter {FILE_TYPE == XDC}]
-        if {[llength $constraint_files] == 0} {
-            error "No shell synthesis constraints found before writing $checkpoint_path"
+        # Project constraint files do not include all loaded, scoped IP XDC.
+        # Snapshot the effective timing before reset_timing destroys it. Vivado
+        # preserves execution order and emits current_instance scopes; replay
+        # those verbatim rather than interpreting SCOPED_TO_REF ourselves.
+        # Physical/IO properties and CDC waivers are not reset or replayed.
+        set filtered_dir "$build_dir/$project\_shell/xdc_import"
+        file mkdir $filtered_dir
+        set snapshot_path [file join $filtered_dir timing_original.xdc]
+        set out_path [file join $filtered_dir timing_import.xdc]
+        write_xdc -force -type timing $snapshot_path
+        set in_fd [open $snapshot_path r]
+        set out_fd [open $out_path w]
+        set top_scope 1
+        set removed_xclk 0
+        while {[gets $in_fd line] >= 0} {
+            if {[regexp {^[[:space:]]*current_instance([[:space:]]|$)} $line]} {
+                set scope_args [lrange $line 1 end]
+                set top_scope [expr {$scope_args eq "" || $scope_args eq "-quiet"}]
+            }
+            if {$top_scope && [regexp {^[[:space:]]*create_clock[[:space:]].*\[get_ports[[:space:]]+\{?/?(xclk|dclk)\}?\]} $line -> boundary]} {
+                if {$boundary eq "xclk"} { incr removed_xclk }
+                puts $out_fd "# omitted for implementation import: $line"
+            } else {
+                puts $out_fd $line
+            }
+        }
+        close $in_fd
+        close $out_fd
+        if {$removed_xclk != 1} {
+            error "Expected to omit exactly one top-level OOC xclk definition; found $removed_xclk in $snapshot_path"
         }
         reset_timing
-        set filtered_dir "$build_dir/$project\_shell/xdc_import"
-        file delete -force $filtered_dir
-        file mkdir $filtered_dir
-        foreach constraint_file $constraint_files {
-            set in_fd [open $constraint_file r]
-            set out_path [file join $filtered_dir [file tail $constraint_file]]
-            set out_fd [open $out_path w]
-            while {[gets $in_fd line] >= 0} {
-                if {[regexp {^[[:space:]]*create_clock[[:space:]].*\[get_ports[[:space:]]+\{?/?(xclk|dclk)\}?\]} $line]} {
-                    puts $out_fd "# omitted for implementation import: $line"
-                } else {
-                    puts $out_fd $line
-                }
-            }
-            close $in_fd
-            close $out_fd
-            read_xdc $out_path
-        }
+        read_xdc $out_path
         if {[llength [get_clocks -quiet -of_objects $xclk_ports]] != 0} {
             error "Shell implementation-import checkpoint still has a clock on xclk"
         }

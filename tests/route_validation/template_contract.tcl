@@ -497,11 +497,14 @@ set import_xdc [file join $import_test_root u280_shell_base.xdc]
 set import_xdc_fd [open $import_xdc w]
 puts $import_xdc_fd {create_clock -period 4.000 [get_ports xclk]}
 puts $import_xdc_fd {create_clock -period 10.000 [get_ports dclk]}
+puts $import_xdc_fd {current_instance status_core}
+puts $import_xdc_fd {create_clock -period 8.000 [get_ports xclk]}
+puts $import_xdc_fd {set_false_path -from [get_cells hold] -to [get_cells capture]}
+puts $import_xdc_fd {current_instance -quiet}
 close $import_xdc_fd
 array set cfg {fpga_arch ultrascale_plus fdev u280}
 set build_dir $import_test_root
 set project test
-set mock_constraint_files [list $import_xdc]
 set mock_xclk_clock_exists 1
 set mock_reset_timing 0
 set mock_read_xdc_paths {}
@@ -518,12 +521,13 @@ proc get_clocks {args} {
 proc get_property {property object} {
     if {$property eq "NAME" && $object eq "xclk_clock"} { return xclk }
     if {$property eq "PERIOD" && $object eq "xclk_clock"} { return 4.000 }
+    if {$property eq "IS_GENERATED" && $object eq "xclk_clock"} { return 0 }
     return ""
 }
-proc get_filesets {args} { return constrs_1 }
-proc get_files {args} {
-    global mock_constraint_files
-    return $mock_constraint_files
+proc write_xdc {args} {
+    global import_xdc mock_reset_timing
+    if {$mock_reset_timing} { error "Timing snapshot must precede reset" }
+    file copy -force $import_xdc [lindex $args end]
 }
 proc reset_timing {} {
     global mock_xclk_clock_exists mock_reset_timing
@@ -536,7 +540,7 @@ proc read_xdc {path} {
     set fd [open $path r]
     set text [read $fd]
     close $fd
-    if {[regexp -line {^[[:space:]]*create_clock[[:space:]].*\[get_ports[[:space:]]+xclk\]} $text]} {
+    if {[regexp -line {^[[:space:]]*create_clock -period 4\.000.*\[get_ports xclk\]} $text]} {
         set mock_xclk_clock_exists 1
     }
 }
@@ -546,7 +550,7 @@ proc write_checkpoint {args} {
 }
 eval [string range $base $import_proc_start [expr {$import_proc_end - 1}]]
 write_shell_import_checkpoint [file join $import_test_root shell_synthed_import.dcp]
-set filtered_xdc [file join $import_test_root test_shell xdc_import u280_shell_base.xdc]
+set filtered_xdc [lindex $mock_read_xdc_paths 0]
 if {$mock_reset_timing != 1 || $mock_written_checkpoint ne [file join $import_test_root shell_synthed_import.dcp] ||
     [llength $mock_read_xdc_paths] != 1 || ![file exists $filtered_xdc]} {
     puts stderr "shell import checkpoint did not reset/replay/write as expected"
@@ -555,9 +559,12 @@ if {$mock_reset_timing != 1 || $mock_written_checkpoint ne [file join $import_te
 set filtered_fd [open $filtered_xdc r]
 set filtered_text [read $filtered_fd]
 close $filtered_fd
-if {[regexp -line {^[[:space:]]*create_clock[[:space:]].*\[get_ports[[:space:]]+xclk\]} $filtered_text] ||
-    [string first {create_clock -period 10.000 [get_ports dclk]} $filtered_text] < 0} {
-    puts stderr "shell import checkpoint did not filter only the xclk primary: $filtered_text"
+if {[regexp -line {^[[:space:]]*create_clock -period (4\.000|10\.000)} $filtered_text] ||
+    [string first {current_instance status_core
+create_clock -period 8.000 [get_ports xclk]
+set_false_path -from [get_cells hold] -to [get_cells capture]
+current_instance -quiet} $filtered_text] < 0} {
+    puts stderr "shell import changed scoped constraints or retained boundary primaries: $filtered_text"
     exit 1
 }
 file delete -force $import_test_root
