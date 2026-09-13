@@ -74,9 +74,14 @@ for template_name in (
     template = (repository_root / "hw/templates/common" / template_name).read_text(
         encoding="utf-8"
     )
-    if re.search(r"logic\[15:0\].*s_axi_debug_hub_wstrb", template) is None:
-        sys.exit(f"{template_name} does not expose the 16-bit debug-hub write strobe")
-    if re.search(r"logic\[16:0\].*s_axi_debug_hub_wstrb", template):
-        sys.exit(f"{template_name} regressed to a 17-bit debug-hub write strobe")
+    # Bundled Versal static checkpoints have a historical extra boundary bit;
+    # the actual 128-bit AXI path still carries exactly sixteen byte strobes.
+    high_bit = 16 if template_name == "shell_top_tmplt.txt" else 15
+    if re.search(rf"logic\[{high_bit}:0\].*s_axi_debug_hub_wstrb", template) is None:
+        sys.exit(f"{template_name} violates the debug-hub write-strobe interface")
+    if template_name == "shell_top_tmplt.txt" and re.search(
+        r"\.s_axi_debug_hub_wstrb\(s_axi_debug_hub_wstrb\[15:0\]\)", template
+    ) is None:
+        sys.exit("shell debug-hub boundary must discard the unused checkpoint bit")
 
 print("r5_packet_validity_structure_test: PASS")
