@@ -34,6 +34,7 @@
 #include <sys/mman.h>
 #include <unordered_map> 
 #include <boost/interprocess/sync/named_mutex.hpp>
+#include <coyote/cDeviceNamespace.hpp>
 
 #include <coyote/cOps.hpp>
 #include <coyote/cDefs.hpp>
@@ -78,6 +79,7 @@ protected:
     static std::atomic_uint32_t crid_gen;
 
     /// Global mutex, ensuring no two processes are simultaneously allocating bitstream memory on the same object
+    cDeviceNamespace device_namespace;
     boost::interprocess::named_mutex mlock;
 
 	/*

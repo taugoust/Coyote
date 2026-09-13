@@ -22,8 +22,17 @@
 # Target platform: ultrascale_plus for u55c, u250, u280 or versal for v80
 TARGET_PLATFORM ?= ultrascale_plus
 
-# Target output name
-obj-m := coyote_driver.o
+# Explicit family identity; legacy preserves existing module and userspace names.
+DRIVER_VARIANT ?= legacy
+ifeq ($(DRIVER_VARIANT),legacy)
+DRIVER_MODULE := coyote_driver
+else ifeq ($(DRIVER_VARIANT),$(TARGET_PLATFORM))
+DRIVER_MODULE := coyote_driver_$(DRIVER_VARIANT)
+ccflags-y += -DCOYOTE_ISOLATED_VARIANT
+else
+$(error DRIVER_VARIANT must be legacy or match TARGET_PLATFORM)
+endif
+obj-m := $(DRIVER_MODULE).o
 
 # Pre-requisites that need to be compiled for the Coyote driver
 coyote_driver-objs := src/coyote_driver.o 
@@ -51,6 +60,8 @@ coyote_driver-objs += src/vfpga/vfpga_hw.o
 coyote_driver-objs += src/vfpga/vfpga_isr.o 
 coyote_driver-objs += src/vfpga/vfpga_ops.o 
 coyote_driver-objs += src/vfpga/vfpga_uisr.o 
+
+$(DRIVER_MODULE)-objs := $(coyote_driver-objs)
 
 # Location of the Linux kernel header files, we will be building within the context of the kernel's Makefile (the flag -C sets the context)
 # This gives us access to all the Linux kernel functionality, typically implemented in <linux/*.h> and <asm/*.h>

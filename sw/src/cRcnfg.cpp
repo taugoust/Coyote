@@ -29,12 +29,12 @@
 namespace coyote {
 std::atomic<uint32_t> cRcnfg::crid_gen; 
 
-cRcnfg::cRcnfg(unsigned int device): mlock(boost::interprocess::open_or_create, "reconfig_mtx") {
+cRcnfg::cRcnfg(unsigned int device): mlock(boost::interprocess::open_or_create, device_namespace.reconfigurationMutex().c_str()) {
 	DBG2("cRcnfg: Constructor called");
 
 	// Issue driver call to obtain the file descriptor for this (physical) FPGA
 	// In the driver, an instance of reconfig_dev is opened, ready for memory mapping and reconfiguration
-	std::string dev_name = "/dev/coyote_fpga_" + std::to_string(device) + "_reconfig";
+	std::string dev_name = device_namespace.reconfigurationPath(device);
 	reconfig_dev_fd = open(dev_name.c_str(), O_RDWR | O_SYNC);
 	if (reconfig_dev_fd == -1)
 		throw std::runtime_error("ERROR: cRcnfg instance could not be obtained");
@@ -50,7 +50,11 @@ cRcnfg::~cRcnfg() {
 	for (auto &it: mapped_pages) {
 		freeMem(it.first);
 	}
-	boost::interprocess::named_mutex::remove("reconfig_mtx");
+    // Keep explicit IPC namespaces persistent: unlinking while another client
+    // holds the mutex would let a new client create a second, independent lock.
+    if (device_namespace.legacy()) {
+        boost::interprocess::named_mutex::remove(device_namespace.reconfigurationMutex().c_str());
+    }
 	close(reconfig_dev_fd);
 }
 

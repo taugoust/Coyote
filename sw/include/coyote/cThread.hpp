@@ -48,6 +48,7 @@
 #include <linux/mman.h>
 
 #include <boost/interprocess/sync/named_mutex.hpp>
+#include <coyote/cDeviceNamespace.hpp>
 
 #ifdef EN_AVX
 #include <x86intrin.h>
@@ -135,6 +136,7 @@ protected:
 	bool is_connected;
 
 	/// Inter-process vFPGA lock, see lock() and unlock() functions for more details
+    cDeviceNamespace device_namespace;
 	boost::interprocess::named_mutex vlock;
 
 	/// Set to true if the vFPGA lock is acquired by this cThread; used to release the lock in the destructor
