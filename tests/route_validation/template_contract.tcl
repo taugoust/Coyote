@@ -80,6 +80,8 @@ foreach path [configured_templates $script_root] {
 }
 set base [read_source $base_path]
 set physical [read_source $physical_path]
+source [file join [file dirname [info script]] admission_behavior.tcl]
+source [file join [file dirname [info script]] non_strict_behavior.tcl]
 
 foreach {source path} [list $base $base_path $physical $physical_path] {
     if {[regexp {\$\{(prefix|phase|report_suffix)\}} $source collision]} {

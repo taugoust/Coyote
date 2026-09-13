@@ -108,6 +108,10 @@ if {[catch {
                 $phase $report_dir $report_suffix $telemetry_path $drc_name
             set outcome accepted
             set reasons {}
+            if {[catch {require_complete_routing} reason]} {
+                set outcome rejected
+                lappend reasons $reason
+            }
             if {[catch {require_clean_bitstream_drc $drc_name} reason]} {
                 set outcome rejected
                 lappend reasons $reason

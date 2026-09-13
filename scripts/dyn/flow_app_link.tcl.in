@@ -4,6 +4,8 @@
 
 if {[catch {
     source "${CMAKE_BINARY_DIR}/base.tcl"
+    set initial_error_count [get_msg_config -severity ERROR -count]
+    set initial_xdc_rejections [get_msg_config -id {Designutils 20-1307} -count]
     source "${CMAKE_BINARY_DIR}/app_link_integrity.tcl"
     file delete -force "$dcp_dir/app_link_complete"
     if {$cfg(n_config) != 1 || $cfg(n_reg) != 1} {
@@ -60,6 +62,8 @@ if {[catch {
 
         link_design -mode default -reconfig_partitions $reconfig_partitions \
             -part $part -top cyt_top
+        require_clean_application_link $initial_error_count $initial_xdc_rejections \
+            "$rprt_dir/config_$i/application_partition_drc.rpt"
         set after_boundary [app_link_integrity_capture_boundary \
             $reconfig_partitions "$scratch_dir/after_partition_pins.txt"]
         set after_static [app_link_integrity_capture_protected_static \

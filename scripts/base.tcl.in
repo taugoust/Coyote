@@ -337,6 +337,30 @@ proc require_clean_bitstream_drc {run_name} {
     }
 }
 
+# Validate the actual linked partition geometry before admitting placement.
+# XDC parsing may emit an ERROR without making link_design throw an exception.
+proc require_application_partition_layout {report_path} {
+    file mkdir [file dirname $report_path]
+    set checks [get_drc_checks HDPR*]
+    if {[llength $checks] == 0} {error "DFX partition checks are unavailable"}
+    report_drc -checks $checks -name application_partition_layout -file $report_path
+    set bad [get_drc_violations -name application_partition_layout \
+        -filter {SEVERITY == Error || SEVERITY == "Critical Warning"}]
+    if {[llength $bad] != 0} {
+        error "Linked application partition failed DFX validation: $bad"
+    }
+}
+
+proc require_clean_application_link {initial_error_count initial_xdc_rejections report_path} {
+    if {[get_msg_config -id {Designutils 20-1307} -count] != $initial_xdc_rejections} {
+        error "Unsupported XDC commands were rejected during linking"
+    }
+    if {[get_msg_config -severity ERROR -count] != $initial_error_count} {
+        error "Linking reported errors; refusing to publish a linked checkpoint"
+    }
+    require_application_partition_layout $report_path
+}
+
 proc require_timing_closure {label} {
     foreach delay_type {max min} {
         set paths [get_timing_paths -delay_type $delay_type -max_paths 1 -nworst 1]
@@ -419,6 +443,19 @@ proc implementation_route_count {route_type} {
         return ""
     }
     return [llength $nets]
+}
+
+# Timing policy never authorizes incomplete or conflicting physical routing.
+proc require_complete_routing {} {
+    foreach route_type {UNROUTED PARTIAL CONFLICTS ANTENNAS GAPS UNPLACED UNPLACED_ALL} {
+        set count [implementation_route_count $route_type]
+        if {![string is integer -strict $count]} {
+            error "Unable to verify routed completeness for $route_type"
+        }
+        if {$count != 0} {
+            error "Routing is incomplete or illegal: $route_type has $count nets"
+        }
+    }
 }
 
 proc implementation_path_property {path property} {
@@ -603,6 +640,7 @@ proc report_and_validate_routed_design {label report_dir report_suffix drc_run_n
     report_bitstream_drc \
         $drc_run_name [file join $report_dir [format "shell_drc_bitstream_checks%s.rpt" $report_suffix]]
     require_clean_bitstream_drc $drc_run_name
+    require_complete_routing
     if {$cnfg(en_timing_check) eq 1} {
         require_timing_closure $label
     }
