@@ -28,6 +28,8 @@ if {[catch {
     require_equal "PS_M_AXI_LPD_DATA_WIDTH" [dict get $ps_pmc_config PS_M_AXI_LPD_DATA_WIDTH] $cfg(v80_r5_lpd_data_bits)
     require_equal "PS_NUM_FABRIC_RESETS" [dict get $ps_pmc_config PS_NUM_FABRIC_RESETS] 1
     require_equal "PS_USE_M_AXI_LPD" [dict get $ps_pmc_config PS_USE_M_AXI_LPD] 1
+    require_equal "debugger IPI5 enabled" [dict get $ps_pmc_config PS_GEN_IPI5_ENABLE] 1
+    require_equal "debugger IPI5 ownership" [dict get $ps_pmc_config PS_GEN_IPI5_MASTER] A72
 
     foreach cell {r5_scratch_interconnect r5_scratch_ctrl r5_scratch_mem proc_sys_reset_r5} {
         if {[llength [get_bd_cells -quiet $cell]] ne 1} {

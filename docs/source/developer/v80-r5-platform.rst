@@ -16,7 +16,22 @@ aperture is exposed through this option.
 
 The CIPS configuration applies processor ownership with
 ``PS_PMC_CONFIG_APPLIED``, enables ``M_AXI_LPD``, and retains the stock Coyote
-PCIe, NoC, and board configuration otherwise. ``platform-design-check`` opens
+PCIe, NoC, and board configuration otherwise. It also enables only IPI5
+(``PS_GEN_IPI5_ENABLE=1``), retaining the supported default A72 master ownership,
+so XSDB can send PMC management requests for processor bring-up. This is part
+of the opt-in processor platform rather than a separate debug switch: a platform
+without its supported management route is not suitable for that bring-up flow.
+The default disabled-R5 platform remains unchanged; other IPI channels are not
+enabled by this option. This does not grant firmware activation or prove live
+PLM readiness.
+
+Regenerate and qualify the platform export and PLM/BSP with the supported vendor
+flow before deployment. Reusing routed PL requires demonstrated equivalence of
+generated PL interfaces, clocks, resets and netlist plus supported image packaging;
+the IPI parameter name alone is not equivalence evidence. Otherwise rebuild the
+complete matched parent. Do not patch registers or transplant CDOs/ELFs.
+
+``platform-design-check`` opens
 the generated static project and verifies the CIPS properties, clock/reset
 connectivity, scratch cells, and address segment.
 

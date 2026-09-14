@@ -406,8 +406,8 @@ proc cr_bd_design_static { parentCell } {
     exit 1
   }
 
-  # The optional processor platform changes only the R5-0/LPD-facing CIPS
-  # contract. Keep the stock PCIe, NoC, MIO, and board-management properties
+  # The optional processor platform enables R5-0/LPD connectivity and the
+  # supported debugger management IPI route. Keep the stock PCIe, NoC, MIO, and board-management properties
   # byte-for-byte equivalent when it is disabled.
   if {$r5_platform_enabled} {
     set r5_ps_pmc_config [get_property CONFIG.PS_PMC_CONFIG $versal_cips_0]
@@ -415,6 +415,12 @@ proc cr_bd_design_static { parentCell } {
     dict set r5_ps_pmc_config PS_M_AXI_LPD_DATA_WIDTH $cnfg(v80_r5_lpd_data_bits)
     dict set r5_ps_pmc_config PS_NUM_FABRIC_RESETS 1
     dict set r5_ps_pmc_config PS_USE_M_AXI_LPD 1
+    # XSDB uses IPI5 for PMC management requests. Retain default A72 ownership;
+    # enabling the route is platform policy, not a runtime register workaround.
+    dict set r5_ps_pmc_config PS_GEN_IPI5_ENABLE 1
+    if {![dict exists $r5_ps_pmc_config PS_GEN_IPI5_MASTER]} {
+      dict set r5_ps_pmc_config PS_GEN_IPI5_MASTER A72
+    }
     set_property -dict [list \
       CONFIG.PS_PMC_CONFIG $r5_ps_pmc_config \
       CONFIG.PS_PMC_CONFIG_APPLIED {1} \
