@@ -811,7 +811,9 @@ module shell_top (
 {% endif %}
 {% endif %}
 
-    shell_slave inst_shell_slave (
+    shell_slave #(
+        .R5_PROVIDER_ENABLED({{ cnfg.en_v80_r5_provider }})
+    ) inst_shell_slave (
         .aclk(aclk),
         .aresetn(aresetn),
 {% if cnfg.en_net %}

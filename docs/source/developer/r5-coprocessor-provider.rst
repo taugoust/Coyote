@@ -47,7 +47,24 @@ The provider cannot auto-bind itself. ``RegisterCoprocessorControlIo`` implement
 the typed command/token protocol with a fixed polling bound. Its production
 ``ResidentServiceCoprocessorRegisterIo`` backend uses the kernel-validated
 ``cResidentServiceControl`` aperture; tests inject the same bounded register
-interface without a device. Provider reads combine the static shell descriptor
+interface without a device.
+
+The shell discovery registers describe the entire privileged resident-control
+aperture, not the presence of an external dynamic service. With only the R5
+provider, that aperture has absolute base ``0x2000`` and size ``0x1000``. With
+both external control and the provider, it has base ``0x1000`` and size
+``0x2000``; external control occupies its first page. External-service metadata
+remains disabled when no external service is registered.
+
+``cResidentServiceControl`` operations use offsets relative to the discovered
+aperture; the driver adds its base and retains its privilege and bounds checks.
+Pass an explicit ``window_offset`` to ``ResidentServiceCoprocessorRegisterIo``:
+``0`` for provider-only, or ``0x1000`` for combined control. The legacy default
+``0x2000`` is an absolute shell offset and is not valid for these layouts; do not
+use it or bypass the typed ioctl through raw BAR access. Provider metadata's
+absolute control base must be translated before using this API.
+
+Provider reads combine the static shell descriptor
 with live availability, health, endpoint/binding generations, decouple/idle
 state, firmware ABI IDs, and the complete 256-bit firmware image identity.
 

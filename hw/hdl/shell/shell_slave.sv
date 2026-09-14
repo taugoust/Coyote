@@ -26,7 +26,9 @@
 
 import lynxTypes::*;
 
-module shell_slave (
+module shell_slave #(
+  parameter bit R5_PROVIDER_ENABLED = 1'b0
+) (
   input  logic              aclk,
   input  logic              aresetn,
 
@@ -69,6 +71,18 @@ module shell_slave (
 // ------------------------------------------------------------------
 
 // Constants
+// The privileged resident aperture is independent of external-service identity.
+// Match the shell control splitters: external at 0x1000, provider at 0x2000.
+localparam integer RESIDENT_CONTROL_ENABLED = EXTERNAL_SERVICE_CONTROL_ENABLED || R5_PROVIDER_ENABLED;
+localparam integer RESIDENT_CONTROL_BASE = R5_PROVIDER_ENABLED ?
+    (EXTERNAL_SERVICE_CONTROL_ENABLED ? 4096 : 8192) : EXTERNAL_SERVICE_CONTROL_BASE;
+localparam integer RESIDENT_CONTROL_BYTES = R5_PROVIDER_ENABLED ?
+    (EXTERNAL_SERVICE_CONTROL_ENABLED ? 8192 : 4096) : EXTERNAL_SERVICE_CONTROL_BYTES;
+localparam integer RESIDENT_CONTROL_VERSION = R5_PROVIDER_ENABLED ? 1 : EXTERNAL_SERVICE_CONTROL_INTERFACE_VERSION;
+localparam integer RESIDENT_CONTROL_ADDR_BITS = R5_PROVIDER_ENABLED ?
+    (EXTERNAL_SERVICE_CONTROL_ENABLED ? 13 : 12) : EXTERNAL_SERVICE_CONTROL_ADDR_BITS;
+localparam integer RESIDENT_CONTROL_DATA_BITS = R5_PROVIDER_ENABLED ? 64 : EXTERNAL_SERVICE_CONTROL_DATA_BITS;
+
 localparam integer N_REGS = 128;
 localparam integer ADDR_LSB = $clog2(AXIL_DATA_BITS/8);
 localparam integer ADDR_MSB = $clog2(N_REGS);
@@ -295,14 +309,14 @@ always_ff @(posedge aclk) begin
           axi_rdata[1] <= QSFP;
         end
         SERVICE_CTRL_CNFG_REG: begin // Optional resident-service control
-          axi_rdata[0] <= EXTERNAL_SERVICE_CONTROL_ENABLED;
-          axi_rdata[15:8] <= EXTERNAL_SERVICE_CONTROL_INTERFACE_VERSION;
-          axi_rdata[23:16] <= EXTERNAL_SERVICE_CONTROL_ADDR_BITS;
-          axi_rdata[31:24] <= EXTERNAL_SERVICE_CONTROL_DATA_BITS;
-          axi_rdata[63:32] <= EXTERNAL_SERVICE_CONTROL_BYTES;
+          axi_rdata[0] <= RESIDENT_CONTROL_ENABLED;
+          axi_rdata[15:8] <= RESIDENT_CONTROL_VERSION;
+          axi_rdata[23:16] <= RESIDENT_CONTROL_ADDR_BITS;
+          axi_rdata[31:24] <= RESIDENT_CONTROL_DATA_BITS;
+          axi_rdata[63:32] <= RESIDENT_CONTROL_BYTES;
         end
         SERVICE_CTRL_BASE_REG:
-          axi_rdata <= EXTERNAL_SERVICE_CONTROL_BASE;
+          axi_rdata <= RESIDENT_CONTROL_BASE;
 
 `ifdef EN_RDMA
         RDMA_OFFS_REG: // Offset
