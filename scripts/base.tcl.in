@@ -496,7 +496,7 @@ proc write_placement_diagnosis_evidence {report_dir report_suffix} {
     set skew [implementation_path_property $worst_path SKEW]
     set source [implementation_path_property $worst_path STARTPOINT_PIN]
     set destination [implementation_path_property $worst_path ENDPOINT_PIN]
-    set path_group [implementation_path_property $worst_path PATH_GROUP]
+    set path_group [implementation_path_property $worst_path GROUP]
 
     set fd [open $output_path w]
     puts $fd "{"

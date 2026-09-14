@@ -116,7 +116,7 @@ proc write_summary {path classification reasons opt_rqa placed place_rqa setup_p
     set hold_slack [path_property_or_empty $hold_path SLACK]
     set setup_start [object_name_or_empty [path_property_or_empty $setup_path STARTPOINT_PIN]]
     set setup_end [object_name_or_empty [path_property_or_empty $setup_path ENDPOINT_PIN]]
-    set setup_group [object_name_or_empty [path_property_or_empty $setup_path PATH_GROUP]]
+    set setup_group [path_property_or_empty $setup_path GROUP]
     set setup_levels [path_property_or_empty $setup_path LOGIC_LEVELS]
 
     set reason_json {}
@@ -279,7 +279,7 @@ if {$opt_rqa < $cfg(timing_oracle_reject_rqa_below)} {
     set hold_slack [path_property_or_empty $hold_path SLACK]
     set setup_start [object_name_or_empty [path_property_or_empty $setup_path STARTPOINT_PIN]]
     set setup_end [object_name_or_empty [path_property_or_empty $setup_path ENDPOINT_PIN]]
-    set setup_group [object_name_or_empty [path_property_or_empty $setup_path PATH_GROUP]]
+    set setup_group [path_property_or_empty $setup_path GROUP]
     set setup_levels [path_property_or_empty $setup_path LOGIC_LEVELS]
     set reasons {}
     if {$setup_path eq "" || $hold_path eq "" || $setup_tns eq "" ||

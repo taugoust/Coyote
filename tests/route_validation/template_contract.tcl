@@ -80,6 +80,56 @@ foreach path [configured_templates $script_root] {
 }
 set base [read_source $base_path]
 set physical [read_source $physical_path]
+
+# Run the actual placement-diagnosis writer with native scalar GROUP semantics.
+# Keep vendor mocks isolated from the other flow/admission regressions.
+set diagnosis [interp create]
+foreach name {
+    implementation_json_escape implementation_json_string
+    implementation_json_number_or_null implementation_path_property
+    write_placement_diagnosis_evidence
+} {
+    $diagnosis eval [extract_proc $base $name]
+}
+$diagnosis eval {
+    proc version {args} { return 2025.1 }
+    proc report_design_analysis {args} {}
+    proc report_high_fanout_nets {args} {}
+    proc get_timing_paths {args} {
+        if {$::mode eq "no-path"} { return {} }
+        return {setup-path}
+    }
+    proc get_property {property object} {
+        if {$object ne "setup-path"} { error "not an object: $object" }
+        switch -- $property {
+            GROUP {
+                if {$::mode eq "missing"} { error "missing GROUP" }
+                if {$::mode eq "empty"} { return "" }
+                return {scalar group "not a clock"}
+            }
+            STARTPOINT_PIN { return start-pin }
+            ENDPOINT_PIN { return end-pin }
+            PATH_GROUP { error "unsupported timing_path property" }
+            default { return 1 }
+        }
+    }
+    set directory [file join [pwd] placement-diagnosis-contract-[pid]]
+    file mkdir $directory
+    foreach mode {present missing empty no-path} {
+        write_placement_diagnosis_evidence $directory _test
+        set fd [open [file join $directory shell_place_diagnosis_test.json] r]
+        set summary [read $fd]
+        close $fd
+        set expected ""
+        if {$mode eq "present"} { set expected {scalar group "not a clock"} }
+        if {[string first "\"pathGroup\": [implementation_json_string $expected]" $summary] < 0} {
+            error "placement diagnosis $mode: incorrect scalar group: $summary"
+        }
+        puts "PLACEMENT_DIAGNOSIS_BEHAVIOR_PASS case=$mode"
+    }
+    file delete -force $directory
+}
+interp delete $diagnosis
 source [file join [file dirname [info script]] admission_behavior.tcl]
 source [file join [file dirname [info script]] non_strict_behavior.tcl]
 
