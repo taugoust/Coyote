@@ -136,4 +136,59 @@ if {[string first {"valid": true} $summary_json] < 0} {
     exit 1
 }
 
+# Model the native timing_path contract: GROUP is a scalar string, and
+# unsupported properties raise an error. A group need not be a clock object.
+proc get_property {property object} {
+    if {$property eq "GROUP"} {
+        switch -- $object {
+            setup-path { return "data path group" }
+            hold-path { return "hold group" }
+            empty-group { return "" }
+        }
+    }
+    if {$property eq "NAME"} {
+        error "scalar group must not be resolved as an object"
+    }
+    error "unsupported property $property on $object"
+}
+if {[path_property_or_empty setup-path GROUP] ne "data path group" ||
+    [path_property_or_empty empty-group GROUP] ne "" ||
+    [path_property_or_empty missing-group GROUP] ne "" ||
+    [path_property_or_empty "" GROUP] ne ""} {
+    error "timing path group lookup did not preserve scalar/missing evidence"
+}
+write_summary $summary_path true {test-reason} setup-path hold-path -1.25
+set summary_fd [open $summary_path r]
+set summary_json [read $summary_fd]
+close $summary_fd
+file delete -force $summary_path
+if {[string first {"pathGroup": "data path group"} $summary_json] < 0} {
+    error "synthesis summary lost the native scalar timing path group: $summary_json"
+}
+
+# Exercise the production evidence gate, including each missing-group case.
+set gate_start [string last {set setup_group} $script]
+set gate_end [string first {if {$valid}} $script $gate_start]
+if {$gate_start < 0 || $gate_end < 0} {
+    error "synthesis evidence gate not found"
+}
+set gate [string range $script $gate_start [expr {$gate_end - 1}]]
+set setup_tns 0.000
+set no_clock_count 0
+set unconstrained_endpoint_count 0
+foreach {setup_path hold_path expected} {
+    setup-path hold-path true
+    empty-group hold-path false
+    setup-path empty-group false
+    missing-group hold-path false
+    setup-path missing-group false
+    {} hold-path false
+    setup-path {} false
+} {
+    eval $gate
+    if {$valid ne $expected} {
+        error "incorrect evidence validity for setup=$setup_path hold=$hold_path: $valid"
+    }
+}
+
 puts "SYNTHESIS_ANALYSIS_TEMPLATE_PASS path=$path"
