@@ -610,7 +610,11 @@ module r5_packet_queue_provider_tb;
         axil_write(16'h0114, token + 1, 2, 2'b00);
         axil_read(16'h010c, value, 2'b00);
         assert(value == 2) else $fatal(1, "bad token popped RX");
+        // A retained data value must not execute a newly accepted address
+        // before that write's data channel arrives.
+        axil_write(16'h001c, token, 2, 2'b00);
         axil_write(16'h0114, token, 0, 2'b00);
+        expect_last_command(8'd3, 8'd0);
 
         // The largest legal packet must preserve exact byte accounting across
         // the protected completion pipeline.
@@ -622,7 +626,10 @@ module r5_packet_queue_provider_tb;
         axil_read(16'h0110, value, 2'b00);
         assert(value == 4037) else $fatal(1, "maximum RX byte count mismatch");
         axil_read(16'h0104, token, 2'b00);
-        axil_write(16'h0114, token, 0, 2'b00);
+        // Conversely, new data must not execute the previous RX_POP address
+        // before the corresponding address channel has been accepted.
+        axil_write(16'h0114, token, 1, 2'b00);
+        expect_last_command(8'd3, 8'd0);
 
         axil_read(16'h0144, token, 2'b00);
         axil_write(16'h0148, 32'd2, 1, 2'b00);

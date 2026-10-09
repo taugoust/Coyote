@@ -594,7 +594,11 @@ module r5_packet_queue_provider #(
         mmio_submit_success = 1'b0;
         mmio_ack_success = 1'b0;
 
-        if (!write_epoch_valid) begin
+        // Held address/data belong to independent AXI channels. Decode side
+        // effects only when both halves of a new write are ready to execute.
+        if (!write_execute) begin
+            write_known = 1'b0;
+        end else if (!write_epoch_valid) begin
             write_bus_response = AXI_SLVERR;
             write_result = RESULT_ABORTED;
         end else if (held_wstrb != 4'hf) begin
