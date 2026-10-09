@@ -4,8 +4,8 @@
 if {[catch {
     source "${CMAKE_BINARY_DIR}/base.tcl"
     file delete -force "$dcp_dir/dynamic_link_complete"
-    if {$cfg(n_config) != 1 || $cfg(n_reg) != 1} {
-        error "Immutable packaged dynamic flow currently requires one configuration and one region"
+    if {$cfg(n_config) != 1 || $cfg(n_reg) < 1 || $cfg(n_reg) > 15} {
+        error "Immutable packaged Versal dynamic flow requires one configuration and 1..15 regions"
     }
     if {$cfg(en_shell_pblock) eq 1} {
         error "Nested reconfiguration is not supported on Versal"

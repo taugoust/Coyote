@@ -771,8 +771,14 @@ proc cr_bd_design_static { parentCell } {
   # PR data (address to write partial PDI to)
   assign_bd_address -offset 0x000102100000 -range 64K -target_address_space [get_bd_addr_spaces versal_cips_0/CPM_PCIE_NOC_1] [get_bd_addr_segs versal_cips_0/NOC_PMC_AXI_0/pspmc_0_psv_pmc_slave_boot_stream] -force
 
-  # PMC_NOC_AXI_0 for configuring the Debug Hub IP
-  assign_bd_address -offset 0x020240000000 -range 2M -target_address_space [get_bd_addr_spaces versal_cips_0/PMC_NOC_AXI_0] [get_bd_addr_segs axi_debug_hub/Reg] -force
+  # PMC_NOC_AXI_0 for configuring the Debug Hub IP. Each application hub
+  # retains its vendor 2 MiB aperture; reserve enough power-of-two space for
+  # every region, including static-only builds where EN_PR is cleared.
+  set debug_range 0x200000
+  while {$debug_range < (0x200000 * $cnfg(n_reg))} {
+    set debug_range [expr {$debug_range * 2}]
+  }
+  assign_bd_address -offset 0x020240000000 -range $debug_range -target_address_space [get_bd_addr_spaces versal_cips_0/PMC_NOC_AXI_0] [get_bd_addr_segs axi_debug_hub/Reg] -force
 
   if {$r5_platform_enabled} {
     assign_bd_address \
