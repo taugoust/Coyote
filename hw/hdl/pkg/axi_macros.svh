@@ -184,7 +184,7 @@
 	assign m.wdata 		= 0;			            \
 	assign m.wstrb 		= 0;			            \
 	assign m.wlast 		= 1'b0;			            \
-	assign m.valid 		= 1'b0;			            \
+	assign m.wvalid 	= 1'b0;			            \
 	assign m.bready 	= 1'b1;
 
 `define AXI_TIE_OFF_S(s)				            \
