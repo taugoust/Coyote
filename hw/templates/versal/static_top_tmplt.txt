@@ -177,7 +177,12 @@ module static_top (
 
     qdma_wr_wrapper #(
         .N_CHAN(N_HCHAN),
-        .N_QUEUES_PER_CHAN(N_OUTSTANDING)
+        .N_QUEUES_PER_CHAN(N_OUTSTANDING),
+{% if cnfg.pcie_gen == 5 %}
+        .GENERATE_CRC(1'b1)
+{% else %}
+        .GENERATE_CRC(1'b0)
+{% endif %}
     ) inst_qdma_wr_wrapper (
         .aclk(xclk),
         .aresetn(sresetn),

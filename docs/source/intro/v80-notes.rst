@@ -124,6 +124,20 @@ The configuration can be changed by setting the `PCIE_GEN` variable in CMake for
     set(PCIE_GEN 5) # for PCIe Gen 5x8
 
 
+For Gen 5, the static C2H wrapper generates the streaming payload CRC. It uses
+polynomial ``0x04c11db7``, an all-ones packet seed, MSB-first processing of each
+full beat, zeroed unused high bytes on the final beat, and no final XOR, matching
+the AMD QDMA 5.1 ``axi_st_module.sv`` example's ``crc32_gen`` convention.
+CRC state advances only on accepted output beats and resets at packet boundaries.
+A one-beat elastic stage holds payload and sidebands together under backpressure.
+Gen 4 retains disabled CRC generation; direct wrapper users also default to disabled.
+
+.. important:: CRC generation is in the static region. Updating source or rebuilding
+   only a dynamic shell/application against an old static checkpoint does not update
+   it. Regenerate the matching static checkpoint and full image to deploy this logic.
+   CRC correctness does not establish clean QDMA health, timing closure, or hardware
+   qualification of an image; check those independently.
+
 .. note::  The V80 can be configured to include two QDMAs, with a theoretical bandwidth of 64 GBps. While tested, this feature is not fully supported in Coyote yet. It will be added in a future pull request.
 
 The plot below shows the measured throughput for host-to-device transfers using the QDMA on the V80, configured in PCIe Gen 5x8 mode, compared to the XDMA on the U55C, configured in PCIe Gen 3x16 mode.
