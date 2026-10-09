@@ -228,6 +228,11 @@ proc cr_bd_design_static { parentCell } {
   if {$r5_platform_enabled} {
     set proc_sys_reset_r5 [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_r5 ]
   }
+  if {$cnfg(pcie_gen) eq 5} {
+    set proc_sys_reset_qdma_if [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_qdma_if ]
+    # dma1_intrfc_resetn and pl0_resetn are active-low; aux_reset_in is tied high.
+    set_property -dict [list CONFIG.C_EXT_RESET_HIGH {0} CONFIG.C_AUX_RESET_HIGH {0}] $proc_sys_reset_qdma_if
+  }
 
   # Constants
   set const_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 const_0 ]
@@ -555,6 +560,9 @@ proc cr_bd_design_static { parentCell } {
     CONFIG.PRIM_SOURCE {Global_Buffer} \
   ] \[get_bd_cells clk_wiz_0]"
   eval $cmd
+  if {$cnfg(pcie_gen) eq 5} {
+    set_property CONFIG.USE_LOCKED {true} [get_bd_cells clk_wiz_0]
+  }
 
 ########################################################################################################
 # Create interface connections
@@ -647,8 +655,13 @@ proc cr_bd_design_static { parentCell } {
     connect_bd_net [get_bd_pins const_1/dout] [get_bd_pins versal_cips_0/dma1_c2h_byp_out_ready]
     connect_bd_net [get_bd_pins const_1/dout] [get_bd_pins versal_cips_0/dma1_h2c_byp_out_ready]
 
-    # QDMA resetn is tied off to 1 (for now, keeping it consistent with rest of Coyote)
-    connect_bd_net [get_bd_pins const_1/dout] [get_bd_pins versal_cips_0/dma1_intrfc_resetn]
+    # CPM5 interface reset is independent of dma1_axi_aresetn to avoid a reset loop.
+    connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins proc_sys_reset_qdma_if/slowest_sync_clk]
+    connect_bd_net [get_bd_pins clk_wiz_0/locked] [get_bd_pins proc_sys_reset_qdma_if/dcm_locked]
+    connect_bd_net [get_bd_pins versal_cips_0/pl0_resetn] [get_bd_pins proc_sys_reset_qdma_if/ext_reset_in]
+    connect_bd_net [get_bd_pins const_1/dout] [get_bd_pins proc_sys_reset_qdma_if/aux_reset_in]
+    connect_bd_net [get_bd_pins const_0/dout] [get_bd_pins proc_sys_reset_qdma_if/mb_debug_sys_rst]
+    connect_bd_net [get_bd_pins proc_sys_reset_qdma_if/peripheral_aresetn] [get_bd_pins versal_cips_0/dma1_intrfc_resetn]
   
     # Tie off all MM descriptors other than host-to-card channel 0 for PR
     connect_bd_net  [get_bd_pins const_0/dout] [get_bd_pins versal_cips_0/dma1_h2c_byp_in_mm_1_valid]

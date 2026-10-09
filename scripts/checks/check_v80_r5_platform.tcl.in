@@ -12,6 +12,22 @@ if {[catch {
         }
     }
 
+    proc require_same_net {label first second} {
+        set first_net [get_bd_nets -quiet -of_objects $first]
+        set second_net [get_bd_nets -quiet -of_objects $second]
+        if {[llength $first_net] != 1 || $first_net ne $second_net} {
+            error "$label does not share one connected net"
+        }
+    }
+
+    proc require_different_net {label first second} {
+        set first_net [get_bd_nets -quiet -of_objects $first]
+        set second_net [get_bd_nets -quiet -of_objects $second]
+        if {[llength $first_net] != 1 || [llength $second_net] != 1 || $first_net eq $second_net} {
+            error "$label must use distinct connected nets"
+        }
+    }
+
     if {$cfg(en_v80_r5_platform) ne 1 || $cfg(fdev) ne "v80" || $cfg(build_static) ne 1} {
         error "R5 platform design check requires an enabled V80 static build"
     }
@@ -58,6 +74,38 @@ if {[catch {
     require_equal "scratch range" [get_property RANGE $scratch_segments] 0x00001000
 
     if {$cfg(en_v80_r5_provider) eq 1} {
+        if {$cfg(pcie_gen) eq 5} {
+            set qdma_reset [get_bd_cells -quiet proc_sys_reset_qdma_if]
+            if {[llength $qdma_reset] != 1} {
+                error "missing CPM5 interface reset controller"
+            }
+            require_equal "CPM5 interface reset active-low external input" \
+                [get_property CONFIG.C_EXT_RESET_HIGH $qdma_reset] 0
+            require_equal "CPM5 interface reset active-low auxiliary input" \
+                [get_property CONFIG.C_AUX_RESET_HIGH $qdma_reset] 0
+            require_equal "CPM5 reset waits for clock-wizard lock" \
+                [get_property CONFIG.USE_LOCKED [get_bd_cells clk_wiz_0]] true
+            require_same_net "CPM5 interface reset clock" \
+                [get_bd_pins proc_sys_reset_qdma_if/slowest_sync_clk] \
+                [get_bd_pins versal_cips_0/dma1_intrfc_clk]
+            require_same_net "CPM5 reset qualification" \
+                [get_bd_pins proc_sys_reset_qdma_if/dcm_locked] [get_bd_pins clk_wiz_0/locked]
+            require_same_net "CPM5 platform reset assertion" \
+                [get_bd_pins proc_sys_reset_qdma_if/ext_reset_in] [get_bd_pins versal_cips_0/pl0_resetn]
+            require_same_net "CPM5 interface reset output" \
+                [get_bd_pins proc_sys_reset_qdma_if/peripheral_aresetn] \
+                [get_bd_pins versal_cips_0/dma1_intrfc_resetn]
+            require_same_net "CPM5 auxiliary reset is deasserted" \
+                [get_bd_pins proc_sys_reset_qdma_if/aux_reset_in] [get_bd_pins const_1/dout]
+            require_same_net "CPM5 debug reset is deasserted" \
+                [get_bd_pins proc_sys_reset_qdma_if/mb_debug_sys_rst] [get_bd_pins const_0/dout]
+            require_different_net "CPM5 interface reset avoids DMA user-reset loop" \
+                [get_bd_pins proc_sys_reset_qdma_if/ext_reset_in] \
+                [get_bd_pins versal_cips_0/dma1_axi_aresetn]
+            require_same_net "existing DMA user reset remains system-reset driven" \
+                [get_bd_pins versal_cips_0/dma1_axi_aresetn] \
+                [get_bd_pins proc_sys_reset_s/ext_reset_in]
+        }
         foreach cell {r5_provider_clock_converter} {
             if {[llength [get_bd_cells -quiet $cell]] ne 1} {
                 error "missing static R5 provider cell '$cell'"

@@ -132,6 +132,14 @@ CRC state advances only on accepted output beats and resets at packet boundaries
 A one-beat elastic stage holds payload and sidebands together under backpressure.
 Gen 4 retains disabled CRC generation; direct wrapper users also default to disabled.
 
+Gen 5 also qualifies ``dma1_intrfc_resetn`` with the interface clock's lock
+signal and the platform reset. The reset controller's external and auxiliary
+inputs are explicitly active-low; the auxiliary input is tied inactive. Its
+assertion source is independent of ``dma1_axi_aresetn`` to avoid feeding the
+QDMA's user-reset output back into its interface-reset input. Gen 4 wiring is
+unchanged. These connections are checked by the R5 provider's native platform
+check when that optional platform is built.
+
 .. important:: CRC generation is in the static region. Updating source or rebuilding
    only a dynamic shell/application against an old static checkpoint does not update
    it. Regenerate the matching static checkpoint and full image to deploy this logic.
