@@ -870,6 +870,15 @@ macro(validation_checks_hw)
         message(FATAL_ERROR "Coyote directory not set.")
     endif()
 
+    # CPM streaming packets, including all bypass descriptors, must stay below
+    # 64 KiB. Host transfers are packetized upstream; do not confuse transfer
+    # length with this per-packet configuration limit.
+    if(FDEV_NAME STREQUAL "v80" AND EN_STRM)
+        if(NOT "${PMTU_BYTES}" MATCHES "^[1-9][0-9]*$" OR PMTU_BYTES GREATER 65535)
+            message(FATAL_ERROR "V80 host-stream PMTU_BYTES must be an integer from 1 to 65535; larger host transfers are packetized upstream")
+        endif()
+    endif()
+
     # On UltraScale+ devices, Coyote floorplans the shell and the static layer
     # Since the static layer rerely changes, a routed and locked checkpoint is provided
     # However, for Versal devices Coyote doesn't yet provide this feature, therefore it

@@ -10,6 +10,7 @@ Developer Guide
    coprocessor-ports
    v80-r5-platform
    r5-coprocessor-provider
+   qdma-h2c
 
 Contributing
 -----------------------

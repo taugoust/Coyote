@@ -77,6 +77,8 @@ for (genvar i = 0; i < N_CHAN; i++) begin
 
     assign s_dma_rd[i].ready    = s_dma_rd_readys[i];
 
+    // Errors do not map to dma_rsp_t (done-only); suppress success rather than
+    // consume an errored completion as if the read had completed correctly.
     // Read (H2C) completed, per Tables 181 in QDMA specification [PG347 v3.4]
     assign s_dma_rd[i].rsp.done = 
         s_qdma_h2c_sts.valid && 
@@ -165,17 +167,25 @@ end
 
 // Route QDMA output to the correct dynamic output channel based on QID
 always_comb begin
+    // Unknown QIDs and errored data beats are deliberately not drained: this
+    // interface has no fault response, so consuming them would silently corrupt success.
     qdma_out.tready = 1'b0;
 
     for (int i = 0; i < N_CHAN; i++) begin
         dyn_out_tvalids[i] = qdma_out.tvalid && (qdma_out.payload.qid == (i + QDMA_RD_QUEUE_START_IDX)) && !qdma_out.payload.err && !qdma_out.payload.zero_byte;
         if (dyn_out_tvalids[i] && dyn_out_treadys[i]) begin
             qdma_out.tready = 1'b1;
+        end else if (qdma_out.tvalid &&
+                     qdma_out.payload.qid == (i + QDMA_RD_QUEUE_START_IDX) &&
+                     qdma_out.payload.zero_byte && !qdma_out.payload.err) begin
+            // PG347 defines a legal zero-length descriptor as a marker beat; it
+            // carries no application data but must be accepted to complete it.
+            qdma_out.tready = 1'b1;
         end
         
-        dyn_out_tdatas[i] = (dyn_out_tvalids[i] && dyn_out_treadys[i]) ? qdma_out.payload.tdata : 0;
-        dyn_out_tlasts[i] = (dyn_out_tvalids[i] && dyn_out_treadys[i]) ? qdma_out.tlast : 0;
-        dyn_out_tkeeps[i] = dyn_out_tlasts[i] ? ( {TKEEP_WIDTH{1'b1}} >> qdma_out.payload.mty ) : ~0; 
+        dyn_out_tdatas[i] = dyn_out_tvalids[i] ? qdma_out.payload.tdata : 0;
+        dyn_out_tlasts[i] = dyn_out_tvalids[i] ? qdma_out.tlast : 0;
+        dyn_out_tkeeps[i] = dyn_out_tvalids[i] && qdma_out.tlast ? ( {TKEEP_WIDTH{1'b1}} >> qdma_out.payload.mty ) : ~0;
     end
 end
 
