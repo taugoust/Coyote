@@ -188,11 +188,15 @@ module coprocessor_control_target #(
                     12'h018: s_axi_rdata <= {32'd0, binding_endpoint, 12'd0,
                                                    application_decoupled, binding_state};
                     12'h020: s_axi_rdata <= binding_generation;
+                    12'h028: s_axi_rdata <= {32'd0, command_endpoint, 13'd0, command_opcode};
+                    12'h030: s_axi_rdata <= command_binding_generation;
+                    12'h038: s_axi_rdata <= command_endpoint_generation;
                     12'h040: s_axi_rdata <= command_token;
                     12'h048: s_axi_rdata <= {completion_token, 22'd0, stale_response_fault,
                                               mmio_idle, streams_idle, command_valid,
                                               response_done, command_inflight,
                                               completion_result};
+                    12'h050: s_axi_rdata <= completion_token;
                     12'h058: s_axi_rdata <= {32'd0, firmware_runtime_abi, firmware_abi_id};
                     12'h060: s_axi_rdata <= firmware_image_identity[63:0];
                     12'h068: s_axi_rdata <= firmware_image_identity[127:64];
