@@ -118,6 +118,7 @@ set(MULT_TCP_AXI ${MULT_TCP_AXI})
 set(N_NET_CHAN ${N_NET_CHAN})
 set(MULT_REGIONS ${MULT_REGIONS})
 set(EN_USER_REG ${EN_USER_REG})
+set(EN_USER_HOST_OUTPUT_REG ${EN_USER_HOST_OUTPUT_REG})
 
 # Shell/application interface contract. Build-only service source paths are
 # deliberately not exported; a BUILD_APP consumer needs only compatibility

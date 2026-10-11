@@ -284,3 +284,20 @@ However, explicit floorplanning can sometimes hinder timing closure. In case she
     make project && make bitgen
 
 .. tip:: In addition to disabling the shell floorplan, one case pass the target clock frequencies to CMake (e.g., SCLK_F, ACLK_F) and buid with optimizations.
+
+Registered application host egress
+---------------------------------
+
+``EN_USER_HOST_OUTPUT_REG=1`` places a fully registered AXI-stream stage after
+application-side host-write selection, inside each application partition. It
+preserves payload, byte enables, packet boundaries and backpressure, adds one
+clock cycle, and sustains one beat per cycle when unstalled. The stage resets
+with the application rather than retaining data in the resident shell across
+replacement. The default is zero for compatibility.
+
+The setting is exported with the shell and inherited by application builds;
+exports predating the option use zero. Changing it requires rebuilding the
+matching shell/application boundary. It does not change RP geometry, clocks or
+relax timing/DFX validation. Registering the boundary follows AMD's DFX interface
+recommendation, but successful routing and timing closure still require physical
+validation.

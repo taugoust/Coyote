@@ -73,6 +73,7 @@ set(SIM_EXTERNAL_DYNAMIC_SERVICE 0 CACHE STRING "Include the registered external
 
 # Enable streams from host
 set(EN_STRM 1 CACHE STRING "Enable host streams")
+set(EN_USER_HOST_OUTPUT_REG 0 CACHE BOOL "Register the application host-stream output boundary")
 
 # Number of parallel streams from host (per vFPGA)
 set(N_STRM_AXI 1 CACHE STRING "Number of host streams")
@@ -1417,6 +1418,8 @@ macro(validation_checks_hw)
         set(COPROCESSOR_BINDING_GENERATION_BITS 0)
         set(COPROCESSOR_PROVIDER_COUNT 0)
         set(COPROCESSOR_PROVIDER_DESCRIPTORS "")
+        # Older shell exports have an unregistered host output boundary.
+        set(EN_USER_HOST_OUTPUT_REG 0)
         include("${SHELL_PATH}/export.cmake")
         set(COMP_CORES "${_application_comp_cores}")
 
@@ -1443,6 +1446,17 @@ macro(validation_checks_hw)
             message(FATAL_ERROR "PR not enabled in the shell.")
         endif()
 
+    endif()
+
+    # Optional registered host egress inside each application partition.
+    # Application builds inherit this setting from their exact parent export.
+    if(NOT DEFINED EN_USER_HOST_OUTPUT_REG)
+        set(EN_USER_HOST_OUTPUT_REG 0)
+    endif()
+    if(EN_USER_HOST_OUTPUT_REG)
+        set(EN_USER_HOST_OUTPUT_REG 1)
+    else()
+        set(EN_USER_HOST_OUTPUT_REG 0)
     endif()
 
     _validate_external_dynamic_service()
