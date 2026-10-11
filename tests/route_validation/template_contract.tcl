@@ -168,6 +168,12 @@ array set routed_slack {max 0.003 min 0.012}
 set mock_missing ""
 set apply_routed_slack 0
 set implementation_calls {}
+set mock_route_complete 1
+set mock_optimization_failure ""
+set mock_restore_failure 0
+proc require_complete_routing {} {
+    if {!$::mock_route_complete} { error "incomplete routed design" }
+}
 proc get_timing_paths {args} {
     set delay_type [lindex $args [expr {[lsearch -exact $args -delay_type] + 1}]]
     if {$delay_type eq $::mock_missing} {
@@ -183,12 +189,19 @@ proc get_property {property path} {
 }
 proc write_checkpoint {args} {
     lappend ::implementation_calls [list write_checkpoint {*}$args]
+    set ::saved_slacks [array get ::mock_slack]
+    set ::saved_route_complete $::mock_route_complete
 }
 proc phys_opt_design {args} {
     lappend ::implementation_calls [list phys_opt_design {*}$args]
+    if {$::mock_optimization_failure eq "phys"} { error "physical optimization failed" }
 }
 proc route_design {args} {
     lappend ::implementation_calls [list route_design {*}$args]
+    if {$::mock_optimization_failure in {route incomplete}} {
+        set ::mock_route_complete 0
+        if {$::mock_optimization_failure eq "route"} { error "repair route failed" }
+    }
     if {$::apply_routed_slack} {
         foreach delay_type {max min} {
             set ::mock_slack($delay_type) $::routed_slack($delay_type)
@@ -200,6 +213,8 @@ proc close_design {} {
 }
 proc open_checkpoint {path} {
     lappend ::implementation_calls [list open_checkpoint $path]
+    array set ::mock_slack $::saved_slacks
+    set ::mock_route_complete [expr {$::saved_route_complete && !$::mock_restore_failure}]
 }
 set cfg(build_dir) /build
 set cfg(build_opt) 1
@@ -251,6 +266,28 @@ require_equal $implementation_calls \
     {{write_checkpoint -force /build/checkpoints/routed_candidate.dcp} {phys_opt_design -directive Explore} {route_design -directive ExtraNetDelay_high}} \
     "explicit post-route directives"
 set apply_routed_slack 0
+foreach failure {phys route incomplete} {
+    array set mock_slack {max -0.100 min 0.010}
+    set mock_route_complete 1
+    set mock_optimization_failure $failure
+    set implementation_calls {}
+    optimize_and_retain_best_routed_candidate Explore "" /build/checkpoints/routed_candidate.dcp
+    require_equal $mock_route_complete 1 "$failure restores complete routing"
+    require_equal [routed_design_worst_slacks] {-0.100 0.010} "$failure restores original timing evidence"
+    require_equal [lindex $implementation_calls end] {open_checkpoint /build/checkpoints/routed_candidate.dcp} "$failure selects saved route"
+}
+set mock_route_complete 0
+set implementation_calls {}
+require_equal [catch {optimize_and_retain_best_routed_candidate Explore "" /build/checkpoints/routed_candidate.dcp}] 1 "reject incomplete initial route"
+require_equal $implementation_calls {} "incomplete input is not checkpointed"
+set mock_route_complete 1
+set mock_restore_failure 1
+set mock_optimization_failure route
+require_equal [catch {optimize_and_retain_best_routed_candidate Explore "" /build/checkpoints/routed_candidate.dcp}] 1 "reject incomplete restored route"
+set mock_route_complete 1
+set mock_restore_failure 0
+set mock_optimization_failure ""
+rename require_complete_routing {}
 rename get_timing_paths {}
 rename get_property {}
 rename write_checkpoint {}

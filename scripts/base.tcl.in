@@ -280,24 +280,39 @@ proc routed_candidate_is_better {candidate_slacks current_slacks} {
 }
 
 proc optimize_and_retain_best_routed_candidate {post_directive final_directive candidate_checkpoint} {
+    require_complete_routing
     set candidate_slacks [routed_design_worst_slacks]
     write_checkpoint -force $candidate_checkpoint
-    if {$post_directive ne ""} {
-        phys_opt_design -directive $post_directive
-    } else {
-        phys_opt_design
+    set restore_candidate 0
+    if {[catch {
+        if {$post_directive ne ""} {
+            phys_opt_design -directive $post_directive
+        } else {
+            phys_opt_design
+        }
+        if {$final_directive ne ""} {
+            route_design -directive $final_directive
+        } else {
+            route_design
+        }
+        require_complete_routing
+        set optimized_slacks [routed_design_worst_slacks]
+    } optimization_error]} {
+        # A failed optional attempt cannot replace a completed route. Preserve
+        # its error in the build log and independently recheck the saved route;
+        # normal DRC and timing acceptance still apply after restoration.
+        puts "WARNING: Optional post-route optimization failed and is rejected: $optimization_error"
+        set restore_candidate 1
+    } elseif {[routed_candidate_is_better $candidate_slacks $optimized_slacks]} {
+        puts "INFO: Post-route optimization regressed timing; rejecting that candidate."
+        set restore_candidate 1
     }
-    if {$final_directive ne ""} {
-        route_design -directive $final_directive
-    } else {
-        route_design
-    }
-
-    set optimized_slacks [routed_design_worst_slacks]
-    if {[routed_candidate_is_better $candidate_slacks $optimized_slacks]} {
-        puts "INFO: Restoring the better fully routed candidate after post-route optimization regressed timing."
+    if {$restore_candidate} {
+        puts "INFO: Restoring the saved fully routed candidate."
         close_design
         open_checkpoint $candidate_checkpoint
+        require_complete_routing
+        routed_design_worst_slacks
     }
     file delete -force $candidate_checkpoint
 }
