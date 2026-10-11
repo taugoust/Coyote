@@ -6,11 +6,43 @@ module tb;
     AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ID_BITS(2)) s(clk);
     AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ID_BITS(2)) m[N](clk);
     connectivity dut(clk, resetn, s, m);
+    localparam logic [63:0] BASE=64'h0000020240000000;
+    typedef struct packed {
+        logic [63:0] addr;
+        logic [1:0] id;
+        logic [7:0] len;
+        logic [2:0] size;
+        logic [1:0] burst;
+        logic lock;
+        logic [3:0] cache;
+        logic [2:0] prot;
+        logic [3:0] qos, region;
+    } request_t;
+    request_t expected_aw, expected_ar, aw_payload[N], ar_payload[N];
+    logic [31:0] random_state=32'h13579bdf;
+    logic checking=0, noise=0, hold_slaves=0;
+    int sequence_number=0, write_region=0, read_region=0;
     logic [N-1:0] arready, awready, wready, rvalid, rlast, bvalid;
-    wire [N-1:0] arv, awv, wv, rr, br;
+    wire [N-1:0] arv, awv, wv, rr, br, wl;
+    wire [N-1:0][127:0] wd;
+    wire [N-1:0][15:0] ws;
     logic [N-1:0][127:0] rdata;
     logic [N-1:0][1:0] rid, rresp, bid, bresp;
-    localparam logic [63:0] BASE=64'h0000020240000000;
+    logic [N-1:0] read_active, write_active, write_response;
+    logic [N-1:0][7:0] read_length, write_length;
+    logic [N-1:0][1:0] read_id, write_id;
+    int read_beat[N], write_beat[N];
+    int accepted_ar, accepted_aw, accepted_w;
+
+    function automatic logic [127:0] read_value(input int region, input int beat);
+        return {32'hc0decafe, 32'(sequence_number), 32'(region), 32'(beat)};
+    endfunction
+    function automatic logic [127:0] write_value(input int beat);
+        return {32'h5a123456, 32'(sequence_number), 32'(write_region), 32'(beat)};
+    endfunction
+    function automatic logic [15:0] write_mask(input int beat);
+        return 16'hf00f ^ 16'(beat * 17 + sequence_number);
+    endfunction
     for(genvar i=0;i<N;i++) begin
         assign m[i].arready=arready[i]; assign m[i].awready=awready[i];
         assign m[i].wready=wready[i]; assign m[i].rvalid=rvalid[i];
@@ -19,82 +51,192 @@ module tb;
         assign m[i].bvalid=bvalid[i]; assign m[i].bid=bid[i]; assign m[i].bresp=bresp[i];
         assign arv[i]=m[i].arvalid; assign awv[i]=m[i].awvalid;
         assign wv[i]=m[i].wvalid; assign rr[i]=m[i].rready; assign br[i]=m[i].bready;
-        always @(posedge clk) if(resetn) begin
-            if (m[i].arvalid) assert ({m[i].araddr,m[i].arid,m[i].arlen,m[i].arburst,m[i].arsize,m[i].arcache,m[i].arlock,m[i].arprot,m[i].arqos,m[i].arregion} === {s.araddr,s.arid,s.arlen,s.arburst,s.arsize,s.arcache,s.arlock,s.arprot,s.arqos,s.arregion}) else $fatal(1,"AR payload");
-            if (m[i].awvalid) assert ({m[i].awaddr,m[i].awid,m[i].awlen,m[i].awburst,m[i].awsize,m[i].awcache,m[i].awlock,m[i].awprot,m[i].awqos,m[i].awregion} === {s.awaddr,s.awid,s.awlen,s.awburst,s.awsize,s.awcache,s.awlock,s.awprot,s.awqos,s.awregion}) else $fatal(1,"AW payload");
-            if(m[i].wvalid) assert({m[i].wdata,m[i].wstrb,m[i].wlast} === {s.wdata,s.wstrb,s.wlast}) else $fatal(1,"W payload");
+        assign wd[i]=m[i].wdata; assign ws[i]=m[i].wstrb; assign wl[i]=m[i].wlast;
+        assert property (@(posedge clk) disable iff (!resetn)
+            awv[i] && !awready[i] |=> awv[i] && $stable(aw_payload[i]))
+            else $fatal(1,"stalled AW changed");
+        assert property (@(posedge clk) disable iff (!resetn)
+            arv[i] && !arready[i] |=> arv[i] && $stable(ar_payload[i]))
+            else $fatal(1,"stalled AR changed");
+        assert property (@(posedge clk) disable iff (!resetn)
+            wv[i] && !wready[i] |=> wv[i] && $stable({wd[i],ws[i],wl[i]}))
+            else $fatal(1,"stalled W changed");
+        assign aw_payload[i]={m[i].awaddr,m[i].awid,m[i].awlen,m[i].awsize,
+            m[i].awburst,m[i].awlock,m[i].awcache,m[i].awprot,m[i].awqos,m[i].awregion};
+        assign ar_payload[i]={m[i].araddr,m[i].arid,m[i].arlen,m[i].arsize,
+            m[i].arburst,m[i].arlock,m[i].arcache,m[i].arprot,m[i].arqos,m[i].arregion};
+        always_comb begin
+            arready[i]=resetn && !read_active[i] && !hold_slaves && random_state[i%8];
+            awready[i]=resetn && !write_active[i] && !write_response[i] &&
+                !hold_slaves && random_state[(i+3)%8];
+            wready[i]=resetn && write_active[i] && !hold_slaves && random_state[(i+7)%16];
+            rvalid[i]=read_active[i] || (noise && i!=read_region);
+            rlast[i]=read_active[i] ? read_beat[i]==read_length[i] : 1'b1;
+            rdata[i]=read_active[i] ? read_value(i,read_beat[i]) : 128'hbad;
+            rid[i]=read_active[i] ? read_id[i] : 2'(i);
+            rresp[i]=read_active[i] ? 2'(i%3) : 2'b10;
+            bvalid[i]=write_response[i] || (noise && i!=write_region);
+            bid[i]=write_response[i] ? write_id[i] : 2'(i);
+            bresp[i]=write_response[i] ? 2'(i%3) : 2'b10;
         end
     end
+
+    // Slave models check accepted transaction history, not the current master
+    // buses: elastic stages may legitimately outlive the upstream handshake.
+    always @(posedge clk) begin
+        if(!resetn) begin
+            random_state<=32'h13579bdf;
+            read_active<='0; write_active<='0; write_response<='0;
+            read_length<='0; write_length<='0; read_id<='0; write_id<='0;
+            for(int i=0;i<N;i++) begin read_beat[i]<=0; write_beat[i]<=0; end
+        end else begin
+            random_state<={random_state[30:0],random_state[31]^random_state[21]^random_state[1]^random_state[0]};
+            for(int i=0;i<N;i++) begin
+                if(checking && arv[i]) begin
+                    assert(i==read_region && ar_payload[i]===expected_ar) else $fatal(1,"AR ownership/payload");
+                end
+                if(checking && awv[i]) begin
+                    assert(i==write_region && aw_payload[i]===expected_aw) else $fatal(1,"AW ownership/payload");
+                end
+                if(arv[i] && arready[i]) begin
+                    read_active[i]<=1; read_length[i]<=ar_payload[i].len;
+                    read_id[i]<=ar_payload[i].id; read_beat[i]<=0;
+                    accepted_ar++;
+                end
+                if(awv[i] && awready[i]) begin
+                    write_active[i]<=1; write_length[i]<=aw_payload[i].len;
+                    write_id[i]<=aw_payload[i].id; write_beat[i]<=0;
+                    accepted_aw++;
+                end
+                if(wv[i] && wready[i]) begin
+                    assert(checking && i==write_region && wd[i]===write_value(write_beat[i]) &&
+                        ws[i]===write_mask(write_beat[i]) && wl[i]==(write_beat[i]==write_length[i]))
+                        else $fatal(1,"W ownership/payload/last");
+                    accepted_w++;
+                    if(wl[i]) begin write_active[i]<=0; write_response[i]<=1; end
+                    else write_beat[i]<=write_beat[i]+1;
+                end
+                if(rvalid[i] && rr[i]) begin
+                    assert(read_active[i]) else $fatal(1,"unselected R response acknowledged");
+                    if(rlast[i]) read_active[i]<=0;
+                    else read_beat[i]<=read_beat[i]+1;
+                end
+                if(bvalid[i] && br[i]) begin
+                    assert(write_response[i]) else $fatal(1,"unselected B response acknowledged");
+                    write_response[i]<=0;
+                end
+            end
+        end
+    end
+
+    assert property (@(posedge clk) disable iff (!resetn)
+        s.rvalid && !s.rready |=> s.rvalid && $stable({s.rdata,s.rid,s.rresp,s.rlast}))
+        else $fatal(1,"stalled R changed");
+    assert property (@(posedge clk) disable iff (!resetn)
+        s.bvalid && !s.bready |=> s.bvalid && $stable({s.bid,s.bresp}))
+        else $fatal(1,"stalled B changed");
+
     task tick; @(posedge clk); #1; @(negedge clk); #1; endtask
-    task check(input logic condition,input string message);
-        assert(condition) else $fatal(1,"%s",message);
+    task send_aw(input int delay_cycles);
+        repeat(delay_cycles) tick();
+        @(negedge clk);
+        {s.awaddr,s.awid,s.awlen,s.awsize,s.awburst,s.awlock,s.awcache,s.awprot,s.awqos,s.awregion}=expected_aw;
+        s.awvalid=1;
+        do @(posedge clk); while(!s.awready);
+        @(negedge clk); s.awvalid=0; s.awaddr=64'hdeadbeef;
     endtask
+    task send_ar(input int delay_cycles);
+        repeat(delay_cycles) tick();
+        @(negedge clk);
+        {s.araddr,s.arid,s.arlen,s.arsize,s.arburst,s.arlock,s.arcache,s.arprot,s.arqos,s.arregion}=expected_ar;
+        s.arvalid=1;
+        do @(posedge clk); while(!s.arready);
+        @(negedge clk); s.arvalid=0; s.araddr=64'hbad0bad0;
+    endtask
+    task send_write_data(input int delay_cycles);
+        repeat(delay_cycles) tick();
+        @(negedge clk); s.wvalid=1;
+        for(int beat=0;beat<=expected_aw.len;beat++) begin
+            s.wdata=write_value(beat); s.wstrb=write_mask(beat); s.wlast=(beat==expected_aw.len);
+            do @(posedge clk); while(!s.wready);
+            @(negedge clk);
+        end
+        s.wvalid=0; s.wdata='1; s.wstrb=0; s.wlast=0;
+    endtask
+    task receive_read;
+        int beat;
+        beat=0;
+        repeat(7) tick();
+        while(beat<=expected_ar.len) begin
+            @(negedge clk); s.rready=random_state[11] || random_state[18];
+            @(posedge clk);
+            if(s.rvalid) begin
+                assert(s.rid==expected_ar.id && s.rlast==(beat==expected_ar.len)) else $fatal(1,"R id/last");
+                assert(s.rresp==(read_region<0 ? 2'b11 : 2'(read_region%3))) else $fatal(1,"R response");
+                assert(s.rdata===(read_region<0 ? 128'b0 : read_value(read_region,beat))) else $fatal(1,"R data/order");
+                if(s.rready) beat++;
+            end
+        end
+        @(negedge clk); s.rready=0;
+    endtask
+    task receive_write;
+        repeat(11) tick();
+        @(negedge clk);
+        while(!s.bvalid) @(negedge clk);
+        repeat(3) begin
+            assert(s.bvalid && s.bid==expected_aw.id &&
+                s.bresp==(write_region<0 ? 2'b11 : 2'(write_region%3))) else $fatal(1,"B response/owner/stability");
+            tick();
+        end
+        s.bready=1; @(posedge clk); @(negedge clk); s.bready=0;
+    endtask
+    task transaction(input int ordinal, input int hole);
+        @(negedge clk);
+        sequence_number=ordinal;
+        write_region=hole ? -1 : ordinal%N;
+        read_region=hole ? -1 : (ordinal+1)%N;
+        expected_aw='{BASE+64'(ordinal%N)*64'h200000+64'h1fffc0,
+            2'(ordinal),8'(ordinal%4),3'd4,2'd1,1'(ordinal),4'(ordinal),3'(ordinal),4'd7,4'd13};
+        expected_ar='{BASE+64'((ordinal+1)%N)*64'h200000+64'h100,
+            2'(ordinal+1),8'((ordinal+2)%4),3'd4,2'd1,1'(ordinal),4'd9,3'd5,4'd11,4'd6};
+        if(hole) begin
+            expected_aw.addr=hole==1 ? BASE+64'(N)*64'h200000 : BASE+64'h100000000;
+            expected_ar.addr=expected_aw.addr;
+            expected_aw.len=3; expected_ar.len=3;
+        end
+        accepted_ar=0; accepted_aw=0; accepted_w=0;
+        checking=1; noise=1;
+        fork
+            send_aw(ordinal%2 ? 4 : 0);
+            send_ar(ordinal%3);
+            send_write_data(ordinal%2 ? 0 : 4);
+            receive_read();
+            receive_write();
+        join
+        @(negedge clk); checking=0; noise=0;
+        assert(accepted_ar==(hole ? 0 : 1) && accepted_aw==(hole ? 0 : 1) &&
+            accepted_w==(hole ? 0 : int'(expected_aw.len)+1)) else $fatal(1,"transaction transfer counts");
+    endtask
+
     initial begin
-        s.tie_off_m(); arready=0; awready=0; wready=0; rvalid=0; rlast=0; bvalid=0;
-        rdata=0; rid=0; rresp=0; bid=0; bresp=0;
+        s.tie_off_m(); accepted_ar=0; accepted_aw=0; accepted_w=0;
         tick(); tick(); resetn=1;
-        s.arburst=1; s.arsize=4; s.arcache=9; s.arlock=1; s.arprot=5; s.arqos=11; s.arregion=6;
-        s.awburst=1; s.awsize=4; s.awcache=3; s.awlock=1; s.awprot=2; s.awqos=7; s.awregion=13;
-        for(int region=0;region<N;region++) begin
-            // Early W must not move before AW in the routed topology.
-            s.wvalid=1; s.wlast=0; s.wdata=128'h9876543210; s.wstrb=16'ha55a;
-            if(N>1) begin #1; check(wv==0 && !s.wready,"W before AW"); end
-            s.awaddr=BASE+64'(region)*64'h200000+64'h1fffc0; s.awlen=2; s.awid=2'(region+1); s.awvalid=1;
-            s.araddr=BASE+64'((region+1)%N)*64'h200000+64'h100; s.arlen=1; s.arid=2'(region+2); s.arvalid=1;
-            #1; check(awv==(N'(1)<<region),"AW isolation"); check(arv==(N'(1)<<((region+1)%N)),"AR isolation");
-            repeat(3) begin check(!s.awready && !s.arready,"address backpressure"); tick(); end
-            awready='1; arready='1; tick(); s.awvalid=0; s.arvalid=0;
-            // Mutating the address buses must not change in-flight data/response owners.
-            s.awaddr=BASE; s.araddr=BASE;
-            #1; check(wv==(N'(1)<<region),"write owner retained"); check(!s.wready,"write backpressure");
-            repeat(2) tick();
-            for(int beat=0;beat<3;beat++) begin
-                s.wdata=128'(1000+region*10+beat); s.wlast=(beat==2); s.wstrb=16'(16'hf00f^beat);
-                wready='1; tick(); wready=0;
-            end
-            s.wvalid=0;
-            // Every endpoint may present a distinct response; only owners are visible.
-            for(int k=0;k<N;k++) begin
-                rvalid[k]=1; rlast[k]=0; rdata[k]=128'(100+k); rid[k]=2'(k); rresp[k]=2'(k%3);
-                bvalid[k]=1; bid[k]=2'(k); bresp[k]=2'(k%3);
-            end
-            #1; check(s.rvalid && s.rdata==128'(100+(region+1)%N),"read response owner");
-            check(s.bvalid && s.bid==2'(region) && s.bresp==2'(region%3),"write response owner");
-            check(rr==0 && br==0,"response backpressure");
-            repeat(3) tick();
-            s.rready=1; #1; check(rr==(N'(1)<<((region+1)%N)),"RREADY isolation"); tick();
-            rlast='1; for(int k=0;k<N;k++) rdata[k]=128'(200+k);
-            #1; check(s.rlast && s.rdata==128'(200+(region+1)%N),"read burst last"); tick();
-            s.rready=0; rvalid=0;
-            s.bready=1; #1; check(br==(N'(1)<<region),"BREADY isolation"); tick();
-            s.bready=0; bvalid=0; arready=0; awready=0;
-            if(N>1) begin #1; check(!s.rvalid && !s.bvalid && rr==0 && br==0,"completed owner released"); end
+        for(int ordinal=0;ordinal<48;ordinal++) transaction(ordinal,0);
+        if(N>1) begin transaction(49,1); transaction(50,2); end
+        // Abandon buffered requests under reset, then prove clean recovery.
+        @(negedge clk); hold_slaves=1; checking=0; noise=0;
+        s.awaddr=BASE; s.araddr=BASE; s.awvalid=1; s.arvalid=1;
+        s.wvalid=1; s.wlast=1; s.wdata=128'hffff;
+        repeat(4) tick();
+        resetn=0; s.awvalid=0; s.arvalid=0; s.wvalid=0;
+        tick(); tick(); resetn=1;
+        repeat(3) tick(); hold_slaves=0;
+        repeat(8) begin
+            tick(); assert(awv==0 && arv==0 && wv==0 && !s.rvalid && !s.bvalid)
+                else $fatal(1,"reset retained a transaction");
         end
-        if(N>1) begin
-            // Unmapped rounded aperture tail and a high-address alias: burst DECERR.
-            for(int hole=0;hole<2;hole++) begin
-                s.awaddr=hole ? BASE+64'h100000000 : BASE+64'(N)*64'h200000;
-                s.araddr=s.awaddr; s.awlen=3; s.arlen=3; s.awid=3; s.arid=2;
-                s.awvalid=1; s.arvalid=1; #1;
-                check(awv==0 && arv==0 && s.awready && s.arready,"hole decode"); tick();
-                s.awvalid=0; s.arvalid=0; s.wvalid=1;
-                for(int beat=0;beat<4;beat++) begin
-                    s.wlast=(beat==3); #1; check(s.wready && wv==0,"hole write drain"); tick();
-                end
-                s.wvalid=0; #1; check(s.bvalid && s.bresp==3 && s.bid==3,"hole B DECERR");
-                repeat(2) tick();
-                for(int beat=0;beat<4;beat++) begin
-                    #1; check(s.rvalid && s.rresp==3 && s.rid==2 && s.rlast==(beat==3),"hole R DECERR burst");
-                    s.rready=0; tick(); s.rready=1; tick();
-                end
-                s.rready=0; s.bready=1; tick(); s.bready=0;
-            end
-            // Reset abandons ownership and suppresses routed valid/ready.
-            s.awaddr=BASE; s.awvalid=1; awready='1; tick(); s.awvalid=0;
-            resetn=0; tick(); #1; check(wv==0 && rr==0 && br==0 && !s.bvalid && !s.rvalid,"reset isolation");
-            resetn=1; tick();
-        end
-        $display("PASS actual rendered debug connectivity N=%0d",N); $finish;
+        transaction(51,0);
+        $display("PASS registered debug transactions N=%0d",N); $finish;
     end
-    initial begin #100000; $fatal(1,"timeout"); end
+    initial begin #400000; $fatal(1,"timeout"); end
 endmodule

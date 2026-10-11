@@ -1,8 +1,40 @@
 // Resident AXI routing for independently addressed application debug hubs.
-// Each vendor hub owns its complete 2 MiB aperture. One transaction per
-// direction is retained until its response completes; read/write are independent.
+// Each vendor hub owns its complete 2 MiB aperture. The demultiplexer retains
+// one routed transaction per direction; elastic boundaries preserve ordering
+// while read and write channels operate independently.
 `include "axi_macros.svh"
 module axi_debug_router #(
+    parameter integer N_REGIONS = 1,
+    parameter logic [63:0] BASE_ADDR = 64'h0000020240000000
+)(
+    input logic aclk,
+    input logic aresetn,
+    AXI4.s s_axi,
+    AXI4.m m_axi [N_REGIONS]
+);
+    if (N_REGIONS == 1) begin : direct
+        `AXI_ASSIGN(s_axi, m_axi[0])
+    end else begin : buffered
+        AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ID_BITS(2)) request(aclk);
+        AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ID_BITS(2)) selected[N_REGIONS](aclk);
+        // Separate the fixed NoC endpoint, address decode, and each RP. Return
+        // channels are buffered after ownership selection, never before it.
+        axi_buffer ingress (
+            .aclk(aclk), .aresetn(aresetn), .s_axi(s_axi), .m_axi(request)
+        );
+        axi_debug_demux #(.N_REGIONS(N_REGIONS), .BASE_ADDR(BASE_ADDR)) demux (
+            .aclk(aclk), .aresetn(aresetn), .s_axi(request), .m_axi(selected)
+        );
+        for (genvar region = 0; region < N_REGIONS; region++) begin : endpoint
+            axi_buffer #(.REGISTER_RESPONSES(1'b0)) boundary (
+                .aclk(aclk), .aresetn(aresetn),
+                .s_axi(selected[region]), .m_axi(m_axi[region])
+            );
+        end
+    end
+endmodule
+
+module axi_debug_demux #(
     parameter integer N_REGIONS = 1,
     parameter logic [63:0] BASE_ADDR = 64'h0000020240000000
 )(

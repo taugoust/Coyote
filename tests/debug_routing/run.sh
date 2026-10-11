@@ -7,7 +7,8 @@ for n in 1 3; do
   verilator --binary --timing --assert --top-module tb -GN=$n \
     -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD \
     -I"$root/hw/hdl/pkg" --Mdir "$work/obj" \
-    "$work/axi4.sv" "$root/hw/hdl/common/axi_debug_router.sv" \
+    "$work/axi4.sv" "$root/hw/hdl/common/axi_buffer.sv" \
+    "$root/hw/hdl/common/axi_debug_router.sv" \
     "$work/connectivity.sv" "$root/tests/debug_routing/tb.sv"
   "$work/obj/Vtb"
 done
