@@ -301,3 +301,20 @@ matching shell/application boundary. It does not change RP geometry, clocks or
 relax timing/DFX validation. Registering the boundary follows AMD's DFX interface
 recommendation, but successful routing and timing closure still require physical
 validation.
+
+Resident control pipeline placement
+-----------------------------------
+
+RP-facing control pipelines use the named hierarchy
+``region_control_pipeline[i].inst_control`` and the metadata instances
+``inst_notify``, ``inst_host_sq``, ``inst_read_sq``, ``inst_write_sq``,
+``inst_read_cq`` and ``inst_write_cq``. Individual AXI-Lite and metadata
+register stages are named ``stages[j].inst_reg``. This permits placing the
+stage facing an RP near its boundary without also forcing the intervening
+pipeline stages into that region. Select stage indices using the configured
+``NR_DH_S0`` and ``NR_DH_S1`` counts.
+
+AXI debug channel buffers retain their synthesis hierarchy so local occupancy
+feedback can be placed with its storage, rather than merging into a distant
+routing selector. These names and hierarchy attributes do not add pipeline
+cycles or alter the single-region debug bypass.

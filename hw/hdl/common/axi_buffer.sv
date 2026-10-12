@@ -1,5 +1,6 @@
 // Registered-capacity AXI channels. Payload is retained without reset; channel
 // ownership is discarded synchronously on reset. No ready path crosses a FIFO.
+(* keep_hierarchy = "yes" *)
 module axi_channel_buffer #(
     parameter integer WIDTH = 1
 )(
@@ -45,6 +46,7 @@ module axi_channel_buffer #(
     end
 endmodule
 
+(* keep_hierarchy = "yes" *)
 module axi_buffer #(
     parameter bit REGISTER_RESPONSES = 1'b1
 )(
