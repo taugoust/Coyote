@@ -309,7 +309,8 @@ RP-facing control pipelines use the named hierarchy
 ``region_control_pipeline[i].inst_control`` and the metadata instances
 ``inst_notify``, ``inst_host_sq``, ``inst_read_sq``, ``inst_write_sq``,
 ``inst_read_cq`` and ``inst_write_cq``. Individual AXI-Lite and metadata
-register stages are named ``stages[j].inst_reg``. This permits placing the
+register stages are named ``stages[j].inst_reg``. Host stream arrays similarly
+use ``host_stream_pipeline[i]`` with named AXI-stream stages. This permits placing the
 stage facing an RP near its boundary without also forcing the intervening
 pipeline stages into that region. Select stage indices using the configured
 ``NR_DH_S0`` and ``NR_DH_S1`` counts.
@@ -318,3 +319,12 @@ AXI debug channel buffers retain their synthesis hierarchy so local occupancy
 feedback can be placed with its storage, rather than merging into a distant
 routing selector. These names and hierarchy attributes do not add pipeline
 cycles or alter the single-region debug bypass.
+
+Static decouple distribution uses a shared prefix and independently placeable
+last registers for stream and AXI control interfaces. Both copies retain exactly
+``N_REG_STA_DCPL - 1`` clock cycles of latency. Registered copies reset to zero;
+the zero-latency configuration remains a direct wire, matching the original
+behavior. The synchronous source remains the static decouple
+selector; this is not a replacement for a CDC synchronizer. The named
+``inst_decouple_pipeline/buffered.prefix`` and ``buffered.copies`` stages allow
+local control distribution without adding a reconfiguration delay cycle.

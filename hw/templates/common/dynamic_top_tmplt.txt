@@ -302,7 +302,7 @@ module design_dynamic_top #(
     AXI4S axis_host_in_s4 [N_REGIONS] ();
     AXI4S axis_host_out_s4 [N_REGIONS] ();
 
-    for(genvar i = 0; i < N_REGIONS; i++) begin
+    for(genvar i = 0; i < N_REGIONS; i++) begin : host_stream_pipeline
 {% if cnfg.en_uclk %}
         axis_reg_array #(.N_STAGES(N_REG_DYN_HOST_S1)) inst_host_axis_reg_arr_s1_in  (.aclk(uclk), .aresetn(uresetn), .s_axis(axis_host_in_s3[i]),  .m_axis(axis_host_in_s4[i]));
         axis_reg_array #(.N_STAGES(N_REG_DYN_HOST_S1)) inst_host_axis_reg_arr_s1_out (.aclk(uclk), .aresetn(uresetn), .s_axis(axis_host_out_s4[i]), .m_axis(axis_host_out_s3[i]));
