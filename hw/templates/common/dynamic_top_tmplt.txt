@@ -182,6 +182,9 @@ module design_dynamic_top #(
     output logic                                s_axi_debug_hub_bvalid,
     input  logic                                dclk,
     input  logic                                dresetn,
+{% if cnfg.en_debug_reset_copies %}
+    input logic [N_REGIONS-1:0]                  region_dresetn,
+{% endif %}
 {% endif %}
 
     // Clock and reset
@@ -1493,7 +1496,11 @@ module design_dynamic_top #(
         .s_axi_debug_hub_bready(axi_debug_region[{{ i }}].bready),
         .s_axi_debug_hub_bvalid(axi_debug_region[{{ i }}].bvalid),
         .dclk(dclk),
+{% if cnfg.en_debug_reset_copies %}
+        .dresetn(region_dresetn[{{ i }}]),
+{% else %}
         .dresetn(dresetn),
+{% endif %}
 {% endif %}
 
 {% if cnfg.en_uclk %}

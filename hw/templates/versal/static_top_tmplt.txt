@@ -34,6 +34,9 @@ import lynxTypes::*;
 module static_top (
     // Clock & reset
     output logic                            xresetn,
+{% if cnfg.en_debug_reset_copies %}
+    output logic [N_REGIONS:0]               debug_resetn,
+{% endif %}
     output logic                            xclk,
 
     // ISR
@@ -448,6 +451,9 @@ module static_top (
         .eos_resetn(eos_resetn),
         .eos_pmc(eos_pmc),
         .xclk(xclk),
+{% if cnfg.en_debug_reset_copies %}
+        .debug_resetn(debug_resetn),
+{% endif %}
         .xresetn(xresetn)
     );
 

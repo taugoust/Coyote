@@ -29,6 +29,10 @@ proc cr_bd_design_static { parentCell } {
   upvar #0 cfg cnfg
 
   set design_name design_static
+  set debug_reset_copies [expr {[info exists cnfg(en_debug_reset_copies)] && $cnfg(en_debug_reset_copies) == 1}]
+  if {$debug_reset_copies && ($cnfg(n_reg) < 2 || $cnfg(n_reg) > 14)} {
+    error "Independent debug resets require 2..14 regions"
+  }
   set r5_platform_enabled [expr {
     [info exists cnfg(en_v80_r5_platform)] && $cnfg(en_v80_r5_platform) eq 1
   }]
@@ -196,6 +200,9 @@ proc cr_bd_design_static { parentCell } {
 
   # Shell reset
   set xresetn [ create_bd_port -dir O -type rst xresetn ]
+  if {$debug_reset_copies} {
+    create_bd_port -dir O -from $cnfg(n_reg) -to 0 -type rst debug_resetn
+  }
 
   # Static layer reset
   set sresetn [ create_bd_port -dir O -type rst sresetn ]
@@ -225,6 +232,14 @@ proc cr_bd_design_static { parentCell } {
   # Reset controllers
   set proc_sys_reset_s [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_s ]
   set proc_sys_reset_x [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_x ]
+  if {$debug_reset_copies} {
+    set reset_outputs [expr {$cnfg(n_reg) + 2}]
+    set_property CONFIG.C_NUM_PERP_ARESETN $reset_outputs $proc_sys_reset_x
+    create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 reset_normal_slice
+    set_property -dict [list CONFIG.DIN_WIDTH $reset_outputs CONFIG.DIN_FROM 0 CONFIG.DIN_TO 0 CONFIG.DOUT_WIDTH 1] [get_bd_cells reset_normal_slice]
+    create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 reset_debug_slice
+    set_property -dict [list CONFIG.DIN_WIDTH $reset_outputs CONFIG.DIN_FROM [expr {$reset_outputs-1}] CONFIG.DIN_TO 1 CONFIG.DOUT_WIDTH [expr {$reset_outputs-1}]] [get_bd_cells reset_debug_slice]
+  }
   if {$r5_platform_enabled} {
     set proc_sys_reset_r5 [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_r5 ]
   }
@@ -751,7 +766,13 @@ proc cr_bd_design_static { parentCell } {
   }
 
   # Shell reset
-  connect_bd_net [get_bd_ports xresetn] [get_bd_pins proc_sys_reset_x/peripheral_aresetn]
+  if {$debug_reset_copies} {
+    connect_bd_net [get_bd_pins proc_sys_reset_x/peripheral_aresetn] [get_bd_pins reset_normal_slice/Din] [get_bd_pins reset_debug_slice/Din]
+    connect_bd_net [get_bd_ports xresetn] [get_bd_pins reset_normal_slice/Dout]
+    connect_bd_net [get_bd_ports debug_resetn] [get_bd_pins reset_debug_slice/Dout]
+  } else {
+    connect_bd_net [get_bd_ports xresetn] [get_bd_pins proc_sys_reset_x/peripheral_aresetn]
+  }
   connect_bd_net [get_bd_ports eos_resetn] [get_bd_pins proc_sys_reset_x/ext_reset_in]
   connect_bd_net [get_bd_pins proc_sys_reset_x/slowest_sync_clk] [get_bd_pins clk_wiz_0/clk_out1]
 

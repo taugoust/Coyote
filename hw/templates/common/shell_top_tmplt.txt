@@ -34,6 +34,9 @@ import lynxTypes::*;
 module shell_top (
     // Shell clocks
     (* io_buffer_type = "none" *) input  logic                              xresetn,
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_debug_reset_copies %}
+    (* io_buffer_type = "none" *) input logic [N_REGIONS:0] debug_resetn,
+{% endif %}
     (* io_buffer_type = "none" *) input  logic                              xclk,
     
 {% if cnfg.fpga_arch == 'ultrascale_plus' %}
@@ -1714,7 +1717,12 @@ module shell_top (
         .s_axi_debug_hub_bready(s_axi_debug_hub_bready),
         .s_axi_debug_hub_bvalid(s_axi_debug_hub_bvalid),
         .dclk(xclk),
+{% if cnfg.en_debug_reset_copies %}
+        .dresetn(debug_resetn[0]),
+        .region_dresetn(debug_resetn[N_REGIONS:1]),
+{% else %}
         .dresetn(xresetn),
+{% endif %}
 {% endif %}
         .aresetn(aresetn),
         .aclk(aclk),

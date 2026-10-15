@@ -302,6 +302,24 @@ relax timing/DFX validation. Registering the boundary follows AMD's DFX interfac
 recommendation, but successful routing and timing closure still require physical
 validation.
 
+Independent debug reset outputs
+-------------------------------
+
+``EN_DEBUG_RESET_COPIES=1`` opts a 2..14-region Versal shell into independent
+reset output registers for the debug router and each application hub. The
+existing reset controller provides ``N_REGIONS + 2`` peripheral reset outputs:
+output zero remains the normal shell reset, output one drives the debug router,
+and subsequent outputs drive the corresponding application hub. The vendor
+controller's final registers have identical clock, data, enable, reset and
+initial state; no assertion/deassertion cycle or pulse filtering changes.
+The default remains off, preserving existing single-region interfaces.
+
+The setting is exported and requires matching static/shell sources. The
+application wrapper's scalar ``dresetn`` port is unchanged. This is physical
+fanout separation, not permission to remove reset timing checks, add false
+paths or delay only one side of an AXI transaction. Integrated synthesis must
+retain the independent drivers before they can be placed near their consumers.
+
 Resident control pipeline placement
 -----------------------------------
 

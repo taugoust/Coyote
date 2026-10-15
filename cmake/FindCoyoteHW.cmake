@@ -74,6 +74,7 @@ set(SIM_EXTERNAL_DYNAMIC_SERVICE 0 CACHE STRING "Include the registered external
 # Enable streams from host
 set(EN_STRM 1 CACHE STRING "Enable host streams")
 set(EN_USER_HOST_OUTPUT_REG 0 CACHE BOOL "Register the application host-stream output boundary")
+set(EN_DEBUG_RESET_COPIES 0 CACHE BOOL "Export independent same-cycle Versal debug reset outputs")
 
 # Number of parallel streams from host (per vFPGA)
 set(N_STRM_AXI 1 CACHE STRING "Number of host streams")
@@ -1420,6 +1421,7 @@ macro(validation_checks_hw)
         set(COPROCESSOR_PROVIDER_DESCRIPTORS "")
         # Older shell exports have an unregistered host output boundary.
         set(EN_USER_HOST_OUTPUT_REG 0)
+        set(EN_DEBUG_RESET_COPIES 0)
         include("${SHELL_PATH}/export.cmake")
         set(COMP_CORES "${_application_comp_cores}")
 
@@ -1459,6 +1461,14 @@ macro(validation_checks_hw)
         set(EN_USER_HOST_OUTPUT_REG 0)
     endif()
 
+    if(EN_DEBUG_RESET_COPIES)
+        if(NOT FPGA_ARCH STREQUAL "versal" OR N_REGIONS LESS 2 OR N_REGIONS GREATER 14)
+            message(FATAL_ERROR "Independent debug resets require Versal with 2..14 regions")
+        endif()
+        set(EN_DEBUG_RESET_COPIES 1)
+    else()
+        set(EN_DEBUG_RESET_COPIES 0)
+    endif()
     _validate_external_dynamic_service()
     _validate_coprocessor_interface()
 endmacro()
