@@ -26,7 +26,9 @@ module axi_channel_buffer #(
     assign push = s_valid && s_ready;
     assign pop = m_valid && m_ready;
     always_ff @(posedge aclk) begin
-        if (push) begin
+        // Only the free bank may be overwritten. Capture payload using local
+        // capacity; remote valid advances ownership, not every payload FF.
+        if (s_ready) begin
             if (write_pointer) bank1 <= s_data;
             else bank0 <= s_data;
         end
