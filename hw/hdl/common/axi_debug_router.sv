@@ -5,13 +5,22 @@
 `include "axi_macros.svh"
 module axi_debug_router #(
     parameter integer N_REGIONS = 1,
-    parameter logic [63:0] BASE_ADDR = 64'h0000020240000000
+    parameter logic [63:0] BASE_ADDR = 64'h0000020240000000,
+    parameter bit USE_REGION_RESETS = 1'b0
 )(
     input logic aclk,
     input logic aresetn,
     AXI4.s s_axi,
-    AXI4.m m_axi [N_REGIONS]
+    AXI4.m m_axi [N_REGIONS],
+    input logic [N_REGIONS-1:0] region_aresetn
 );
+`ifndef SYNTHESIS
+    if (USE_REGION_RESETS && N_REGIONS > 1) begin
+        always @(posedge aclk)
+            assert (region_aresetn == {N_REGIONS{aresetn}})
+                else $fatal(1, "debug reset copies must be cycle-identical");
+    end
+`endif
     if (N_REGIONS == 1) begin : direct
         `AXI_ASSIGN(s_axi, m_axi[0])
     end else begin : buffered
@@ -19,29 +28,54 @@ module axi_debug_router #(
         AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ID_BITS(2)) selected[N_REGIONS](aclk);
         // Separate the fixed NoC endpoint, address decode, and each RP. Return
         // channels are buffered after ownership selection, never before it.
-        axi_buffer ingress (
+        // Reset-qualified demux valid and endpoint ready protect this private
+        // capacity signal without routing global reset through the FIFO.
+        axi_buffer #(.GATE_RESPONSE_READY_ON_RESET(1'b0)) ingress (
             .aclk(aclk), .aresetn(aresetn), .s_axi(s_axi), .m_axi(request)
         );
-        axi_debug_demux #(.N_REGIONS(N_REGIONS), .BASE_ADDR(BASE_ADDR)) demux (
-            .aclk(aclk), .aresetn(aresetn), .s_axi(request), .m_axi(selected)
+        axi_debug_demux #(.N_REGIONS(N_REGIONS), .BASE_ADDR(BASE_ADDR),
+            .USE_REGION_RESETS(USE_REGION_RESETS)) demux (
+            .aclk(aclk), .aresetn(aresetn), .s_axi(request), .m_axi(selected),
+            .region_aresetn(region_aresetn)
         );
         for (genvar region = 0; region < N_REGIONS; region++) begin : endpoint
             axi_buffer #(.REGISTER_RESPONSES(1'b0)) boundary (
-                .aclk(aclk), .aresetn(aresetn),
+                .aclk(aclk),
+                .aresetn(USE_REGION_RESETS ? region_aresetn[region] : aresetn),
                 .s_axi(selected[region]), .m_axi(m_axi[region])
             );
         end
     end
 endmodule
 
+// Keep response eligibility at the endpoint, not in a distant routing mux.
+(* keep_hierarchy = "yes" *)
+module axi_debug_response_ready_gate #(
+    parameter integer SEL_BITS = 1,
+    parameter integer REGION = 0
+)(
+    input logic aresetn,
+    input logic read_active, write_active, write_done,
+    input logic [SEL_BITS-1:0] read_selection, write_selection,
+    input logic upstream_read_ready, upstream_write_ready,
+    output logic read_ready, write_ready
+);
+    assign read_ready = aresetn && read_active &&
+        read_selection == SEL_BITS'(REGION) && upstream_read_ready;
+    assign write_ready = aresetn && write_active && write_done &&
+        write_selection == SEL_BITS'(REGION) && upstream_write_ready;
+endmodule
+
 module axi_debug_demux #(
     parameter integer N_REGIONS = 1,
-    parameter logic [63:0] BASE_ADDR = 64'h0000020240000000
+    parameter logic [63:0] BASE_ADDR = 64'h0000020240000000,
+    parameter bit USE_REGION_RESETS = 1'b0
 )(
     input logic aclk,
     input logic aresetn,
     AXI4.s s_axi,
-    AXI4.m m_axi [N_REGIONS]
+    AXI4.m m_axi [N_REGIONS],
+    input logic [N_REGIONS-1:0] region_aresetn
 );
     if (N_REGIONS == 1) begin : direct
         `AXI_ASSIGN(s_axi, m_axi[0])
@@ -95,8 +129,13 @@ module axi_debug_demux #(
             assign m_axi[i].wstrb = s_axi.wstrb;
             assign m_axi[i].wlast = s_axi.wlast;
             assign m_axi[i].wvalid = aresetn && wr_active && !wr_data_done && wr_sel == i && s_axi.wvalid;
-            assign m_axi[i].rready = aresetn && rd_active && rd_sel == i && s_axi.rready;
-            assign m_axi[i].bready = aresetn && wr_active && wr_data_done && wr_sel == i && s_axi.bready;
+            axi_debug_response_ready_gate #(.SEL_BITS(SEL_BITS), .REGION(i)) response_ready (
+                .aresetn(USE_REGION_RESETS ? region_aresetn[i] : aresetn),
+                .read_active(rd_active), .write_active(wr_active), .write_done(wr_data_done),
+                .read_selection(rd_sel), .write_selection(wr_sel),
+                .upstream_read_ready(s_axi.rready), .upstream_write_ready(s_axi.bready),
+                .read_ready(m_axi[i].rready), .write_ready(m_axi[i].bready)
+            );
             assign ar_ready[i] = m_axi[i].arready;
             assign aw_ready[i] = m_axi[i].awready;
             assign w_ready[i] = m_axi[i].wready;

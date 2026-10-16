@@ -338,6 +338,16 @@ feedback can be placed with its storage, rather than merging into a distant
 routing selector. These names and hierarchy attributes do not add pipeline
 cycles or alter the single-region debug bypass.
 
+The debug demultiplexer keeps each region's response-ready eligibility in
+``routed.leaf[i].response_ready``. These combinational gates can be placed near
+their hubs without moving the ownership registers or buffering unselected
+responses. With independent debug reset outputs enabled, the region's request
+buffer and response-ready gate use the same reset copy as its hub. All copies
+must remain cycle-identical; they are not independent reset domains. The shared
+response FIFO exposes capacity without reset gating only inside this router:
+reset-qualified response-valid and the endpoint-local ready gates still prevent
+reset-time response acceptance from hubs. No pipeline latency is added.
+
 Static decouple distribution uses a shared prefix and independently placeable
 last registers for stream and AXI control interfaces. Both copies retain exactly
 ``N_REG_STA_DCPL - 1`` clock cycles of latency. Registered copies reset to zero;

@@ -7,6 +7,7 @@ runCommand "coyote-debug-routing" {
   for n in 1 3; do
     python3 "$source/tests/debug_routing/render.py" "$TMPDIR/build/debug-routing-$n" --regions "$n"
   done
+  python3 "$source/tests/debug_routing/render.py" "$TMPDIR/build/debug-routing-3-copies" --regions 3 --reset-copies
   COYOTE_TEST_BUILD_DIR="$TMPDIR/build" bash "$source/tests/debug_routing/run.sh"
   tclsh "$source/tests/debug_routing/tcl_test.tcl" "$source"
   touch "$out"

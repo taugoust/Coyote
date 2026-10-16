@@ -8,11 +8,13 @@ import jinja2
 p = argparse.ArgumentParser()
 p.add_argument("output", type=pathlib.Path)
 p.add_argument("--regions", type=int, required=True)
+p.add_argument("--reset-copies", action="store_true")
 p.add_argument("--template", type=pathlib.Path)
 a = p.parse_args()
 root = pathlib.Path(__file__).resolve().parents[2]
 a.output.mkdir(parents=True, exist_ok=True)
-cfg = collections.defaultdict(int, fpga_arch="versal", en_pr=1, n_reg=a.regions)
+cfg = collections.defaultdict(int, fpga_arch="versal", en_pr=1, n_reg=a.regions,
+                              en_debug_reset_copies=int(a.reset_copies))
 template = a.template or root / "hw/templates/common/dynamic_top_tmplt.txt"
 text = jinja2.Environment().from_string(template.read_text()).render(cnfg=cfg)
 (a.output / "dynamic_top.sv").write_text(text)
@@ -23,6 +25,8 @@ assert len(ports) == 39, len(ports)
 lines = ['`include "axi_macros.svh"', f'module connectivity(input logic dclk, dresetn, AXI4.s upstream, AXI4.m downstream [{a.regions}]);', f'localparam N_REGIONS={a.regions};']
 for direction, width, name in ports:
     lines.append(f'logic {width} {name};')
+if a.reset_copies:
+    lines.append('wire [N_REGIONS-1:0] region_dresetn = {N_REGIONS{dresetn}};')
 lines.append('`AXI_ASSIGN_I2S(upstream, s_axi_debug_hub)')
 # The routing network between the boundary and application instantiations.
 start = text.find('    // Preserve the external checkpoint interface;')

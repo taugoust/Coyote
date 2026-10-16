@@ -1252,8 +1252,14 @@ module design_dynamic_top #(
     AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ADDR_BITS(64), .AXI4_ID_BITS(2)) axi_debug_in (dclk);
     AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ADDR_BITS(64), .AXI4_ID_BITS(2)) axi_debug_region [N_REGIONS] (dclk);
     `AXI_ASSIGN_S2I(s_axi_debug_hub, axi_debug_in)
-    axi_debug_router #(.N_REGIONS(N_REGIONS)) inst_debug_router (
-        .aclk(dclk), .aresetn(dresetn), .s_axi(axi_debug_in), .m_axi(axi_debug_region)
+    axi_debug_router #(.N_REGIONS(N_REGIONS),
+        .USE_REGION_RESETS({{ 1 if cnfg.en_debug_reset_copies else 0 }})) inst_debug_router (
+        .aclk(dclk), .aresetn(dresetn), .s_axi(axi_debug_in), .m_axi(axi_debug_region),
+{% if cnfg.en_debug_reset_copies %}
+        .region_aresetn(region_dresetn)
+{% else %}
+        .region_aresetn({N_REGIONS{dresetn}})
+{% endif %}
     );
 {% endif %}
 {% for i in range(0, cnfg.n_reg) %}

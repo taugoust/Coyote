@@ -61,6 +61,10 @@ module tb;
         assert property (@(posedge clk) disable iff (!resetn)
             wv[i] && !wready[i] |=> wv[i] && $stable({wd[i],ws[i],wl[i]}))
             else $fatal(1,"stalled W changed");
+        if (N > 1) begin
+            assert property (@(posedge clk) !resetn |-> !rr[i] && !br[i])
+                else $fatal(1, "reset exposed response acceptance to a hub");
+        end
         assign aw_payload[i]={m[i].awaddr,m[i].awid,m[i].awlen,m[i].awsize,
             m[i].awburst,m[i].awlock,m[i].awcache,m[i].awprot,m[i].awqos,m[i].awregion};
         assign ar_payload[i]={m[i].araddr,m[i].arid,m[i].arlen,m[i].arsize,

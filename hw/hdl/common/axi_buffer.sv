@@ -2,7 +2,10 @@
 // ownership is discarded synchronously on reset. No ready path crosses a FIFO.
 (* keep_hierarchy = "yes" *)
 module axi_channel_buffer #(
-    parameter integer WIDTH = 1
+    parameter integer WIDTH = 1,
+    // Disabling the gate exposes capacity only; the caller must suppress
+    // transfers during reset at its public interface.
+    parameter bit GATE_READY_ON_RESET = 1'b1
 )(
     input logic aclk,
     input logic aresetn,
@@ -20,7 +23,7 @@ module axi_channel_buffer #(
     initial begin
         if (WIDTH < 1) $fatal(1, "AXI channel width must be positive");
     end
-    assign s_ready = aresetn && count != 2;
+    assign s_ready = (!GATE_READY_ON_RESET || aresetn) && count != 2;
     assign m_valid = count != 0;
     assign m_data = read_pointer ? bank1 : bank0;
     assign push = s_valid && s_ready;
@@ -50,7 +53,8 @@ endmodule
 
 (* keep_hierarchy = "yes" *)
 module axi_buffer #(
-    parameter bit REGISTER_RESPONSES = 1'b1
+    parameter bit REGISTER_RESPONSES = 1'b1,
+    parameter bit GATE_RESPONSE_READY_ON_RESET = 1'b1
 )(
     input logic aclk,
     input logic aresetn,
@@ -97,14 +101,14 @@ module axi_buffer #(
         .m_valid(m_axi.wvalid), .m_ready(m_axi.wready)
     );
     if (REGISTER_RESPONSES) begin : responses
-        axi_channel_buffer #(.WIDTH(R_WIDTH)) r (
+        axi_channel_buffer #(.WIDTH(R_WIDTH), .GATE_READY_ON_RESET(GATE_RESPONSE_READY_ON_RESET)) r (
             .aclk(aclk), .aresetn(aresetn),
             .s_data({m_axi.rdata, m_axi.rid, m_axi.rresp, m_axi.rlast}),
             .s_valid(m_axi.rvalid), .s_ready(m_axi.rready),
             .m_data({s_axi.rdata, s_axi.rid, s_axi.rresp, s_axi.rlast}),
             .m_valid(s_axi.rvalid), .m_ready(s_axi.rready)
         );
-        axi_channel_buffer #(.WIDTH(B_WIDTH)) b (
+        axi_channel_buffer #(.WIDTH(B_WIDTH), .GATE_READY_ON_RESET(GATE_RESPONSE_READY_ON_RESET)) b (
             .aclk(aclk), .aresetn(aresetn),
             .s_data({m_axi.bid, m_axi.bresp}),
             .s_valid(m_axi.bvalid), .s_ready(m_axi.bready),
