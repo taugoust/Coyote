@@ -339,14 +339,27 @@ routing selector. These names and hierarchy attributes do not add pipeline
 cycles or alter the single-region debug bypass.
 
 The debug demultiplexer keeps each region's response-ready eligibility in
-``routed.leaf[i].response_ready``. These combinational gates can be placed near
-their hubs without moving the ownership registers or buffering unselected
-responses. With independent debug reset outputs enabled, the region's request
-buffer and response-ready gate use the same reset copy as its hub. All copies
-must remain cycle-identical; they are not independent reset domains. The shared
-response FIFO exposes capacity without reset gating only inside this router:
-reset-qualified response-valid and the endpoint-local ready gates still prevent
-reset-time response acceptance from hubs. No pipeline latency is added.
+``routed.leaf[i].response_ready``. Each endpoint buffer owns its R/B response
+storage and presents ready from local FIFO capacity and bounded transaction
+ownership state; the shared ingress FIFO is downstream of this local capture
+boundary. The demultiplexer permits one outstanding read and write transaction
+per direction, so endpoint ownership is bounded to 0..256 read beats, one
+accepted AW, and one completed W burst. W may arrive before AW; B eligibility
+requires both AW acceptance and WLAST acceptance. Additional AR/AW/WLAST work
+is held until the corresponding local response capture retires ownership.
+AR/AW head selection is registered while the ingress head remains stable,
+adding one selection cycle before request forwarding. The local response
+boundary adds elastic buffering latency (including at least one cycle before a
+zero-latency hub response can be accepted); single-region debug bypass remains
+direct. Reset clears ownership and buffer-valid state, discarding
+in-flight responses. With independent debug reset outputs enabled, each
+endpoint buffer and response-ready gate use the same reset copy as its hub. All
+copies must remain cycle-identical; they are not independent reset domains.
+The generic ``TRACK_RESPONSE_OWNERSHIP`` option is valid only with
+``REGISTER_RESPONSES=1`` and is rejected otherwise. It requires the caller to
+limit each buffer boundary to one outstanding read and write transaction; it is
+not a general multi-outstanding AXI tracker. The default option remains off, so
+other ``axi_buffer`` users keep their prior buffering and response behavior.
 
 Static decouple distribution uses a shared prefix and independently placeable
 last registers for stream and AXI control interfaces. Both copies retain exactly

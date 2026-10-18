@@ -26,10 +26,11 @@ module axi_debug_router #(
     end else begin : buffered
         AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ID_BITS(2)) request(aclk);
         AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ID_BITS(2)) selected[N_REGIONS](aclk);
-        // Separate the fixed NoC endpoint, address decode, and each RP. Return
-        // channels are buffered after ownership selection, never before it.
-        // Reset-qualified demux valid and endpoint ready protect this private
-        // capacity signal without routing global reset through the FIFO.
+        // Separate the fixed NoC endpoint, address decode, and each RP.
+        // Each endpoint accepts R/B into local elastic storage only after its
+        // registered AR/AW/WLAST ownership state authorizes capture. The central
+        // demux then selects/drains those buffered responses in transaction order.
+        // Reset-qualified valid and local ready prevent reset-time hub acceptance.
         axi_buffer #(.GATE_RESPONSE_READY_ON_RESET(1'b0)) ingress (
             .aclk(aclk), .aresetn(aresetn), .s_axi(s_axi), .m_axi(request)
         );
@@ -39,7 +40,7 @@ module axi_debug_router #(
             .region_aresetn(region_aresetn)
         );
         for (genvar region = 0; region < N_REGIONS; region++) begin : endpoint
-            axi_buffer #(.REGISTER_RESPONSES(1'b0)) boundary (
+            axi_buffer #(.REGISTER_RESPONSES(1'b1), .TRACK_RESPONSE_OWNERSHIP(1'b1)) boundary (
                 .aclk(aclk),
                 .aresetn(USE_REGION_RESETS ? region_aresetn[region] : aresetn),
                 .s_axi(selected[region]), .m_axi(m_axi[region])
@@ -82,6 +83,8 @@ module axi_debug_demux #(
     end else begin : routed
         localparam integer SEL_BITS = $clog2(N_REGIONS + 1);
         logic [SEL_BITS-1:0] rd_sel, wr_sel, ar_sel, aw_sel;
+        logic [SEL_BITS-1:0] ar_head_sel, aw_head_sel;
+        logic ar_head_sel_valid, aw_head_sel_valid;
         logic rd_active, wr_active, wr_data_done;
         logic [7:0] rd_remaining, wr_remaining;
         logic [1:0] rd_id, wr_id;
@@ -113,7 +116,7 @@ module axi_debug_demux #(
             assign m_axi[i].arqos = s_axi.arqos;
             assign m_axi[i].arregion = s_axi.arregion;
             assign m_axi[i].arsize = s_axi.arsize;
-            assign m_axi[i].arvalid = aresetn && !rd_active && ar_sel == i && s_axi.arvalid;
+            assign m_axi[i].arvalid = aresetn && ar_head_sel_valid && !rd_active && ar_head_sel == i && s_axi.arvalid;
             assign m_axi[i].awaddr = s_axi.awaddr;
             assign m_axi[i].awburst = s_axi.awburst;
             assign m_axi[i].awcache = s_axi.awcache;
@@ -124,7 +127,7 @@ module axi_debug_demux #(
             assign m_axi[i].awqos = s_axi.awqos;
             assign m_axi[i].awregion = s_axi.awregion;
             assign m_axi[i].awsize = s_axi.awsize;
-            assign m_axi[i].awvalid = aresetn && !wr_active && aw_sel == i && s_axi.awvalid;
+            assign m_axi[i].awvalid = aresetn && aw_head_sel_valid && !wr_active && aw_head_sel == i && s_axi.awvalid;
             assign m_axi[i].wdata = s_axi.wdata;
             assign m_axi[i].wstrb = s_axi.wstrb;
             assign m_axi[i].wlast = s_axi.wlast;
@@ -149,8 +152,10 @@ module axi_debug_demux #(
             assign b_resp[i] = m_axi[i].bresp;
         end
 
-        assign s_axi.arready = aresetn && !rd_active && (ar_sel < N_REGIONS ? ar_ready[ar_sel] : 1'b1);
-        assign s_axi.awready = aresetn && !wr_active && (aw_sel < N_REGIONS ? aw_ready[aw_sel] : 1'b1);
+        assign s_axi.arready = aresetn && ar_head_sel_valid && !rd_active &&
+            (ar_head_sel < N_REGIONS ? ar_ready[ar_head_sel] : 1'b1);
+        assign s_axi.awready = aresetn && aw_head_sel_valid && !wr_active &&
+            (aw_head_sel < N_REGIONS ? aw_ready[aw_head_sel] : 1'b1);
         assign s_axi.wready = aresetn && wr_active && !wr_data_done && (wr_sel < N_REGIONS ? w_ready[wr_sel] : 1'b1);
         // Unmapped reads return ARLEN+1 DECERR beats, stable under backpressure.
         assign s_axi.rvalid = aresetn && rd_active && (rd_sel < N_REGIONS ? r_valid[rd_sel] : 1'b1);
@@ -166,6 +171,10 @@ module axi_debug_demux #(
             if (!aresetn) begin
                 rd_active <= 0;
                 wr_active <= 0;
+                ar_head_sel <= SEL_BITS'(N_REGIONS);
+                aw_head_sel <= SEL_BITS'(N_REGIONS);
+                ar_head_sel_valid <= 0;
+                aw_head_sel_valid <= 0;
                 wr_data_done <= 0;
                 rd_sel <= SEL_BITS'(N_REGIONS);
                 wr_sel <= SEL_BITS'(N_REGIONS);
@@ -174,9 +183,21 @@ module axi_debug_demux #(
                 rd_remaining <= 0;
                 wr_remaining <= 0;
             end else begin
+                if (!ar_head_sel_valid && s_axi.arvalid) begin
+                    ar_head_sel <= ar_sel;
+                    ar_head_sel_valid <= 1;
+                end else if (s_axi.arvalid && s_axi.arready) begin
+                    ar_head_sel_valid <= 0;
+                end
+                if (!aw_head_sel_valid && s_axi.awvalid) begin
+                    aw_head_sel <= aw_sel;
+                    aw_head_sel_valid <= 1;
+                end else if (s_axi.awvalid && s_axi.awready) begin
+                    aw_head_sel_valid <= 0;
+                end
                 if (s_axi.arvalid && s_axi.arready) begin
                     rd_active <= 1;
-                    rd_sel <= ar_sel;
+                    rd_sel <= ar_head_sel;
                     rd_remaining <= s_axi.arlen;
                     rd_id <= s_axi.arid;
                 end
@@ -187,7 +208,7 @@ module axi_debug_demux #(
                 if (s_axi.awvalid && s_axi.awready) begin
                     wr_active <= 1;
                     wr_data_done <= 0;
-                    wr_sel <= aw_sel;
+                    wr_sel <= aw_head_sel;
                     wr_remaining <= s_axi.awlen;
                     wr_id <= s_axi.awid;
                 end

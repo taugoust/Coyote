@@ -28,6 +28,8 @@ set report [open "$out/combinational-inputs.txt" w]
 puts $report [join [lsort -unique $direct] "\n"]
 close $report
 if {[llength $direct] != 0} { error "Functional input still reaches an output without a register: $direct" }
+source "$root/tests/debug_routing/response_ready_boundary.tcl"
+check_response_ready_boundary "$out/local-ready-cones.txt"
 write_checkpoint -force "$out/synthesized.dcp"
 report_utilization -hierarchical -file "$out/utilization.rpt"
 report_timing_summary -delay_type min_max -max_paths 20 -file "$out/timing.rpt"

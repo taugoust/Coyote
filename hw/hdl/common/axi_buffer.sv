@@ -54,7 +54,11 @@ endmodule
 (* keep_hierarchy = "yes" *)
 module axi_buffer #(
     parameter bit REGISTER_RESPONSES = 1'b1,
-    parameter bit GATE_RESPONSE_READY_ON_RESET = 1'b1
+    parameter bit GATE_RESPONSE_READY_ON_RESET = 1'b1,
+    // Requires one outstanding read/write transaction per direction at this
+    // buffer boundary. Read ownership is 0..256 beats; writes track one AW
+    // and one WLAST. Invalid when REGISTER_RESPONSES is disabled.
+    parameter bit TRACK_RESPONSE_OWNERSHIP = 1'b0
 )(
     input logic aclk,
     input logic aresetn,
@@ -71,6 +75,12 @@ module axi_buffer #(
     localparam integer R_WIDTH = $bits({m_axi.rdata, m_axi.rid, m_axi.rresp, m_axi.rlast});
     localparam integer B_WIDTH = $bits({m_axi.bid, m_axi.bresp});
 
+    logic aw_buffer_valid, ar_buffer_valid, w_buffer_valid;
+    logic aw_request_enable, ar_request_enable, w_request_enable;
+    assign m_axi.awvalid = aw_buffer_valid && aw_request_enable;
+    assign m_axi.arvalid = ar_buffer_valid && ar_request_enable;
+    assign m_axi.wvalid = w_buffer_valid && w_request_enable;
+
     axi_channel_buffer #(.WIDTH(AW_WIDTH)) aw (
         .aclk(aclk), .aresetn(aresetn),
         .s_data({s_axi.awaddr, s_axi.awid, s_axi.awlen, s_axi.awsize,
@@ -80,7 +90,7 @@ module axi_buffer #(
         .m_data({m_axi.awaddr, m_axi.awid, m_axi.awlen, m_axi.awsize,
             m_axi.awburst, m_axi.awlock, m_axi.awcache, m_axi.awprot,
             m_axi.awqos, m_axi.awregion}),
-        .m_valid(m_axi.awvalid), .m_ready(m_axi.awready)
+        .m_valid(aw_buffer_valid), .m_ready(m_axi.awready && aw_request_enable)
     );
     axi_channel_buffer #(.WIDTH(AR_WIDTH)) ar (
         .aclk(aclk), .aresetn(aresetn),
@@ -91,31 +101,76 @@ module axi_buffer #(
         .m_data({m_axi.araddr, m_axi.arid, m_axi.arlen, m_axi.arsize,
             m_axi.arburst, m_axi.arlock, m_axi.arcache, m_axi.arprot,
             m_axi.arqos, m_axi.arregion}),
-        .m_valid(m_axi.arvalid), .m_ready(m_axi.arready)
+        .m_valid(ar_buffer_valid), .m_ready(m_axi.arready && ar_request_enable)
     );
     axi_channel_buffer #(.WIDTH(W_WIDTH)) w (
         .aclk(aclk), .aresetn(aresetn),
         .s_data({s_axi.wdata, s_axi.wstrb, s_axi.wlast}),
         .s_valid(s_axi.wvalid), .s_ready(s_axi.wready),
         .m_data({m_axi.wdata, m_axi.wstrb, m_axi.wlast}),
-        .m_valid(m_axi.wvalid), .m_ready(m_axi.wready)
+        .m_valid(w_buffer_valid), .m_ready(m_axi.wready && w_request_enable)
     );
     if (REGISTER_RESPONSES) begin : responses
+        // Bounded by the single-outstanding-read contract; one AXI4 burst is
+        // at most 256 beats, represented exactly by this 9-bit count.
+        logic [8:0] read_credits;
+        logic aw_seen, wlast_seen;
+        logic response_r_ready, response_b_ready;
+        logic r_eligible, b_eligible;
+        if (TRACK_RESPONSE_OWNERSHIP) begin : ownership
+            // The demultiplexer admits one transaction per direction. The
+            // endpoint therefore needs only bounded ownership: 0..256 R beats,
+            // one accepted AW, and one completed W burst. W may precede AW.
+            assign ar_request_enable = read_credits == 0;
+            assign aw_request_enable = !aw_seen;
+            assign w_request_enable = !wlast_seen;
+            assign r_eligible = read_credits != 0;
+            assign b_eligible = aw_seen && wlast_seen;
+            always_ff @(posedge aclk) begin
+                if (!aresetn) begin
+                    read_credits <= 0;
+                    aw_seen <= 1'b0;
+                    wlast_seen <= 1'b0;
+                end else begin
+                    if (m_axi.arvalid && m_axi.arready)
+                        read_credits <= {1'b0,m_axi.arlen} + 9'd1;
+                    else if (m_axi.rvalid && m_axi.rready)
+                        read_credits <= read_credits - 1'b1;
+                    if (m_axi.awvalid && m_axi.awready) aw_seen <= 1'b1;
+                    if (m_axi.wvalid && m_axi.wready && m_axi.wlast) wlast_seen <= 1'b1;
+                    if (m_axi.bvalid && m_axi.bready) begin
+                        aw_seen <= 1'b0;
+                        wlast_seen <= 1'b0;
+                    end
+                end
+            end
+        end else begin : no_ownership
+            assign ar_request_enable = 1'b1;
+            assign aw_request_enable = 1'b1;
+            assign w_request_enable = 1'b1;
+            assign r_eligible = 1'b1;
+            assign b_eligible = 1'b1;
+        end
         axi_channel_buffer #(.WIDTH(R_WIDTH), .GATE_READY_ON_RESET(GATE_RESPONSE_READY_ON_RESET)) r (
             .aclk(aclk), .aresetn(aresetn),
             .s_data({m_axi.rdata, m_axi.rid, m_axi.rresp, m_axi.rlast}),
-            .s_valid(m_axi.rvalid), .s_ready(m_axi.rready),
+            .s_valid(m_axi.rvalid && r_eligible), .s_ready(response_r_ready),
             .m_data({s_axi.rdata, s_axi.rid, s_axi.rresp, s_axi.rlast}),
             .m_valid(s_axi.rvalid), .m_ready(s_axi.rready)
         );
+        assign m_axi.rready = response_r_ready && r_eligible;
         axi_channel_buffer #(.WIDTH(B_WIDTH), .GATE_READY_ON_RESET(GATE_RESPONSE_READY_ON_RESET)) b (
             .aclk(aclk), .aresetn(aresetn),
             .s_data({m_axi.bid, m_axi.bresp}),
-            .s_valid(m_axi.bvalid), .s_ready(m_axi.bready),
+            .s_valid(m_axi.bvalid && b_eligible), .s_ready(response_b_ready),
             .m_data({s_axi.bid, s_axi.bresp}),
             .m_valid(s_axi.bvalid), .m_ready(s_axi.bready)
         );
+        assign m_axi.bready = response_b_ready && b_eligible;
     end else begin : direct_responses
+        assign ar_request_enable = 1'b1;
+        assign aw_request_enable = 1'b1;
+        assign w_request_enable = 1'b1;
         // Keep response acceptance under the demultiplexer's ownership gate;
         // an unselected endpoint must never be acknowledged speculatively.
         assign s_axi.rdata = m_axi.rdata;
@@ -130,6 +185,8 @@ module axi_buffer #(
         assign m_axi.bready = s_axi.bready;
     end
     initial begin
+        if (TRACK_RESPONSE_OWNERSHIP && !REGISTER_RESPONSES)
+            $fatal(1, "TRACK_RESPONSE_OWNERSHIP requires REGISTER_RESPONSES=1");
         if ($bits(s_axi.awaddr) != $bits(m_axi.awaddr) ||
             $bits(s_axi.awid) != $bits(m_axi.awid) ||
             $bits(s_axi.wdata) != $bits(m_axi.wdata))

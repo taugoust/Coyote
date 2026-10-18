@@ -20,7 +20,7 @@ module tb;
     } request_t;
     request_t expected_aw, expected_ar, aw_payload[N], ar_payload[N];
     logic [31:0] random_state=32'h13579bdf;
-    logic checking=0, noise=0, hold_slaves=0;
+    logic checking=0, noise=0, hold_slaves=0, unsolicited=0;
     int sequence_number=0, write_region=0, read_region=0;
     logic [N-1:0] arready, awready, wready, rvalid, rlast, bvalid;
     wire [N-1:0] arv, awv, wv, rr, br, wl;
@@ -74,12 +74,12 @@ module tb;
             awready[i]=resetn && !write_active[i] && !write_response[i] &&
                 !hold_slaves && random_state[(i+3)%8];
             wready[i]=resetn && write_active[i] && !hold_slaves && random_state[(i+7)%16];
-            rvalid[i]=read_active[i] || (noise && i!=read_region);
+            rvalid[i]=read_active[i] || (noise && (unsolicited || i!=read_region));
             rlast[i]=read_active[i] ? read_beat[i]==read_length[i] : 1'b1;
             rdata[i]=read_active[i] ? read_value(i,read_beat[i]) : 128'hbad;
             rid[i]=read_active[i] ? read_id[i] : 2'(i);
             rresp[i]=read_active[i] ? 2'(i%3) : 2'b10;
-            bvalid[i]=write_response[i] || (noise && i!=write_region);
+            bvalid[i]=write_response[i] || (noise && (unsolicited || i!=write_region));
             bid[i]=write_response[i] ? write_id[i] : 2'(i);
             bresp[i]=write_response[i] ? 2'(i%3) : 2'b10;
         end
@@ -177,7 +177,7 @@ module tb;
             if(s.rvalid) begin
                 assert(s.rid==expected_ar.id && s.rlast==(beat==expected_ar.len)) else $fatal(1,"R id/last");
                 assert(s.rresp==(read_region<0 ? 2'b11 : 2'(read_region%3))) else $fatal(1,"R response");
-                assert(s.rdata===(read_region<0 ? 128'b0 : read_value(read_region,beat))) else $fatal(1,"R data/order");
+                assert(s.rdata===(read_region<0 ? 128'b0 : read_value(read_region,beat))) else $fatal(1,"R data/order seq=%0d beat=%0d got=%h exp=%h",sequence_number,beat,s.rdata,read_region<0 ? 128'b0 : read_value(read_region,beat));
                 if(s.rready) beat++;
             end
         end
@@ -194,6 +194,54 @@ module tb;
         end
         s.bready=1; @(posedge clk); @(negedge clk); s.bready=0;
     endtask
+    task reset_with_buffered_read_response;
+        @(negedge clk);
+        sequence_number=60; read_region=0; write_region=0; checking=1;
+        expected_ar='{BASE+64'h100,2'd1,8'd0,3'd4,2'd1,1'b0,4'd0,3'd0,4'd0,4'd0};
+        s.rready=0;
+        fork
+            send_ar(0);
+            begin
+                do @(posedge clk); while(!s.rvalid);
+                assert(s.rlast && s.rid==expected_ar.id) else $fatal(1,"expected buffered final R beat");
+                repeat(3) begin
+                    tick();
+                    assert(s.rvalid && s.rlast && s.rid==expected_ar.id)
+                        else $fatal(1,"stalled final R beat changed before reset");
+                end
+            end
+        join
+        @(negedge clk); resetn=0;
+        tick();
+        assert(!s.rvalid && rr==0) else $fatal(1,"reset retained/accepted in-flight R response");
+        @(negedge clk); resetn=1; s.rready=1; checking=0;
+        repeat(3) tick();
+        assert(!s.rvalid) else $fatal(1,"stale R response after reset");
+
+        @(negedge clk);
+        sequence_number=61; write_region=0; checking=1;
+        expected_aw='{BASE+64'h200,2'd2,8'd0,3'd4,2'd1,1'b0,4'd0,3'd0,4'd0,4'd0};
+        s.bready=0;
+        fork
+            send_aw(3);
+            send_write_data(0); // W-before-AW remains buffered and ordered.
+            begin
+                do @(posedge clk); while(!s.bvalid);
+                repeat(3) begin
+                    tick();
+                    assert(s.bvalid && s.bid==expected_aw.id)
+                        else $fatal(1,"stalled B response changed before reset");
+                end
+            end
+        join
+        @(negedge clk); resetn=0;
+        tick();
+        assert(!s.bvalid && br==0) else $fatal(1,"reset retained/accepted in-flight B response");
+        @(negedge clk); resetn=1; s.bready=1; checking=0;
+        repeat(3) tick();
+        assert(!s.bvalid) else $fatal(1,"stale B response after reset");
+    endtask
+
     task transaction(input int ordinal, input int hole);
         @(negedge clk);
         sequence_number=ordinal;
@@ -203,12 +251,18 @@ module tb;
             2'(ordinal),8'(ordinal%4),3'd4,2'd1,1'(ordinal),4'(ordinal),3'(ordinal),4'd7,4'd13};
         expected_ar='{BASE+64'((ordinal+1)%N)*64'h200000+64'h100,
             2'(ordinal+1),8'((ordinal+2)%4),3'd4,2'd1,1'(ordinal),4'd9,3'd5,4'd11,4'd6};
+        if(ordinal==52) begin
+            expected_aw.addr=BASE+64'(ordinal%N)*64'h200000+64'h1ff000;
+            expected_ar.addr=BASE+64'((ordinal+1)%N)*64'h200000+64'h001000;
+            expected_aw.len=8'hff; expected_ar.len=8'hff;
+        end
         if(hole) begin
             expected_aw.addr=hole==1 ? BASE+64'(N)*64'h200000 : BASE+64'h100000000;
             expected_ar.addr=expected_aw.addr;
             expected_aw.len=3; expected_ar.len=3;
         end
         accepted_ar=0; accepted_aw=0; accepted_w=0;
+        s.rready=0; s.bready=0;
         checking=1; noise=1;
         fork
             send_aw(ordinal%2 ? 4 : 0);
@@ -225,6 +279,17 @@ module tb;
     initial begin
         s.tie_off_m(); accepted_ar=0; accepted_aw=0; accepted_w=0;
         tick(); tick(); resetn=1;
+        // A selected hub may assert unsolicited responses while idle. Local
+        // response queues must not acknowledge without transaction ownership.
+        if(N > 1) begin
+            @(negedge clk); noise=1; unsolicited=1;
+            repeat(4) begin
+                tick();
+                for(int i=0;i<N;i++) assert(!rr[i] && !br[i])
+                    else $fatal(1, "unsolicited response accepted without ownership");
+            end
+            @(negedge clk); noise=0; unsolicited=0;
+        end
         for(int ordinal=0;ordinal<48;ordinal++) transaction(ordinal,0);
         if(N>1) begin transaction(49,1); transaction(50,2); end
         // Abandon buffered requests under reset, then prove clean recovery.
@@ -240,6 +305,8 @@ module tb;
                 else $fatal(1,"reset retained a transaction");
         end
         transaction(51,0);
+        reset_with_buffered_read_response();
+        transaction(52,0); // AXI4 maximum 256-beat read and write bursts.
         $display("PASS registered debug transactions N=%0d",N); $finish;
     end
     initial begin #400000; $fatal(1,"timeout"); end
