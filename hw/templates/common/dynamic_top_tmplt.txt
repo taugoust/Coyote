@@ -938,15 +938,15 @@ module design_dynamic_top #(
     // ----------------------------------------------------------------------
     AXI4L axi_ctrl_s0 [N_REGIONS] ();
 
-    for(genvar i = 0; i < N_REGIONS; i++) begin
-        axil_reg_array #(.N_STAGES(N_REG_DYN_HOST_S0)) (.aclk(aclk), .aresetn(aresetn), .s_axi(s_axi_ctrl[i]), .m_axi(axi_ctrl_s0[i]));
+    for(genvar i = 0; i < N_REGIONS; i++) begin : control_ingress_pipeline
+        axil_reg_array #(.N_STAGES(N_REG_DYN_HOST_S0)) inst_control (.aclk(aclk), .aresetn(aresetn), .s_axi(s_axi_ctrl[i]), .m_axi(axi_ctrl_s0[i]));
     end
 
 {% if cnfg.en_avx %}
     AXI4 #(.AXI4_DATA_BITS(AVX_DATA_BITS)) axim_ctrl_s0 [N_REGIONS] ();
 
-    for(genvar i = 0; i < N_REGIONS; i++) begin
-        axim_reg_array #(.N_STAGES(N_REG_DYN_HOST_S0)) (.aclk(aclk), .aresetn(aresetn), .s_axi(s_axim_ctrl[i]), .m_axi(axim_ctrl_s0[i]));
+    for(genvar i = 0; i < N_REGIONS; i++) begin : avx_control_ingress_pipeline
+        axim_reg_array #(.N_STAGES(N_REG_DYN_HOST_S0)) inst_control (.aclk(aclk), .aresetn(aresetn), .s_axi(s_axim_ctrl[i]), .m_axi(axim_ctrl_s0[i]));
     end
 
 {% endif %}
