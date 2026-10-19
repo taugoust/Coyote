@@ -320,6 +320,25 @@ fanout separation, not permission to remove reset timing checks, add false
 paths or delay only one side of an AXI transaction. Integrated synthesis must
 retain the independent drivers before they can be placed near their consumers.
 
+Independent application reset outputs
+-------------------------------------
+
+``EN_APP_RESET_COPIES=1`` enables independent same-cycle reset outputs for
+1..15 application regions on Versal. The selected application clock's vendor
+reset controller supplies ``N_REGIONS + 1`` peripheral reset bits: bit zero
+retains the normal reset, and bits one through ``N_REGIONS`` feed each region's
+existing scalar ``aresetn`` port. With ``EN_UCLK=0`` these are copies of
+``aresetn``; with ``EN_UCLK=1`` they are copies of ``uresetn``. The selected
+clock, filtering, initial state and assertion/deassertion cycles are unchanged.
+
+The vector stays internal to the shell control and dynamic layers; the static
+shell boundary and application reset-port ABI do not gain new ports. The
+setting is exported for application builds and defaults off. Consumers must
+verify distinct equivalent drivers in their integrated netlist and place them
+near the intended regions. This does not waive reset timing or establish routed
+closure. Configuration/render tests and actual Vivado BD, vendor-output and
+generated-wrapper checks are under ``tests/application_reset_copies``.
+
 Resident control pipeline placement
 -----------------------------------
 

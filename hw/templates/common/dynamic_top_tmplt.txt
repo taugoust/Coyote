@@ -189,6 +189,9 @@ module design_dynamic_top #(
 
     // Clock and reset
     input  logic                                aresetn,
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_app_reset_copies %}
+    input  logic [N_REGIONS-1:0]                 app_aresetn,
+{% endif %}
     input  logic                                aclk,
     input  logic                                uresetn,
     input  logic                                uclk
@@ -1511,9 +1514,14 @@ module design_dynamic_top #(
 
 {% if cnfg.en_uclk %}
         .aclk                   (uclk),
-        .aresetn                (uresetn)
 {% else %}
         .aclk                   (aclk),
+{% endif %}
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_app_reset_copies %}
+        .aresetn                (app_aresetn[{{ i }}])
+{% elif cnfg.en_uclk %}
+        .aresetn                (uresetn)
+{% else %}
         .aresetn                (aresetn)
 {% endif %}
     );

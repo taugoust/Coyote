@@ -197,6 +197,7 @@ set cfg(mult_regions)           ${MULT_REGIONS}
 set cfg(en_user_reg)            ${EN_USER_REG}
 set cfg(en_user_host_output_reg) ${EN_USER_HOST_OUTPUT_REG}
 set cfg(en_debug_reset_copies)   ${EN_DEBUG_RESET_COPIES}
+set cfg(en_app_reset_copies)     ${EN_APP_RESET_COPIES}
 set cfg(en_xterm)               ${EN_XTERM}
 set cfg(sim_clock_period)       ${SIM_CLOCK_PERIOD}
 set cfg(data_dest_bits)         ${DATA_DEST_BITS}

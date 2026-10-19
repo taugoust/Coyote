@@ -436,6 +436,9 @@ module shell_top (
     
     logic aclk;
     logic aresetn;
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_app_reset_copies %}
+    logic [N_REGIONS-1:0] app_aresetn;
+{% endif %}
     logic nclk;
     logic nresetn;
     logic uclk;
@@ -502,6 +505,9 @@ module shell_top (
         .xresetn(xresetn),
         .aclk(aclk),
         .aresetn(aresetn),
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_app_reset_copies %}
+        .app_aresetn(app_aresetn),
+{% endif %}
         .uclk(uclk),
         .uresetn(uresetn),
         .nclk(nclk),
@@ -1598,6 +1604,9 @@ module shell_top (
     // ================-----------------------------------------------------------------
 
     design_dynamic_top inst_dynamic (
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_app_reset_copies %}
+        .app_aresetn(app_aresetn),
+{% endif %}
         .s_axi_ctrl(axi_ctrl[0+:{{ cnfg.n_reg }}]),
 {% if cnfg.en_v80_r5_provider %}
         .s_axi_r5_provider(axi_r5_provider),
