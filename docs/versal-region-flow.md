@@ -45,9 +45,15 @@ must be rebuilt with the matching region count: the checked-in one-region
 checkpoint does not provide the additional address range.
 
 The router permits one outstanding read and one outstanding write
-independently. Read ownership lasts through the final response handshake;
-write ownership lasts from accepted AW through all beats and the B response.
-W is backpressured until AW selects an owner. Unmapped reads return
+independently. In multi-region debug routing, each decoded request first enters
+a central per-region elastic request relay before the existing endpoint buffer;
+the relay uses the generic AXI buffer with response channels passed through.
+Endpoint-local response ownership and endpoint reset copies remain unchanged,
+and the one-region path remains a direct wire-through. This adds one elastic
+request stage to multi-region debug latency while removing endpoint READY
+feedback from the deep address-demux path. Read ownership lasts through the
+final response handshake; write ownership lasts from accepted AW through all
+beats and the B response. W is backpressured until AW selects an owner. Unmapped reads return
 `ARLEN+1` DECERR beats, and unmapped writes drain `AWLEN+1` beats before a
 DECERR response. Reset drops outstanding ownership; accesses to application
 regions should be quiesced during reconfiguration.

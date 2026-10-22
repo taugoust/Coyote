@@ -26,6 +26,7 @@ module axi_debug_router #(
     end else begin : buffered
         AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ID_BITS(2)) request(aclk);
         AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ID_BITS(2)) selected[N_REGIONS](aclk);
+        AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ID_BITS(2)) relayed[N_REGIONS](aclk);
         // Separate the fixed NoC endpoint, address decode, and each RP.
         // Each endpoint accepts R/B into local elastic storage only after its
         // registered AR/AW/WLAST ownership state authorizes capture. The central
@@ -39,11 +40,21 @@ module axi_debug_router #(
             .aclk(aclk), .aresetn(aresetn), .s_axi(request), .m_axi(selected),
             .region_aresetn(region_aresetn)
         );
+        for (genvar region = 0; region < N_REGIONS; region++) begin : request_relay
+            // Central request staging cuts endpoint READY feedback before it
+            // reaches address decode. Responses deliberately bypass this stage.
+            (* keep_hierarchy = "yes" *)
+            axi_buffer #(.REGISTER_RESPONSES(1'b0)) boundary (
+                .aclk(aclk), .aresetn(aresetn),
+                .s_axi(selected[region]), .m_axi(relayed[region])
+            );
+        end
         for (genvar region = 0; region < N_REGIONS; region++) begin : endpoint
+            // Preserve endpoint-local response ownership and reset semantics.
             axi_buffer #(.REGISTER_RESPONSES(1'b1), .TRACK_RESPONSE_OWNERSHIP(1'b1)) boundary (
                 .aclk(aclk),
                 .aresetn(USE_REGION_RESETS ? region_aresetn[region] : aresetn),
-                .s_axi(selected[region]), .m_axi(m_axi[region])
+                .s_axi(relayed[region]), .m_axi(m_axi[region])
             );
         end
     end
