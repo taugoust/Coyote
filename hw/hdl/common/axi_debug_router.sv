@@ -41,10 +41,11 @@ module axi_debug_router #(
             .region_aresetn(region_aresetn)
         );
         for (genvar region = 0; region < N_REGIONS; region++) begin : request_relay
-            // Central request staging cuts endpoint READY feedback before it
-            // reaches address decode. Responses deliberately bypass this stage.
+            // Stage both directions before address decode. Endpoint-local
+            // storage retains response ownership; this relay buffers only
+            // responses already accepted by that endpoint boundary.
             (* keep_hierarchy = "yes" *)
-            axi_buffer #(.REGISTER_RESPONSES(1'b0)) boundary (
+            axi_buffer #(.REGISTER_RESPONSES(1'b1)) boundary (
                 .aclk(aclk), .aresetn(aresetn),
                 .s_axi(selected[region]), .m_axi(relayed[region])
             );
