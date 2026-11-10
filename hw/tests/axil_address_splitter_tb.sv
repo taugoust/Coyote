@@ -15,6 +15,7 @@ module tb;
     logic service_ready = 1'b0;
     logic shell_aw_seen, shell_w_seen, service_aw_seen, service_w_seen;
     logic [63:0] shell_last_awaddr, service_last_awaddr;
+    logic [63:0] service_last_araddr;
     integer shell_write_count = 0;
     integer service_write_count = 0;
     integer shell_read_count = 0;
@@ -88,6 +89,7 @@ module tb;
             service.rdata <= '0;
             service.rresp <= 2'b00;
             service_last_awaddr <= '0;
+            service_last_araddr <= '0;
         end else begin
             if (service.awvalid && service.awready) begin
                 service_aw_seen <= 1'b1;
@@ -107,8 +109,20 @@ module tb;
                 service_w_seen <= 1'b0;
             end
             if (service.arvalid && service.arready) begin
-                service.rdata <= 64'h5e00_0000_0000_0000 | service.araddr;
-                service.rresp <= 2'b00;
+                service_last_araddr <= service.araddr;
+                if ({service.araddr[63:3], 3'b000} == 64'h000) begin
+                    // A 64-bit resident register returns its containing word for
+                    // either 32-bit host lane. The upstream AXI width converter
+                    // selects the requested dword from this response.
+                    service.rdata <= 64'h1122_3344_5566_7788;
+                    service.rresp <= 2'b00;
+                end else if ({service.araddr[63:3], 3'b000} == 64'h040) begin
+                    service.rdata <= '0;
+                    service.rresp <= 2'b10;
+                end else begin
+                    service.rdata <= 64'h5e00_0000_0000_0000 | service.araddr;
+                    service.rresp <= 2'b00;
+                end
                 service.rvalid <= 1'b1;
                 service_read_count <= service_read_count + 1;
             end
@@ -165,10 +179,10 @@ module tb;
         upstream.bready = 1'b0;
     endtask
 
-    task automatic read_transaction(
+    task automatic read_response(
         input logic [63:0] address,
-        input logic [1:0] expected_resp,
-        input logic [63:0] expected_data
+        output logic [1:0] response,
+        output logic [63:0] data
     );
         @(negedge aclk);
         upstream.araddr = address;
@@ -182,11 +196,40 @@ module tb;
         @(negedge aclk);
         upstream.rready = 1'b1;
         while (!upstream.rvalid) @(negedge aclk);
-        if (upstream.rresp !== expected_resp || upstream.rdata !== expected_data)
-            $fatal(1, "read mismatch: resp=%0b data=%h", upstream.rresp, upstream.rdata);
+        response = upstream.rresp;
+        data = upstream.rdata;
         @(posedge aclk);
         @(negedge aclk);
         upstream.rready = 1'b0;
+    endtask
+
+    task automatic read_transaction(
+        input logic [63:0] address,
+        input logic [1:0] expected_resp,
+        input logic [63:0] expected_data
+    );
+        logic [1:0] response;
+        logic [63:0] data;
+        read_response(address, response, data);
+        if (response !== expected_resp || data !== expected_data)
+            $fatal(1, "read mismatch: resp=%0b data=%h", response, data);
+    endtask
+
+    task automatic read32_transaction(
+        input logic [63:0] address,
+        input logic [1:0] expected_resp,
+        input logic [31:0] expected_data
+    );
+        logic [1:0] response;
+        logic [63:0] data;
+        logic [31:0] host_data;
+        read_response(address, response, data);
+        // PCIe MMIO reports an errored completion as all ones. For an OKAY
+        // response, select the addressed 32-bit lane from the 64-bit AXI-Lite
+        // word exactly as the Coyote/QDMA width boundary must do.
+        host_data = response == 2'b00 ? (address[2] ? data[63:32] : data[31:0]) : 32'hffff_ffff;
+        if (response !== expected_resp || host_data !== expected_data)
+            $fatal(1, "32-bit read mismatch: addr=%h resp=%0b data=%h", address, response, host_data);
     endtask
 
     initial begin
@@ -226,12 +269,22 @@ module tb;
             $fatal(1, "service write was not rebased correctly");
 
         read_transaction(64'h020, 2'b00, 64'h5100_0000_0000_0020);
+
+        // Reproduce the public host-MMIO access pattern at the 32-to-64-bit
+        // boundary: the low dword, upper dword, and whole word must all reach
+        // the same resident register without an error response.
+        read32_transaction(64'h1000, 2'b00, 32'h5566_7788);
+        read32_transaction(64'h1004, 2'b00, 32'h1122_3344);
+        if (service_last_araddr != 64'h004)
+            $fatal(1, "upper-dword byte address was not preserved");
+        read_transaction(64'h1000, 2'b00, 64'h1122_3344_5566_7788);
+        read32_transaction(64'h1044, 2'b10, 32'hffff_ffff);
         read_transaction(64'h1200, 2'b00, 64'h5e00_0000_0000_0200);
 
         write_transaction(64'h0800, 64'h3333, 1'b1, 2'b11);
         read_transaction(64'h2000, 2'b11, 64'h0);
         if (shell_write_count != 1 || service_write_count != 1 ||
-            shell_read_count != 1 || service_read_count != 1)
+            shell_read_count != 1 || service_read_count != 5)
             $fatal(1, "unmapped access reached a downstream target");
 
         $display("axil_address_splitter_tb: PASS");

@@ -8,6 +8,8 @@ find_package(CoyoteHW REQUIRED)
 
 project(coyote-resident-service-control-fixture)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/mmio_width_contract.cmake")
+
 option(TEST_ENABLE_SERVICE "Register the external dynamic service" ON)
 option(TEST_ENABLE_CONTROL "Enable its optional control port" ON)
 option(TEST_ENABLE_SLOT_STATUS "Expose per-region decouple status to the service" OFF)
