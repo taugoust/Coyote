@@ -52,6 +52,9 @@ module shell_ctrl_cc (
     input  logic        xresetn,
     output logic        aclk,
     output logic        aresetn,
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_app_reset_copies %}
+    output logic [N_REGIONS-1:0] app_aresetn,
+{% endif %}
     output logic        nclk,
     output logic        nresetn,
     output logic        uclk,
@@ -237,6 +240,9 @@ design_ctrl inst_design_ctrl (
     .xresetn(xresetn),
     .aclk(aclk),
     .aresetn(aresetn),
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_app_reset_copies %}
+    .app_aresetn(app_aresetn),
+{% endif %}
     .nclk(nclk),
     .nresetn(nresetn),
     .uclk(uclk),

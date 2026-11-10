@@ -34,6 +34,9 @@ import lynxTypes::*;
 module shell_top (
     // Shell clocks
     (* io_buffer_type = "none" *) input  logic                              xresetn,
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_debug_reset_copies %}
+    (* io_buffer_type = "none" *) input logic [N_REGIONS:0] debug_resetn,
+{% endif %}
     (* io_buffer_type = "none" *) input  logic                              xclk,
     
 {% if cnfg.fpga_arch == 'ultrascale_plus' %}
@@ -433,6 +436,9 @@ module shell_top (
     
     logic aclk;
     logic aresetn;
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_app_reset_copies %}
+    logic [N_REGIONS-1:0] app_aresetn;
+{% endif %}
     logic nclk;
     logic nresetn;
     logic uclk;
@@ -499,6 +505,9 @@ module shell_top (
         .xresetn(xresetn),
         .aclk(aclk),
         .aresetn(aresetn),
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_app_reset_copies %}
+        .app_aresetn(app_aresetn),
+{% endif %}
         .uclk(uclk),
         .uresetn(uresetn),
         .nclk(nclk),
@@ -1595,6 +1604,9 @@ module shell_top (
     // ================-----------------------------------------------------------------
 
     design_dynamic_top inst_dynamic (
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_app_reset_copies %}
+        .app_aresetn(app_aresetn),
+{% endif %}
         .s_axi_ctrl(axi_ctrl[0+:{{ cnfg.n_reg }}]),
 {% if cnfg.en_v80_r5_provider %}
         .s_axi_r5_provider(axi_r5_provider),
@@ -1714,7 +1726,12 @@ module shell_top (
         .s_axi_debug_hub_bready(s_axi_debug_hub_bready),
         .s_axi_debug_hub_bvalid(s_axi_debug_hub_bvalid),
         .dclk(xclk),
+{% if cnfg.en_debug_reset_copies %}
+        .dresetn(debug_resetn[0]),
+        .region_dresetn(debug_resetn[N_REGIONS:1]),
+{% else %}
         .dresetn(xresetn),
+{% endif %}
 {% endif %}
         .aresetn(aresetn),
         .aclk(aclk),

@@ -284,3 +284,107 @@ However, explicit floorplanning can sometimes hinder timing closure. In case she
     make project && make bitgen
 
 .. tip:: In addition to disabling the shell floorplan, one case pass the target clock frequencies to CMake (e.g., SCLK_F, ACLK_F) and buid with optimizations.
+
+Registered application host egress
+---------------------------------
+
+``EN_USER_HOST_OUTPUT_REG=1`` places a fully registered AXI-stream stage after
+application-side host-write selection, inside each application partition. It
+preserves payload, byte enables, packet boundaries and backpressure, adds one
+clock cycle, and sustains one beat per cycle when unstalled. The stage resets
+with the application rather than retaining data in the resident shell across
+replacement. The default is zero for compatibility.
+
+The setting is exported with the shell and inherited by application builds;
+exports predating the option use zero. Changing it requires rebuilding the
+matching shell/application boundary. It does not change RP geometry, clocks or
+relax timing/DFX validation. Registering the boundary follows AMD's DFX interface
+recommendation, but successful routing and timing closure still require physical
+validation.
+
+Independent debug reset outputs
+-------------------------------
+
+``EN_DEBUG_RESET_COPIES=1`` opts a 2..14-region Versal shell into independent
+reset output registers for the debug router and each application hub. The
+existing reset controller provides ``N_REGIONS + 2`` peripheral reset outputs:
+output zero remains the normal shell reset, output one drives the debug router,
+and subsequent outputs drive the corresponding application hub. The vendor
+controller's final registers have identical clock, data, enable, reset and
+initial state; no assertion/deassertion cycle or pulse filtering changes.
+The default remains off, preserving existing single-region interfaces.
+
+The setting is exported and requires matching static/shell sources. The
+application wrapper's scalar ``dresetn`` port is unchanged. This is physical
+fanout separation, not permission to remove reset timing checks, add false
+paths or delay only one side of an AXI transaction. Integrated synthesis must
+retain the independent drivers before they can be placed near their consumers.
+
+Independent application reset outputs
+-------------------------------------
+
+``EN_APP_RESET_COPIES=1`` enables independent same-cycle reset outputs for
+1..15 application regions on Versal. The selected application clock's vendor
+reset controller supplies ``N_REGIONS + 1`` peripheral reset bits: bit zero
+retains the normal reset, and bits one through ``N_REGIONS`` feed each region's
+existing scalar ``aresetn`` port. With ``EN_UCLK=0`` these are copies of
+``aresetn``; with ``EN_UCLK=1`` they are copies of ``uresetn``. The selected
+clock, filtering, initial state and assertion/deassertion cycles are unchanged.
+
+The vector stays internal to the shell control and dynamic layers; the static
+shell boundary and application reset-port ABI do not gain new ports. The
+setting is exported for application builds and defaults off. Consumers must
+verify distinct equivalent drivers in their integrated netlist and place them
+near the intended regions. This does not waive reset timing or establish routed
+closure. Configuration/render tests and actual Vivado BD, vendor-output and
+generated-wrapper checks are under ``tests/application_reset_copies``.
+
+Resident control pipeline placement
+-----------------------------------
+
+RP-facing control pipelines use the named hierarchy
+``region_control_pipeline[i].inst_control`` and the metadata instances
+``inst_notify``, ``inst_host_sq``, ``inst_read_sq``, ``inst_write_sq``,
+``inst_read_cq`` and ``inst_write_cq``. Individual AXI-Lite and metadata
+register stages are named ``stages[j].inst_reg``. Host stream arrays similarly
+use ``host_stream_pipeline[i]`` with named AXI-stream stages. This permits placing the
+stage facing an RP near its boundary without also forcing the intervening
+pipeline stages into that region. Select stage indices using the configured
+``NR_DH_S0`` and ``NR_DH_S1`` counts.
+
+AXI debug channel buffers retain their synthesis hierarchy so local occupancy
+feedback can be placed with its storage, rather than merging into a distant
+routing selector. These names and hierarchy attributes do not add pipeline
+cycles or alter the single-region debug bypass.
+
+The debug demultiplexer keeps each region's response-ready eligibility in
+``routed.leaf[i].response_ready``. Each endpoint buffer owns its R/B response
+storage and presents ready from local FIFO capacity and bounded transaction
+ownership state; the shared ingress FIFO is downstream of this local capture
+boundary. The demultiplexer permits one outstanding read and write transaction
+per direction, so endpoint ownership is bounded to 0..256 read beats, one
+accepted AW, and one completed W burst. W may arrive before AW; B eligibility
+requires both AW acceptance and WLAST acceptance. Additional AR/AW/WLAST work
+is held until the corresponding local response capture retires ownership.
+AR/AW head selection is registered while the ingress head remains stable,
+adding one selection cycle before request forwarding. The local response
+boundary adds elastic buffering latency (including at least one cycle before a
+zero-latency hub response can be accepted); single-region debug bypass remains
+direct. Reset clears ownership and buffer-valid state, discarding
+in-flight responses. With independent debug reset outputs enabled, each
+endpoint buffer and response-ready gate use the same reset copy as its hub. All
+copies must remain cycle-identical; they are not independent reset domains.
+The generic ``TRACK_RESPONSE_OWNERSHIP`` option is valid only with
+``REGISTER_RESPONSES=1`` and is rejected otherwise. It requires the caller to
+limit each buffer boundary to one outstanding read and write transaction; it is
+not a general multi-outstanding AXI tracker. The default option remains off, so
+other ``axi_buffer`` users keep their prior buffering and response behavior.
+
+Static decouple distribution uses a shared prefix and independently placeable
+last registers for stream and AXI control interfaces. Both copies retain exactly
+``N_REG_STA_DCPL - 1`` clock cycles of latency. Registered copies reset to zero;
+the zero-latency configuration remains a direct wire, matching the original
+behavior. The synchronous source remains the static decouple
+selector; this is not a replacement for a CDC synchronizer. The named
+``inst_decouple_pipeline/buffered.prefix`` and ``buffered.copies`` stages allow
+local control distribution without adding a reconfiguration delay cycle.

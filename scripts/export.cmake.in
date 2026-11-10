@@ -16,6 +16,7 @@ set(N_CHAN ${N_CHAN})
 set(EN_CRED_LOCAL ${EN_CRED_LOCAL})
 set(EN_CRED_REMOTE ${EN_CRED_REMOTE})
 set(N_REGIONS ${N_REGIONS})
+set(N_CONFIG ${N_CONFIG})
 set(EN_STRM ${EN_STRM})
 set(EN_MEM ${EN_MEM})
 set(MEM_OFFSET ${MEM_OFFSET})
@@ -117,6 +118,9 @@ set(MULT_TCP_AXI ${MULT_TCP_AXI})
 set(N_NET_CHAN ${N_NET_CHAN})
 set(MULT_REGIONS ${MULT_REGIONS})
 set(EN_USER_REG ${EN_USER_REG})
+set(EN_USER_HOST_OUTPUT_REG ${EN_USER_HOST_OUTPUT_REG})
+set(EN_DEBUG_RESET_COPIES ${EN_DEBUG_RESET_COPIES})
+set(EN_APP_RESET_COPIES ${EN_APP_RESET_COPIES})
 
 # Shell/application interface contract. Build-only service source paths are
 # deliberately not exported; a BUILD_APP consumer needs only compatibility

@@ -1,0 +1,92 @@
+`timescale 1ns/1ps
+module tb;
+    logic aclk=0, aresetn=0;
+    always #5 aclk=~aclk;
+    logic [511:0] s_data=0, m_data;
+    logic [63:0] s_keep=0, m_keep;
+    logic s_last=0, s_valid=0, s_ready;
+    logic m_last, m_valid, m_ready=0;
+    egress_fixture dut(.*);
+    logic [511:0] expected_data[256];
+    logic [63:0] expected_keep[256];
+    logic expected_last[256];
+    int sent=0, received=0, cycle=0, accepted_cycle=-1, observed_latency=-1;
+    int target=0;
+    logic check_ii=0, stream_started=0;
+    logic [31:0] rng=32'h31415927;
+    always @(posedge aclk) begin
+        if(!aresetn) begin
+            sent=0; received=0; cycle=0; accepted_cycle=-1; observed_latency=-1;
+            stream_started=0;
+        end else begin
+            cycle++;
+            if(check_ii && stream_started && received<target && !m_valid)
+                $fatal(1,"steady-state output bubble");
+            if(s_valid && s_ready) begin
+                expected_data[sent]=s_data;
+                expected_keep[sent]=s_keep;
+                expected_last[sent]=s_last;
+                if(sent==0) accepted_cycle=cycle;
+                sent++;
+            end
+            if(m_valid && m_ready) begin
+                if(received>=sent || m_data!==expected_data[received] ||
+                    m_keep!==expected_keep[received] || m_last!==expected_last[received])
+                    $fatal(1,"egress payload/order mismatch at beat %0d",received);
+                if(received==0) observed_latency=cycle-accepted_cycle;
+                received++;
+                if(check_ii) stream_started=1;
+            end
+        end
+    end
+    task automatic drive_payload;
+        for(int word_index=0;word_index<16;word_index++)
+            s_data[word_index*32 +: 32]=32'hcafe0000 ^ 32'(sent*17+word_index);
+        s_keep=64'hffff_ffff_ffff_ffff ^ (64'(sent)<<3);
+        s_last=(sent%4)==3;
+    endtask
+    task automatic transfer(input int count,input int mode);
+        int elapsed;
+        target=count; elapsed=0; check_ii=(mode==2); stream_started=0;
+        while(received<target) begin
+            @(negedge aclk);
+            s_valid=sent<target;
+            drive_payload();
+            rng={rng[30:0],rng[31]^rng[21]^rng[1]^rng[0]};
+            m_ready=(mode!=1) || (elapsed>=16 && (rng[0] || rng[9]));
+            elapsed++;
+            @(posedge aclk); #1;
+        end
+        @(negedge aclk); s_valid=0; m_ready=0; check_ii=0;
+    endtask
+    initial begin
+        integer result;
+        repeat(4) @(negedge aclk);
+        aresetn=1;
+        transfer(1,0);
+        if(observed_latency!=@ENABLED@)
+            $fatal(1,"unexpected egress latency %0d",observed_latency);
+        transfer(129,1);
+        transfer(193,2);
+        // Reset cancels pending words inside the RP rather than retaining them
+        // in the resident shell when a replacement application is loaded.
+        repeat(8) begin
+            @(negedge aclk); m_ready=0; s_valid=1; drive_payload();
+        end
+        @(negedge aclk); aresetn=0; s_valid=0;
+        repeat(4) @(negedge aclk);
+        aresetn=1; m_ready=1;
+        repeat(6) begin
+            @(posedge aclk); #1;
+            if(m_valid) $fatal(1,"reset retained old RP output");
+        end
+        transfer(64,2);
+        result=$fopen("@RESULT@","w");
+        if(!result) $fatal(1,"cannot write test receipt");
+        $fwrite(result,"PASS egress enabled=@ENABLED@ latency=%0d\n",observed_latency);
+        $fclose(result);
+        $display("RP_EGRESS_PASS enabled=@ENABLED@ latency=%0d",observed_latency);
+        $finish;
+    end
+    initial begin #100000; $fatal(1,"egress test timeout"); end
+endmodule

@@ -29,6 +29,10 @@ proc cr_bd_design_ctrl { parentCell } {
   upvar #0 cfg cnfg
 
   set design_name design_ctrl
+  set app_reset_copies [expr {[info exists cnfg(en_app_reset_copies)] && $cnfg(en_app_reset_copies) == 1}]
+  if {$app_reset_copies && ($cnfg(n_reg) < 1 || $cnfg(n_reg) > 15)} {
+    error "Independent application resets require 1..15 regions"
+  }
 
   common::send_msg_id "BD_TCL-003" "INFO" "Currently there is no design <$design_name> in project, so creating one..."
 
@@ -171,7 +175,7 @@ proc cr_bd_design_ctrl { parentCell } {
   }
   eval $cmd
   
-  # Shell reset
+  # Shell reset and optional same-cycle application reset vector.
   set aresetn [ create_bd_port -dir O -type rst aresetn ]
 
   # Shell clock
@@ -210,6 +214,16 @@ proc cr_bd_design_ctrl { parentCell } {
             CONFIG.ASSOCIATED_RESET {uresetn} \
   ] \$uclk"
   eval $cmd
+
+  if {$app_reset_copies} {
+    set app_reset_clock [expr {$cnfg(en_uclk) ? "uclk" : "aclk"}]
+    set app_reset_normal [expr {$cnfg(en_uclk) ? "uresetn" : "aresetn"}]
+    set app_reset_ip [expr {$cnfg(en_uclk) ? "proc_sys_reset_u" : "proc_sys_reset_a"}]
+    set app_aresetn [create_bd_port -dir O -type rst -from [expr {$cnfg(n_reg)-1}] -to 0 app_aresetn]
+    set_property CONFIG.POLARITY ACTIVE_LOW $app_aresetn
+    set_property CONFIG.ASSOCIATED_CLOCK $app_reset_clock $app_aresetn
+    set_property CONFIG.ASSOCIATED_RESET "${app_reset_normal}:app_aresetn" [get_bd_ports $app_reset_clock]
+  }
 
   # Locked and reset
   create_bd_port -dir O -type rst lckresetn
@@ -254,6 +268,14 @@ proc cr_bd_design_ctrl { parentCell } {
   create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_a
   create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_n
   create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_u
+  if {$app_reset_copies} {
+    set reset_outputs [expr {$cnfg(n_reg) + 1}]
+    set_property CONFIG.C_NUM_PERP_ARESETN $reset_outputs [get_bd_cells $app_reset_ip]
+    create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 app_reset_normal_slice
+    set_property -dict [list CONFIG.DIN_WIDTH $reset_outputs CONFIG.DIN_FROM 0 CONFIG.DIN_TO 0 CONFIG.DOUT_WIDTH 1] [get_bd_cells app_reset_normal_slice]
+    create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 app_reset_regions_slice
+    set_property -dict [list CONFIG.DIN_WIDTH $reset_outputs CONFIG.DIN_FROM [expr {$reset_outputs-1}] CONFIG.DIN_TO 1 CONFIG.DOUT_WIDTH $cnfg(n_reg)] [get_bd_cells app_reset_regions_slice]
+  }
 
   # Debug Hub IP
   if {$cnfg(en_pr) eq 0} {
@@ -305,9 +327,21 @@ proc cr_bd_design_ctrl { parentCell } {
   connect_bd_net [get_bd_pins proc_sys_reset_a/slowest_sync_clk] [get_bd_pins clk_wiz_0/clk_out1]
   connect_bd_net [get_bd_pins proc_sys_reset_n/slowest_sync_clk] [get_bd_pins clk_wiz_0/clk_out2]
   connect_bd_net [get_bd_pins proc_sys_reset_u/slowest_sync_clk] [get_bd_pins clk_wiz_0/clk_out3]
-  connect_bd_net [get_bd_ports aresetn] [get_bd_pins proc_sys_reset_a/peripheral_aresetn]
+  if {$app_reset_copies && !$cnfg(en_uclk)} {
+    connect_bd_net [get_bd_ports aresetn] [get_bd_pins app_reset_normal_slice/Dout]
+  } else {
+    connect_bd_net [get_bd_ports aresetn] [get_bd_pins proc_sys_reset_a/peripheral_aresetn]
+  }
   connect_bd_net [get_bd_ports nresetn] [get_bd_pins proc_sys_reset_n/peripheral_aresetn]
-  connect_bd_net [get_bd_ports uresetn] [get_bd_pins proc_sys_reset_u/peripheral_aresetn]
+  if {$app_reset_copies && $cnfg(en_uclk)} {
+    connect_bd_net [get_bd_ports uresetn] [get_bd_pins app_reset_normal_slice/Dout]
+  } else {
+    connect_bd_net [get_bd_ports uresetn] [get_bd_pins proc_sys_reset_u/peripheral_aresetn]
+  }
+  if {$app_reset_copies} {
+    connect_bd_net [get_bd_pins $app_reset_ip/peripheral_aresetn] [get_bd_pins app_reset_normal_slice/Din] [get_bd_pins app_reset_regions_slice/Din]
+    connect_bd_net [get_bd_pins app_reset_regions_slice/Dout] [get_bd_ports app_aresetn]
+  }
   connect_bd_net [get_bd_ports xresetn] [get_bd_pins proc_sys_reset_a/ext_reset_in]
   connect_bd_net [get_bd_ports xresetn] [get_bd_pins proc_sys_reset_n/ext_reset_in]
   connect_bd_net [get_bd_ports xresetn] [get_bd_pins proc_sys_reset_u/ext_reset_in]

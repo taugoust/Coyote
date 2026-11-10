@@ -73,6 +73,9 @@ set(SIM_EXTERNAL_DYNAMIC_SERVICE 0 CACHE STRING "Include the registered external
 
 # Enable streams from host
 set(EN_STRM 1 CACHE STRING "Enable host streams")
+set(EN_USER_HOST_OUTPUT_REG 0 CACHE BOOL "Register the application host-stream output boundary")
+set(EN_DEBUG_RESET_COPIES 0 CACHE BOOL "Export independent same-cycle Versal debug reset outputs")
+set(EN_APP_RESET_COPIES 0 CACHE BOOL "Export independent same-cycle Versal application reset outputs")
 
 # Number of parallel streams from host (per vFPGA)
 set(N_STRM_AXI 1 CACHE STRING "Number of host streams")
@@ -1417,6 +1420,10 @@ macro(validation_checks_hw)
         set(COPROCESSOR_BINDING_GENERATION_BITS 0)
         set(COPROCESSOR_PROVIDER_COUNT 0)
         set(COPROCESSOR_PROVIDER_DESCRIPTORS "")
+        # Older shell exports have an unregistered host output boundary.
+        set(EN_USER_HOST_OUTPUT_REG 0)
+        set(EN_DEBUG_RESET_COPIES 0)
+        set(EN_APP_RESET_COPIES 0)
         include("${SHELL_PATH}/export.cmake")
         set(COMP_CORES "${_application_comp_cores}")
 
@@ -1445,6 +1452,36 @@ macro(validation_checks_hw)
 
     endif()
 
+    # Optional registered host egress inside each application partition.
+    # Application builds inherit this setting from their exact parent export.
+    if(NOT DEFINED EN_USER_HOST_OUTPUT_REG)
+        set(EN_USER_HOST_OUTPUT_REG 0)
+    endif()
+    if(EN_USER_HOST_OUTPUT_REG)
+        set(EN_USER_HOST_OUTPUT_REG 1)
+    else()
+        set(EN_USER_HOST_OUTPUT_REG 0)
+    endif()
+
+    if(EN_DEBUG_RESET_COPIES)
+        if(NOT FPGA_ARCH STREQUAL "versal" OR N_REGIONS LESS 2 OR N_REGIONS GREATER 14)
+            message(FATAL_ERROR "Independent debug resets require Versal with 2..14 regions")
+        endif()
+        set(EN_DEBUG_RESET_COPIES 1)
+    else()
+        set(EN_DEBUG_RESET_COPIES 0)
+    endif()
+    if(NOT DEFINED EN_APP_RESET_COPIES)
+        set(EN_APP_RESET_COPIES 0)
+    endif()
+    if(EN_APP_RESET_COPIES)
+        if(NOT FPGA_ARCH STREQUAL "versal" OR N_REGIONS LESS 1 OR N_REGIONS GREATER 15)
+            message(FATAL_ERROR "Independent application resets require Versal with 1..15 regions")
+        endif()
+        set(EN_APP_RESET_COPIES 1)
+    else()
+        set(EN_APP_RESET_COPIES 0)
+    endif()
     _validate_external_dynamic_service()
     _validate_coprocessor_interface()
 endmacro()

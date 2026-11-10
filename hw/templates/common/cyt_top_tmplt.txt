@@ -295,6 +295,9 @@ module cyt_top (
     // Static layer clocks & reset
     wire xclk;
     wire [0:0] xresetn;
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_debug_reset_copies %}
+    wire [N_REGIONS:0] debug_resetn;
+{% endif %}
 
     // ISR
     wire [14:0] usr_irq;
@@ -390,6 +393,9 @@ module cyt_top (
         // Clock & reset
         .xclk(xclk),
         .xresetn(xresetn),
+{% if cnfg.en_debug_reset_copies %}
+        .debug_resetn(debug_resetn),
+{% endif %}
 
         // ISR
         .s_usr_irq(usr_irq),
@@ -427,6 +433,9 @@ module cyt_top (
     // -----------------------------------------------------------------
     shell_top inst_shell (
         // Clock & reset
+{% if cnfg.fpga_arch == 'versal' and cnfg.en_debug_reset_copies %}
+        .debug_resetn(debug_resetn),
+{% endif %}
         .xresetn(xresetn),
         .xclk(xclk),
     {% if cnfg.fpga_arch == 'ultrascale_plus' %}

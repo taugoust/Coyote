@@ -59,7 +59,7 @@ module dcpl_static #(
 );  
 
     // Init after ccross
-    logic [N_REG_STA_DCPL-1:0] decouple;
+    logic decouple_data, decouple_control;
     logic [14:0] usr_irq;
     AXI4 axi_main  ();
     AXI4S axis_dyn_out [N_SCHAN] (.*);
@@ -72,19 +72,13 @@ module dcpl_static #(
     AXI4S #(.AXI4S_DATA_BITS(32)) axis_wb_out (.*);
     dmaIntf dma_wb_req ();
     
-    // Slicing decouple signal
-    assign decouple[0] = s_decouple;
-
-    always_ff @(posedge aclk) begin
-        if(~aresetn) begin
-            for(int i = 1; i < N_REG_STA_DCPL; i++) 
-                decouple[i] <= 1'b0;
-        end 
-        else begin
-            for(int i = 1; i < N_REG_STA_DCPL; i++) 
-                decouple[i] <= decouple[i-1];
-        end
-    end
+    // The control and stream interfaces share latency, not a remote final FF.
+    control_fanout_reg #(
+        .STAGES(N_REG_STA_DCPL-1), .COPIES(2)
+    ) inst_decouple_pipeline (
+        .aclk(aclk), .aresetn(aresetn), .s_value(s_decouple),
+        .m_value({decouple_control, decouple_data})
+    );
 
     // Slicing    
     logic_reg_array_static #(.N_STAGES(N_STAGES_0), .DATA_BITS(15)) inst_s0_usr_irq (.aclk(aclk), .aresetn(aresetn), .s_data(usr_irq), .m_data(m_usr_irq));
@@ -102,17 +96,17 @@ module dcpl_static #(
     wback_dma inst_wback_adj (.aclk(aclk), .aresetn(aresetn), .s_wback(wback), .m_dma_wr(dma_wb_req), .m_axis_wback(axis_wb));
 
     // Decoupling
-    logic_decoupler_static #(.DATA_BITS(15)) inst_s1_usr_irq (.decouple(decouple[N_REG_STA_DCPL-1]), .s_data(s_usr_irq), .m_data(usr_irq));
-    axi_decoupler_static inst_s1_axi_main (.decouple(decouple[N_REG_STA_DCPL-1]), .s_axi(axi_main), .m_axi(m_axi_main));
+    logic_decoupler_static #(.DATA_BITS(15)) inst_s1_usr_irq (.decouple(decouple_data), .s_data(s_usr_irq), .m_data(usr_irq));
+    axi_decoupler_static inst_s1_axi_main (.decouple(decouple_control), .s_axi(axi_main), .m_axi(m_axi_main));
 
     for(genvar i = 0; i < N_SCHAN; i++) begin
-        axis_decoupler_static inst_s1_axis_dyn_out (.decouple(decouple[N_REG_STA_DCPL-1]), .s_axis(axis_dyn_out[i]), .m_axis(m_axis_dyn_out[i]));
-        axis_decoupler_static inst_s1_axis_dyn_in (.decouple(decouple[N_REG_STA_DCPL-1]), .s_axis(s_axis_dyn_in[i]), .m_axis(axis_dyn_in[i]));
-        dma_decoupler_static inst_s1_dma_rd_req (.decouple(decouple[N_REG_STA_DCPL-1]), .s_req(s_dma_rd_req[i]), .m_req(dma_rd_req[i]));
-        dma_decoupler_static inst_s1_dma_wr_req (.decouple(decouple[N_REG_STA_DCPL-1]), .s_req(s_dma_wr_req[i]), .m_req(dma_wr_req[i]));
+        axis_decoupler_static inst_s1_axis_dyn_out (.decouple(decouple_data), .s_axis(axis_dyn_out[i]), .m_axis(m_axis_dyn_out[i]));
+        axis_decoupler_static inst_s1_axis_dyn_in (.decouple(decouple_data), .s_axis(s_axis_dyn_in[i]), .m_axis(axis_dyn_in[i]));
+        dma_decoupler_static inst_s1_dma_rd_req (.decouple(decouple_data), .s_req(s_dma_rd_req[i]), .m_req(dma_rd_req[i]));
+        dma_decoupler_static inst_s1_dma_wr_req (.decouple(decouple_data), .s_req(s_dma_wr_req[i]), .m_req(dma_wr_req[i]));
     end
 
-    meta_decoupler_static inst_s1_wb (.decouple(decouple[N_REG_STA_DCPL-1]), .s_meta(s_wback), .m_meta(wback));
+    meta_decoupler_static inst_s1_wb (.decouple(decouple_data), .s_meta(s_wback), .m_meta(wback));
     
     // Out wb
     assign m_axis_wb.tvalid = axis_wb_out.tvalid;
