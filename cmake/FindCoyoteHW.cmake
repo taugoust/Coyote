@@ -29,7 +29,7 @@
 ############################################
 # @brief Set-up the necessary config, dependencies and software to build the Coyote hardware
 
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.16)
 
 set(IPREPO_DIR ${CMAKE_BINARY_DIR}/iprepo)
 file(MAKE_DIRECTORY ${IPREPO_DIR})
@@ -37,7 +37,7 @@ file(MAKE_DIRECTORY ${IPREPO_DIR})
 ############################################
 ##            USER CONFIGURATION          ##
 ############################################
-# Target FPGA device; supported Alveo U55C, Alveo U280, Alveo U250, Alveo V80
+# Target FPGA device; supported Alveo U55C, Alveo U280, Alveo U250, Alveo U200, Alveo V80
 set(FDEV_NAME "0" CACHE STRING "Target FPGA device")
 
 ##
@@ -156,11 +156,69 @@ set(N_TCP_AXI 1 CACHE STRING "Number of TCP/IP streams")
 set(EN_SNIFFER 0 CACHE STRING "Enable packet sniffer.")
 set(SNIFFER_VFPGA_ID 0 CACHE STRING "ID of vFPGA to receive packet sniffer data stream.")
 
+# Raw Ethernet: hand whole frames straight to one vFPGA, bypassing the network
+# stack (IP handler, ICMP server, MAC/IP encode, ARP server). The vFPGA owns
+# the entire frame - destination MAC, source MAC, EtherType and payload - and
+# gets a bidirectional 512-bit AXI4-Stream pair plus the MAC's bring-up status.
+#
+# This is the only supported networking mode on Versal/V80 today: the stack's
+# four HLS cores come from the fpga-network-stack submodule and have not been
+# built for a Versal part. Mutually exclusive with EN_RDMA, EN_TCP, EN_SNIFFER
+# and EN_STATS, all of which need the stack that this mode removes.
+set(EN_NET_RAW 0 CACHE STRING "Raw Ethernet to a single vFPGA, network stack bypassed")
+set(NET_RAW_VFPGA_ID 0 CACHE STRING "ID of vFPGA to receive the raw Ethernet stream")
+
 # Use QSFP port 0
 set(EN_NET_0 1 CACHE STRING "QSFP port 0")
 
 # Use QSFP port 1
 set(EN_NET_1 0 CACHE STRING "QSFP port 1")
+
+# Aurora 64B/66B on QSFP1 (4 lanes @ 25.78125 Gbps).
+# Mutually exclusive with EN_NET_1 (both occupy the same physical QSFP1 cage).
+# When EN_AURORA_1=1, the shell instantiates an Aurora IP in parallel to CMAC
+# (which stays on QSFP0 when EN_NET_0=1). Aurora's user-side AXIS is brought
+# into each vFPGA as axis_aurora_rx / axis_aurora_tx.
+set(EN_AURORA_1 0 CACHE STRING "Enable Aurora 64B/66B on QSFP1")
+
+# Number of Aurora streams per vFPGA (currently always 1; reserved for future fan-out)
+set(N_AURORA_AXI 1 CACHE STRING "Number of Aurora streams per vFPGA")
+
+# QLINK: raw GTY on QSFP1, single lane at 10.3125 Gbps with 8B/10B, for
+# low-latency QEC syndrome transport (examples/16_qlink). Deliberately presents
+# the same 256-bit AXIS interface to the vFPGA that EN_AURORA_1 does, so no
+# dynamic/user template changes are needed -- only shell_top gains a branch.
+set(EN_QLINK_GTY 0 CACHE STRING "Enable QLINK raw-GTY link on QSFP1")
+
+# Build a QLINK self-test image: near-end PMA loopback, so a single card proves
+# its own GT + framing + protocol path with no cable and no peer attached. The
+# only way to distinguish "my receiver is broken" from "the far card is not
+# transmitting" without a scope.
+set(EN_QLINK_LOOPBACK 0 CACHE STRING "QLINK near-end PMA loopback (self-test image)")
+
+##
+## AVED MANAGEMENT CONTROL (AMC) firmware bringup on V80
+##
+# When EN_AMC=1, the V80 shell adds:
+#   - GCQ (Generic Command Queue) IP between PCIe (S00) and APU/RPU (S01)
+#   - Optional HW Discovery + UUID ROM (Tier 1 from docs/AVED_vs_Coyote.md row 4/6)
+# Plus the build flow gains an AMC firmware pass that emits amc.elf and merges
+# it into the PMC BIF.
+#
+# Requires AVED's iprepo (cmd_queue_v2_0, hw_discovery_v1_0, shell_utils_uuid_rom_v2_0).
+# AVED_IPREPO_PATH must explicitly identify AVED/hw/<release>/src/iprepo.
+set(EN_AMC 0 CACHE STRING "Enable AVED Management Control (AMC) firmware integration on V80")
+set(AVED_IPREPO_PATH "" CACHE PATH "AVED iprepo containing cmd_queue, hw_discovery, uuid_rom IPs")
+
+# When EN_APU=1, the V80 shell additionally gives the A72 (APU) a NoC master into
+# DDR4 (versal_cips_0/NOC_FPD_AXI_0 -> axi_noc_0/S04_AXI -> M00_INI), enlarges BAR4
+# to 512 MB with a 256 MB host window onto DDR, and replaces the vFPGA axi_ctrl
+# tie-off with a reachability probe. This is the hardware Linux on the A72 needs;
+# see docs/superpowers/specs/2026-08-18-a72-linux-vfpga-design.md.
+#
+# It builds on top of EN_AMC: the DDR4 controller, the M00_INI route to it and the
+# PMC->DDR load path all come from the AMC integration.
+set(EN_APU 0 CACHE STRING "Enable A72/APU (Linux) integration on V80; requires EN_AMC=1")
 
 ##
 ## RECONFIGURATION
@@ -176,6 +234,24 @@ set(FPLAN_PATH 0 CACHE STRING "Path to vFPGA floorplan; only applicable if EN_PR
 
 # Number of clock cycles after which the loaded app is considered valid (due to the ICAP done signal being lost if crossing SLR regions on the U55C)
 set(EOS_TIME 1000000 CACHE STRING "End of startup time.")
+
+# Enable inter-vFPGA AXI-Stream ring
+# When EN_P2P=1 and N_REGIONS>1, each vFPGA exposes axis_p2p_send (master) and
+# axis_p2p_recv (slave) ports at AXI_DATA_BITS wide. In dynamic_top these are
+# wired in a ring: wrapper[i].axis_p2p_send -> wrapper[(i+1) mod N].axis_p2p_recv.
+# Provides zero-DRAM inter-vFPGA data movement for pipelined multi-vFPGA
+# workloads. On Versal, the ring wires cross SLR boundaries via SLLs.
+# Future: replace ring with hardened NoC AXIS mesh (needs static rebuild).
+set(EN_P2P 0 CACHE STRING "Enable inter-vFPGA AXI-Stream ring (only meaningful when N_REGIONS>1)")
+
+# Route the per-vFPGA HOST DMA datapath over the hardened NoC instead of fabric SLLs.
+# On the V80 (3-SLR SSIT), the shell (SLR0) <-> vFPGA (SLR1/SLR2) host streams cross
+# the die as fabric Super-Long-Lines; that SLL budget caps the design at ~18-19 vFPGAs.
+# With EN_HOST_NOC=1 the shell's per-vFPGA host AXIS is carried by xpm_nmu_strm/nsu_strm
+# NoC endpoints (Network-3, reusing the EN_P2P hub-sharing primitives) so the crossing
+# rides dedicated NoC silicon (~zero SLL) -> restores N=32. Phase 1 moves DATA streams;
+# control/descriptor path stays in fabric (see docs/superpowers/plans/2026-09-18-host-vfpga-noc-datapath.md).
+set(EN_HOST_NOC 0 CACHE STRING "Route host DMA streams over the hardened NoC (V80 only; scales past the ~19-vFPGA SLL ceiling)")
 
 # Enable explicit floor-planning & reconfiguration of the shell.
 # With a floorplan, it's possible to reuse an existing routed checkpoint of the static layer, as well as do run-time shell reconfiguration
@@ -232,7 +308,8 @@ set(V80_R5_BTCM_BYTES 65536)
 set(EN_V80_R5_PROVIDER 0 CACHE STRING "Enable the V80 R5-0 co-processor provider")
 set(V80_R5_PROVIDER_BASE 2147549184) # 0x80010000
 set(V80_R5_PROVIDER_BYTES 65536)
-set(V80_R5_PROVIDER_QUEUE_DEPTH 4)
+set(V80_R5_PROVIDER_QUEUE_DEPTH 4 CACHE STRING "R5 provider receive/transmit queue depth")
+set(V80_R5_PROVIDER_MAX_PACKET_BEATS 64 CACHE STRING "R5 provider maximum 512-bit packet beats")
 set(V80_R5_PROVIDER_ENDPOINT_ID 1)
 set(V80_R5_PROVIDER_RUNTIME_ABI "baremetal")
 set(V80_R5_PROVIDER_FIRMWARE_ABI "coyote-r5-provider-mmio-v1")
@@ -402,7 +479,7 @@ endif()
 ##
 
 # Path to static layer checkpoint, routed and locked
-# Coyote provides static layer checkpoints for Alveo U55C, U280, U250 clocked at 250MHz
+# Coyote provides static layer checkpoints for Alveo U55C, U280, U250, U200 clocked at 250MHz
 # Since the static layer never changes, a checkpoint is used for faster Place-and-Route
 # Users are free to provide their own via this variable, or, rebuild the static part using BUILD_STATIC = 1
 set(STATIC_PATH "${CYT_DIR}/hw/checkpoints" CACHE STRING "Static layer checkpoint")
@@ -923,6 +1000,12 @@ macro(validation_checks_hw)
         message(FATAL_ERROR "EN_V80_R5_PROVIDER must be 0 or 1")
     endif()
     if(EN_V80_R5_PROVIDER)
+        if(NOT V80_R5_PROVIDER_QUEUE_DEPTH MATCHES "^[1-9][0-9]*$" OR
+           V80_R5_PROVIDER_QUEUE_DEPTH GREATER 255 OR
+           NOT V80_R5_PROVIDER_MAX_PACKET_BEATS MATCHES "^[1-9][0-9]*$" OR
+           V80_R5_PROVIDER_MAX_PACKET_BEATS GREATER 64)
+            message(FATAL_ERROR "R5 provider requires queue depth 1..255 and maximum packet beats 1..64")
+        endif()
         if(NOT FDEV_NAME STREQUAL "v80")
             message(FATAL_ERROR "The R5 co-processor provider is available only on V80")
         endif()
@@ -976,6 +1059,25 @@ macro(validation_checks_hw)
             set(N_STRIPE_CHAN 32)
             set(MEM_OFFSET 0)
         
+        # u200
+        elseif(FDEV_NAME STREQUAL "u200")
+            # Platform details
+            set(FPGA_ARCH "ultrascale_plus")
+	    set(FPGA_PART xcu200-fsgd2104-2-e CACHE STRING "FPGA Part" FORCE)
+
+            # DDR configuration
+            set(DDR_SIZE 34)
+            set(N_DDR_CHAN 1)
+
+            # No HBM on the u200
+            set(HCLK_F 1)
+            set(HBM_SIZE 0)
+
+            # Striping
+            set(MC_SIZE ${DDR_SIZE})
+            set(N_STRIPE_CHAN ${N_DDR_CHAN})
+            set(MEM_OFFSET 0)
+
         # u250
         elseif(FDEV_NAME STREQUAL "u250")
             # Platform details
@@ -1019,10 +1121,18 @@ macro(validation_checks_hw)
             # Platform details
             set(FPGA_ARCH "versal")
             set(FPGA_PART xcv80-lsva4737-2MHP-e-S CACHE STRING "FPGA Part" FORCE)
-        
-            # TODO (Versal): The V80 also includes DDR memory, which we could support in the future
-            set(DDR_SIZE 0)
-            set(N_DDR_CHAN 0)
+
+            # Onboard 4 GB DDR4 (axi_noc_mc_ddr4_0). Off by default; enabled
+            # automatically when EN_AMC=1 because AMC firmware on R5 places
+            # its .text/.data/.bss at 0x40000000 (inside DDR_LOW0).
+            # 2^32 = 4 GB.
+            if(EN_AMC)
+                set(DDR_SIZE 32)
+                set(N_DDR_CHAN 1)
+            else()
+                set(DDR_SIZE 0)
+                set(N_DDR_CHAN 0)
+            endif()
             
             # HBM configuration
             set(HCLK_F 400)
@@ -1033,9 +1143,20 @@ macro(validation_checks_hw)
             set(N_STRIPE_CHAN 32)
             set(MEM_OFFSET 274877906944) # 0x4000000000 ~ 256 GiB
 
-            if (BUILD_SHELL OR BUILD_APP) 
-                message(" ** V80 with BUILD_SHELL=1 or BUILD_APP=1 selected, ignoring static layer clock frequency setting (SCLK_F) and defaulting to 333 MHz")
-                set(SCLK_F 333)
+            if (BUILD_SHELL OR BUILD_APP)
+                # Shell builds link against an existing static checkpoint, whose
+                # SCLK_F was baked in at the time of the static build. The shell's
+                # clk_wiz must be configured for that exact input frequency.
+                # Upstream ships a 333 MHz checkpoint and forces SCLK_F=333 here.
+                # If the user has explicitly overridden SCLK_F (e.g. because they
+                # rebuilt the static at a different frequency and swapped it in),
+                # honor that override.
+                if (NOT DEFINED CACHE{SCLK_F} OR SCLK_F STREQUAL "250")
+                    message(" ** V80 with BUILD_SHELL=1 or BUILD_APP=1 selected, defaulting SCLK_F to 333 MHz to match the shipped static checkpoint")
+                    set(SCLK_F 333)
+                else()
+                    message(" ** V80 with BUILD_SHELL=1 or BUILD_APP=1: honoring user-provided SCLK_F=${SCLK_F} (must match the static checkpoint actually in use)")
+                endif()
             endif()
         
         # Fail on unsupported device
@@ -1052,7 +1173,7 @@ macro(validation_checks_hw)
         ## ! u280 has both DDR and HBM, HBM enabled by default; if DDR is required add u280 in DDR_DEV and remove it from HBM_DEV
         ## ! v80 has both DDR and HBM, HBM is enabled by default and supported; DDR not supported yet
         ##
-        set(DDR_DEV "u250")
+        set(DDR_DEV "u200" "u250")
         set(HBM_DEV "u55c" "u280" "v80")
 
         list(FIND DDR_DEV ${FDEV_NAME} TMP_DEV)
@@ -1077,8 +1198,16 @@ macro(validation_checks_hw)
         if(N_REGIONS GREATER 1)
             set(MULT_REGIONS 1)
         endif()
-        if(N_REGIONS GREATER 15)
-            message(FATAL_ERROR "Max 15 vFPGAs supported.")
+        if(NOT N_REGIONS MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "N_REGIONS must be a positive integer")
+        endif()
+        # V80's shared NoC topologies extend flat builds to 32 regions. The
+        # application-reconfiguration flow retains its 15-region contract.
+        if(N_REGIONS GREATER 32)
+            message(FATAL_ERROR "Max 32 vFPGAs supported")
+        endif()
+        if(N_REGIONS GREATER 15 AND (EN_PR OR NOT FDEV_NAME STREQUAL "v80"))
+            message(FATAL_ERROR "Max 15 vFPGAs supported with application reconfiguration or non-V80 targets")
         endif()
 
         # Number of configurations needs to be 1 without PR
@@ -1195,17 +1324,96 @@ macro(validation_checks_hw)
         endif()
 
         # Top net enabled
-        if(EN_RDMA OR EN_TCP OR EN_SNIFFER)
+        if(EN_RDMA OR EN_TCP OR EN_SNIFFER OR EN_NET_RAW)
             set(EN_NET 1)
         else()
             set(EN_NET 0)
         endif()
 
-        # TODO (Versal): Add networking
-        if (EN_NET AND FPGA_ARCH STREQUAL "versal")
-            message(FATAL_ERROR "Networking not supported yet on Versal devices.")
+        # Raw Ethernet removes network_stack, so anything that consumes or
+        # produces through the stack is incompatible with it.
+        if(EN_NET_RAW AND (EN_RDMA OR EN_TCP OR EN_SNIFFER))
+            message(FATAL_ERROR "EN_NET_RAW bypasses the network stack, so it cannot be combined with "
+                                "EN_RDMA, EN_TCP or EN_SNIFFER; those all sit on top of the stack.")
         endif()
-        
+        if(EN_NET_RAW AND EN_STATS)
+            message(FATAL_ERROR "EN_NET_RAW bypasses the network stack, which is what produces net_stats; "
+                                "set EN_STATS=0. MAC bring-up status is exposed to the vFPGA instead.")
+        endif()
+        if(EN_NET_RAW AND NOT NET_RAW_VFPGA_ID MATCHES "^[0-9]+$")
+            message(FATAL_ERROR "NET_RAW_VFPGA_ID must be a nonnegative integer")
+        endif()
+        if(EN_NET_RAW AND NET_RAW_VFPGA_ID GREATER_EQUAL N_REGIONS)
+            message(FATAL_ERROR "NET_RAW_VFPGA_ID (${NET_RAW_VFPGA_ID}) must be a valid vFPGA index, i.e. < N_REGIONS (${N_REGIONS}).")
+        endif()
+
+        # Versal networking uses DCMAC (200 Gb/s) — ported from
+        # fpgasystems/Versal-DCMAC into hw/hdl/network/dcmac/ and
+        # hw/bd/versal/cr_dcmac.tcl. Only V80 has a board_config.tcl entry
+        # so far; other Versal boards (VHK158, VPK120) need an entry added
+        # before EN_NET works on them.
+        if (EN_NET AND FPGA_ARCH STREQUAL "versal" AND NOT FDEV_NAME STREQUAL "v80")
+            message(FATAL_ERROR "EN_NET on Versal currently requires FDEV_NAME=v80 "
+                                "(no DCMAC site mapping for ${FDEV_NAME} in board_config.tcl).")
+        endif()
+
+        # The network stack's HLS cores have not been built for a Versal part,
+        # so Versal networking is raw-Ethernet only for now.
+        if (EN_NET AND FPGA_ARCH STREQUAL "versal" AND NOT EN_NET_RAW)
+            message(FATAL_ERROR "Networking on Versal currently requires EN_NET_RAW=1: the network stack's "
+                                "HLS cores (ip_handler, icmp_server, mac_ip_encode, arp_server_subnet) come "
+                                "from the fpga-network-stack submodule and are not built for Versal parts.")
+        endif()
+
+        # The DCMAC and its GT quad cannot live inside a reconfigurable
+        # partition. Both configurations that Coyote allows on Versal keep
+        # inst_shell static (a flat BUILD_STATIC link, or EN_PR=1 with the
+        # vFPGA as the only RP), so the requirement is just EN_SHELL_PBLOCK=0.
+        if (EN_NET AND FPGA_ARCH STREQUAL "versal" AND EN_SHELL_PBLOCK)
+            message(FATAL_ERROR "EN_NET on Versal requires EN_SHELL_PBLOCK=0. With the shell floorplanned "
+                                "as a reconfigurable partition, the DCMAC hard block and its GT quad would "
+                                "land inside an RP. Use BUILD_STATIC=1 (flat link) or EN_PR=1.")
+        endif()
+
+        # On Versal, EN_NET_0/EN_NET_1 select the DCMAC site rather than a CMAC
+        # instance, and with it the reachable QSFP cage:
+        #   EN_NET_0 -> DCMAC_X1Y1 -> GTM_QUAD_X1Y7, bank 209 -> qsfp0
+        #   EN_NET_1 -> DCMAC_X0Y2 -> GTM_QUAD_X0Y9, bank 111 -> qsfp3
+        # The pair is already mutually exclusive (checked further down), which
+        # is what dcmac_axis_wrapper.sv's `ifdef EN_NET_1 relies on to pick the
+        # block design module name.
+        if (EN_NET AND FPGA_ARCH STREQUAL "versal")
+            if (EN_NET_1)
+                message(STATUS "Versal networking: DCMAC index 1 (DCMAC_X0Y2), bank 111 -> QSFP cage 3.")
+            else()
+                message(STATUS "Versal networking: DCMAC index 0 (DCMAC_X1Y1), bank 209 -> QSFP cage 0.")
+            endif()
+        endif()
+
+        # nclk carries the raw Ethernet stream at 512 bits, so sustaining the
+        # DCMAC's 200 Gb/s needs at least 390.625 MHz. Below that, a full-rate
+        # RX burst overruns the block design's RX CDC FIFO and frames are lost;
+        # there is no drop logic on this path. Coyote's 250 MHz default is
+        # therefore raised to 400 MHz (204.8 Gb/s, matching the ACLK_F already
+        # recommended for V80 Gen5) unless the user asked for something else.
+        if(EN_NET AND FPGA_ARCH STREQUAL "versal")
+            if(ACLK_F LESS 391)
+                message(WARNING "ACLK_F=${ACLK_F} MHz limits the 512-bit raw Ethernet application path below 200 Gb/s; use ACLK_F>=391 for line rate.")
+            endif()
+            if(NCLK_F EQUAL 250)
+                set(NCLK_F 400)
+                # NCLK_P was derived from the old value further up, so redo it.
+                period_calc("1000.0 / ${NCLK_F}" NCLK_P)
+                message(STATUS "Versal networking: raising NCLK_F from the 250 MHz default to 400 MHz "
+                               "so the user side can absorb the DCMAC's 200 Gb/s line rate.")
+            elseif(NCLK_F LESS 391)
+                message(WARNING "NCLK_F=${NCLK_F} MHz gives ${NCLK_F}*512 b/s < 200 Gb/s on the raw Ethernet "
+                                "path. Sustained full-rate receive will overrun the DCMAC RX FIFO and drop "
+                                "frames. Use NCLK_F>=391 for line rate.")
+            endif()
+        endif()
+
+
         # Mult user channels
         set(MULT_RDMA_AXI 0)
         if(N_RDMA_AXI GREATER 1)
@@ -1223,14 +1431,56 @@ macro(validation_checks_hw)
             set(N_WBS 4)
         endif()
 
-        # Ports, only one
+        # Ports: CMAC can be on at most one QSFP. With EN_AURORA_1=1, Aurora
+        # occupies QSFP1 in parallel to CMAC on QSFP0 (the typical setup).
         if(EN_NET_0 AND EN_NET_1)
-            message(FATAL_ERROR "Both network ports enabled.")
-        else()
-            set(QSFP 0)
-            if(EN_NET_1)
-                set(QSFP 1)
-            endif()
+            message(FATAL_ERROR "Both CMAC ports (EN_NET_0 and EN_NET_1) enabled; CMAC supports only one QSFP at a time.")
+        endif()
+        if(EN_AURORA_1 AND EN_NET_1)
+            message(FATAL_ERROR "EN_AURORA_1 and EN_NET_1 both enabled; both want the QSFP1 cage.")
+        endif()
+        # QLINK drives the same cage, and reuses the same vFPGA-facing ports as
+        # Aurora, so it cannot coexist with either.
+        if(EN_QLINK_GTY AND EN_NET_1)
+            message(FATAL_ERROR "EN_QLINK_GTY and EN_NET_1 both enabled; both want the QSFP1 cage.")
+        endif()
+        if(EN_QLINK_GTY AND EN_AURORA_1)
+            message(FATAL_ERROR "EN_QLINK_GTY and EN_AURORA_1 both enabled; both want the QSFP1 cage "
+                                "and the same vFPGA AXIS ports.")
+        endif()
+        if((EN_AURORA_1 OR EN_QLINK_GTY) AND NOT FDEV_NAME STREQUAL "u280")
+            message(FATAL_ERROR "Aurora and QLINK QSFP1 pin mappings currently require FDEV_NAME=u280")
+        endif()
+        if((EN_AURORA_1 OR EN_QLINK_GTY) AND NOT N_AURORA_AXI EQUAL 1)
+            message(FATAL_ERROR "Aurora and QLINK currently expose exactly one stream per vFPGA")
+        endif()
+        if(EN_QLINK_LOOPBACK AND NOT EN_QLINK_GTY)
+            message(FATAL_ERROR "EN_QLINK_LOOPBACK requires EN_QLINK_GTY=1")
+        endif()
+        if(EN_HOST_NOC AND (NOT FDEV_NAME STREQUAL "v80" OR NOT EN_STRM))
+            message(FATAL_ERROR "EN_HOST_NOC requires V80 host streaming (FDEV_NAME=v80, EN_STRM=1)")
+        endif()
+        if(EN_AMC AND NOT FDEV_NAME STREQUAL "v80")
+            message(FATAL_ERROR "EN_AMC=1 is only supported on V80 (FDEV_NAME=v80).")
+        endif()
+        if(EN_APU AND NOT FDEV_NAME STREQUAL "v80")
+            message(FATAL_ERROR "EN_APU=1 is only supported on V80 (FDEV_NAME=v80).")
+        endif()
+        # EN_APU no longer requires EN_AMC: cr_pci.tcl brings the DDR4 controller,
+        # the M00_INI NoC route, the PMC->DDR load path and the host PCIe window
+        # up for EITHER consumer, so the APU can ride alongside the R5
+        # coprocessor provider (FPD_CCI_NOC vs M_AXI_LPD -- no collision).
+        if(EN_AMC AND NOT IS_DIRECTORY "${AVED_IPREPO_PATH}")
+            message(FATAL_ERROR "EN_AMC=1 but AVED_IPREPO_PATH does not exist: ${AVED_IPREPO_PATH}")
+        endif()
+        if(EN_AMC AND NOT BUILD_STATIC)
+            message(WARNING "EN_AMC=1 modifies the static layer (adds GCQ + axi_noc_mc_ddr4_0). "
+                            "The shipped V80 static checkpoint does not include these. "
+                            "You probably want -DBUILD_STATIC=1 for the first build.")
+        endif()
+        set(QSFP 0)
+        if(EN_NET_1)
+            set(QSFP 1)
         endif()
 
         ##
@@ -1420,10 +1670,21 @@ macro(validation_checks_hw)
         set(COPROCESSOR_BINDING_GENERATION_BITS 0)
         set(COPROCESSOR_PROVIDER_COUNT 0)
         set(COPROCESSOR_PROVIDER_DESCRIPTORS "")
-        # Older shell exports have an unregistered host output boundary.
+        # Missing flags in older exports describe the default application interface.
         set(EN_USER_HOST_OUTPUT_REG 0)
         set(EN_DEBUG_RESET_COPIES 0)
         set(EN_APP_RESET_COPIES 0)
+        set(EN_P2P 0)
+        set(EN_HOST_NOC 0)
+        set(N_AURORA_AXI 1)
+        set(NET_RAW_VFPGA_ID 0)
+        set(EN_QLINK_LOOPBACK 0)
+        set(EN_NET_RAW 0)
+        set(EN_AURORA_1 0)
+        set(EN_QLINK_GTY 0)
+        set(EN_AMC 0)
+        set(EN_APU 0)
+        set(V80_R5_PROVIDER_MAX_PACKET_BEATS 64)
         include("${SHELL_PATH}/export.cmake")
         set(COMP_CORES "${_application_comp_cores}")
 
@@ -1650,6 +1911,15 @@ macro(gen_scripts)
 
     # Bitgen
     configure_file(${CYT_DIR}/scripts/impl/bitgen.tcl.in ${CMAKE_BINARY_DIR}/bitgen.tcl)
+
+    # AMC firmware build wrapper (V80 + EN_AMC=1 only — but always generated so
+    # invocations from bitgen.tcl have a valid path even when AMC is disabled;
+    # it short-circuits with a no-op in that case).
+    if (EN_AMC)
+        configure_file(${CYT_DIR}/scripts/fw/build_amc.sh.in ${CMAKE_BINARY_DIR}/build_amc.sh @ONLY)
+        # Make it executable
+        execute_process(COMMAND chmod +x ${CMAKE_BINARY_DIR}/build_amc.sh)
+    endif()
 
     # Export CMake config. Keep the disabled output byte-identical; the logical
     # co-processor contract is appended only when ports are present.
@@ -1942,7 +2212,15 @@ endmacro()
 
 # Generate build targets
 macro(gen_targets)
-    if(EN_NET)
+    # hw/services/network is the fpga-network-stack submodule. Raw Ethernet
+    # bypasses network_stack entirely and instantiates none of its HLS cores, so
+    # skip it there - otherwise an uninitialised submodule fails configuration
+    # for a build that never needed it.
+    if(EN_NET AND NOT EN_NET_RAW)
+        if(NOT EXISTS ${CYT_DIR}/hw/services/network/CMakeLists.txt)
+            message(FATAL_ERROR "hw/services/network is empty; the fpga-network-stack submodule is not "
+                                "initialised. Run: git submodule update --init --recursive")
+        endif()
         add_subdirectory(${CYT_DIR}/hw/services/network ${CMAKE_BINARY_DIR}/network)
         set(NET_SYNTH_CMD COMMAND make services)
     endif()
@@ -2446,7 +2724,7 @@ macro(create_hw)
 
     # Network services and configured user HLS kernels genuinely require the
     # HLS frontend. Pure RTL/SpinalHDL projects remain Vivado-only.
-    if(EN_NET OR COYOTE_HLS_REQUIRED)
+    if((EN_NET AND NOT EN_NET_RAW) OR COYOTE_HLS_REQUIRED)
         find_package(VitisHLS REQUIRED)
         if(NOT VITIS_HLS_FOUND)
             message(FATAL_ERROR "Vitis HLS not found for a configuration that requires HLS generation.")

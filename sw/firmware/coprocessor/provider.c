@@ -5,6 +5,7 @@ struct cyt_provider {
     struct cyt_provider_transport transport;
     uint32_t endpoint_generation;
     uint32_t binding_generation;
+    uint16_t maximum_packet_beats;
     bool opened;
 };
 
@@ -153,8 +154,12 @@ enum cyt_provider_result cyt_provider_open(
     }
     if (version != CYT_PROVIDER_VERSION || (stream_shape & UINT32_C(0xff)) != 64u ||
         ((stream_shape >> 8u) & UINT32_C(0xff)) != 16u ||
-        ((stream_shape >> 16u) & UINT32_C(0xff)) != 64u ||
-        ((stream_shape >> 24u) & UINT32_C(0xff)) != 6u) {
+        ((stream_shape >> 16u) & UINT32_C(0xff)) == 0u ||
+        ((stream_shape >> 16u) & UINT32_C(0xff)) > CYT_PROVIDER_MAX_PACKET_BEATS ||
+        ((stream_shape >> 24u) & UINT32_C(0xff)) != 6u ||
+        (queue_shape & UINT32_C(0xff)) != ((stream_shape >> 16u) & UINT32_C(0xff)) ||
+        ((queue_shape >> 8u) & UINT32_C(0xff)) == 0u ||
+        ((queue_shape >> 16u) & UINT32_C(0xff)) == 0u) {
         return CYT_PROVIDER_ABI_MISMATCH;
     }
 
@@ -181,6 +186,7 @@ enum cyt_provider_result cyt_provider_open(
     }
 
     singleton.endpoint_generation = endpoint_generation;
+    singleton.maximum_packet_beats = (uint16_t)((stream_shape >> 16u) & UINT32_C(0xff));
     singleton.opened = true;
     identity->protocol_version = version;
     identity->stream_abi = 1u;
@@ -293,6 +299,7 @@ enum cyt_provider_result cyt_provider_receive(
         return CYT_PROVIDER_BUS_ERROR;
     }
     if (generation_before != provider->binding_generation || beats == 0u ||
+        beats > provider->maximum_packet_beats ||
         beats > CYT_PROVIDER_MAX_PACKET_BEATS || bytes == 0u ||
         bytes > CYT_PROVIDER_MAX_PACKET_BYTES || bytes > beats * 64u) {
         return CYT_PROVIDER_PROTOCOL_ERROR;
@@ -354,6 +361,9 @@ enum cyt_provider_result cyt_provider_send(
     result = require_session(provider);
     if (result != CYT_PROVIDER_OK) {
         return result;
+    }
+    if (beats > provider->maximum_packet_beats) {
+        return CYT_PROVIDER_INVALID_ARGUMENT;
     }
     for (;;) {
         if (!read32(provider, CYT_REG_TX_STATUS, &tx_status)) {

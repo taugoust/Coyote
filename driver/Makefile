@@ -22,49 +22,56 @@
 # Target platform: ultrascale_plus for u55c, u250, u280 or versal for v80
 TARGET_PLATFORM ?= ultrascale_plus
 
-# Explicit family identity; legacy preserves existing module and userspace names.
+# Keep the historical module and device names by default. A matching platform
+# variant gives each PCI driver a distinct name for dual-platform hosts.
 DRIVER_VARIANT ?= legacy
 ifeq ($(DRIVER_VARIANT),legacy)
 DRIVER_MODULE := coyote_driver
-else ifeq ($(DRIVER_VARIANT),$(TARGET_PLATFORM))
-DRIVER_MODULE := coyote_driver_$(DRIVER_VARIANT)
+else ifeq ($(DRIVER_VARIANT),versal)
+ifneq ($(TARGET_PLATFORM),versal)
+$(error DRIVER_VARIANT=versal requires TARGET_PLATFORM=versal)
+endif
+DRIVER_MODULE := coyote_driver_versal
+ccflags-y += -DCOYOTE_ISOLATED_VARIANT
+else ifeq ($(DRIVER_VARIANT),ultrascale_plus)
+ifneq ($(TARGET_PLATFORM),ultrascale_plus)
+$(error DRIVER_VARIANT=ultrascale_plus requires TARGET_PLATFORM=ultrascale_plus)
+endif
+DRIVER_MODULE := coyote_driver_ultrascale_plus
 ccflags-y += -DCOYOTE_ISOLATED_VARIANT
 else
-$(error DRIVER_VARIANT must be legacy or match TARGET_PLATFORM)
+$(error DRIVER_VARIANT must be legacy, versal, or ultrascale_plus)
 endif
-obj-m := $(DRIVER_MODULE).o
 
-# Pre-requisites that need to be compiled for the Coyote driver
-coyote_driver-objs := src/coyote_driver.o 
-coyote_driver-objs += src/coyote_setup.o 
-coyote_driver-objs += src/coyote_sysfs.o 
-
-ifeq ($(TARGET_PLATFORM), versal)
-coyote_driver-objs += src/platform/pci_qdma.o
+ifeq ($(TARGET_PLATFORM),versal)
+PLATFORM_OBJ := src/platform/pci_qdma.o
 ccflags-y += -DPLATFORM_VERSAL
-else ifeq ($(TARGET_PLATFORM), ultrascale_plus)
-coyote_driver-objs += src/platform/pci_xdma.o
+else ifeq ($(TARGET_PLATFORM),ultrascale_plus)
+PLATFORM_OBJ := src/platform/pci_xdma.o
 ccflags-y += -DPLATFORM_ULTRASCALE_PLUS
 else
-$(error "Unsupported TARGET_PLATFORM specified. Supported options are: ultrascale_plus, versal")
+$(error Unsupported TARGET_PLATFORM specified. Supported options are: ultrascale_plus, versal)
 endif
-coyote_driver-objs += src/platform/pci_util.o
 
-coyote_driver-objs += src/reconfig/reconfig_hw.o 
-coyote_driver-objs += src/reconfig/reconfig_isr.o
-coyote_driver-objs += src/reconfig/reconfig_mem.o
-coyote_driver-objs += src/reconfig/reconfig_ops.o
+obj-m := $(DRIVER_MODULE).o
 
-coyote_driver-objs += src/vfpga/vfpga_gup.o 
-coyote_driver-objs += src/vfpga/vfpga_hw.o 
-coyote_driver-objs += src/vfpga/vfpga_isr.o 
-coyote_driver-objs += src/vfpga/vfpga_ops.o 
-coyote_driver-objs += src/vfpga/vfpga_uisr.o 
+# Driver sources; the selected platform contributes exactly one PCI backend.
+$(DRIVER_MODULE)-objs := src/coyote_driver.o \
+                         src/coyote_setup.o \
+                         src/coyote_sysfs.o \
+                         $(PLATFORM_OBJ) \
+                         src/platform/pci_util.o \
+                         src/reconfig/reconfig_hw.o \
+                         src/reconfig/reconfig_isr.o \
+                         src/reconfig/reconfig_mem.o \
+                         src/reconfig/reconfig_ops.o \
+                         src/vfpga/vfpga_gup.o \
+                         src/vfpga/vfpga_hw.o \
+                         src/vfpga/vfpga_isr.o \
+                         src/vfpga/vfpga_ops.o \
+                         src/vfpga/vfpga_uisr.o
 
-$(DRIVER_MODULE)-objs := $(coyote_driver-objs)
-
-# Location of the Linux kernel header files, we will be building within the context of the kernel's Makefile (the flag -C sets the context)
-# This gives us access to all the Linux kernel functionality, typically implemented in <linux/*.h> and <asm/*.h>
+# Location of the Linux kernel header files; compilation runs in the kernel Makefile context.
 KERNELDIR ?= /lib/modules/$(shell uname -r)/build
 
 BUILD_DIR := $(shell pwd)/build

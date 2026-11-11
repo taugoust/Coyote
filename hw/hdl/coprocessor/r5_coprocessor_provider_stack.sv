@@ -1,6 +1,9 @@
 `timescale 1ns / 1ps
 
-module r5_coprocessor_provider_stack (
+module r5_coprocessor_provider_stack #(
+    parameter integer QUEUE_DEPTH = 4,
+    parameter integer MAX_PACKET_BEATS = 64
+) (
     input logic aclk,
     input logic aresetn,
     input logic application_decoupled,
@@ -150,7 +153,12 @@ module r5_coprocessor_provider_stack (
     logic mmio_idle;
     logic stale_response_fault;
 
-    r5_packet_queue_provider inst_backend (
+    // These limits are part of the exported provider capability and must match
+    // the provider metadata used by the dynamic-layer build.
+    r5_packet_queue_provider #(
+        .QUEUE_DEPTH(QUEUE_DEPTH),
+        .MAX_PACKET_BEATS(MAX_PACKET_BEATS)
+    ) inst_backend (
         .aclk(aclk), .aresetn(aresetn),
         .provider_selected(provider_selected), .provider_quiesce(provider_quiesce),
         .provider_abort(provider_abort), .management_recover(management_recover),

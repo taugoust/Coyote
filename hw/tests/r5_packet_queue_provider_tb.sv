@@ -514,6 +514,11 @@ module r5_packet_queue_provider_tb;
         assert(value == 32'h3151_4c50) else $fatal(1, "bad protocol magic");
         axil_read(16'h00fc, value, 2'b11);
         publish_identity();
+        // Firmware may republish its identity after restart while the host has
+        // not selected it; recommit must advance the endpoint generation.
+        axil_write(16'h0068, 32'h4944_454e, 0, 2'b00);
+        axil_read(16'h0018, value, 2'b00);
+        assert(value == 2) else $fatal(1, "unselected identity recommit did not advance generation");
         assert(available && healthy && idle) else $fatal(1, "provider not available/idle");
         assert(firmware_runtime_abi == 16'd1 && firmware_abi_id == 16'd1)
             else $fatal(1, "firmware ABI identity output mismatch");
@@ -747,7 +752,7 @@ module r5_packet_queue_provider_tb;
         selected = 1'b0;
         active_generation = 0;
         publish_identity();
-        assert(endpoint_generation == 2) else $fatal(1, "endpoint generation did not advance");
+        assert(endpoint_generation == 3) else $fatal(1, "endpoint generation did not advance");
 
         selected = 1'b1;
         active_generation = 32'd8;

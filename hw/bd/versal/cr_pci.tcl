@@ -24,9 +24,23 @@
 # SOFTWARE.
 ######################################################################################
 
+# Source AMC helpers (defines cr_bd_design_aved_mgmt + cr_bd_design_ddr4_v80).
+# Procs are only *called* when cnfg(en_amc) == 1 — sourcing is unconditional.
+source "[file dirname [info script]]/cr_aved_mgmt.tcl" -notrace
+source "[file dirname [info script]]/cr_ddr4_v80.tcl" -notrace
+
+
 # Static layer
 proc cr_bd_design_static { parentCell } {
   upvar #0 cfg cnfg
+
+  # Default en_apu for build directories configured before EN_APU existed. Their
+  # generated base.tcl has no `set cfg(en_apu)`, and every en_apu test below would
+  # otherwise abort with "can't read cnfg(en_apu): no such element in array". A
+  # stale build dir should behave exactly as it did before, not fail.
+  if {![info exists cnfg(en_apu)]} {
+    set cnfg(en_apu) 0
+  }
 
   set design_name design_static
   set debug_reset_copies [expr {[info exists cnfg(en_debug_reset_copies)] && $cnfg(en_debug_reset_copies) == 1}]
@@ -39,6 +53,23 @@ proc cr_bd_design_static { parentCell } {
   set r5_provider_enabled [expr {
     [info exists cnfg(en_v80_r5_provider)] && $cnfg(en_v80_r5_provider) eq 1
   }]
+
+  # DDR4 and its NoC route are needed INDEPENDENTLY by two consumers: the AMC
+  # (R5 code at 0x4000_0000 + shared memory at 0x0010_0000) and the APU (Linux
+  # RAM at 0x0200_0000). Either alone must bring the substrate up, so the shared
+  # parts -- DDR4 controller, M00_INI, the PMC->DDR load route, the host PCIe
+  # window -- are gated on the union, while the AMC-specific parts (GCQ, rpu_sc,
+  # the LPD NoC master) stay on en_amc. The APU's own port is FPD_CCI_NOC, which
+  # does not collide with the R5 coprocessor provider's M_AXI_LPD.
+  set amc_enabled [expr {$cnfg(fdev) eq "v80" && [info exists cnfg(en_amc)] && $cnfg(en_amc) eq 1}]
+  set apu_enabled [expr {$cnfg(fdev) eq "v80" && $cnfg(en_apu) eq 1}]
+  set ddr4_needed [expr {$amc_enabled || $apu_enabled}]
+
+  # NoC slave-port layout. S00-S02 are always CPM-ctrl / CPM-DMA / PMC; the LPD
+  # master (AMC) takes the next slot, then the four interleaved FPD CCI masters
+  # (APU). Indices are computed so an APU-only build packs down to S03..S06.
+  set noc_si_cci  [expr {3 + ($amc_enabled ? 1 : 0)}]
+  set noc_clk_cci [expr {5 + ($amc_enabled ? 1 : 0)}]
 
   common::send_msg_id "BD_TCL-003" "INFO" "Currently there is no design <$design_name> in project, so creating one..."
 
@@ -169,6 +200,11 @@ proc cr_bd_design_static { parentCell } {
     CONFIG.PROTOCOL {AXI4} \
   ] $axi_debug_hub
 
+  # NOTE (Network-3 P2P): the inter-vFPGA P2P NoC no longer lives in design_static.
+  # Its NMU/NSU endpoints are now PL-facing xpm_nmu_strm/xpm_nsu_strm instantiated
+  # in the reconfigurable shell (Versal DFX Network-3), so there are no s_axi_p2p_*/
+  # m_axi_p2p_* boundary ports and no axi_noc_p2p BD here. See shell_top template.
+
   # QDMA status
   set h2c_status [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:eqdma_qsts_rtl:1.0 h2c_status ]
   set c2h_status [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:qdma_c2h_status_rtl:1.0 c2h_status ]
@@ -213,12 +249,13 @@ proc cr_bd_design_static { parentCell } {
 
   # Main clock
   set xclk [ create_bd_port -dir O -type clk xclk ]
-  set xclk_busifs {m_axis_h2c:s_axis_c2h:axi_cnfg:axi_main:axi_debug_hub}
+  # Bind shell-clock interfaces to xclk; P2P NoC endpoints live in the shell.
+  set xclk_busif "m_axis_h2c:s_axis_c2h:axi_cnfg:axi_main:axi_debug_hub"
   if {$r5_provider_enabled} {
-    append xclk_busifs {:r5_provider}
+    append xclk_busif ":r5_provider"
   }
   set_property -dict [ list \
-    CONFIG.ASSOCIATED_BUSIF $xclk_busifs \
+    CONFIG.ASSOCIATED_BUSIF $xclk_busif \
     CONFIG.ASSOCIATED_RESET {xresetn:sresetn:eos_resetn} \
   ] $xclk
 
@@ -245,7 +282,6 @@ proc cr_bd_design_static { parentCell } {
   }
   if {$cnfg(pcie_gen) eq 5} {
     set proc_sys_reset_qdma_if [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_qdma_if ]
-    # dma1_intrfc_resetn and pl0_resetn are active-low; aux_reset_in is tied high.
     set_property -dict [list CONFIG.C_EXT_RESET_HIGH {0} CONFIG.C_AUX_RESET_HIGH {0}] $proc_sys_reset_qdma_if
   }
 
@@ -307,35 +343,150 @@ proc cr_bd_design_static { parentCell } {
         CONFIG.PS_PMC_CONFIG { \
           BOOT_MODE {Custom} \
           CLOCK_MODE {Custom} \
+          DDR_MEMORY_MODE {Custom} \
           DESIGN_MODE {1} \
           DEVICE_INTEGRITY_MODE {Custom} \
+          IO_CONFIG_MODE {Custom} \
           PCIE_APERTURES_DUAL_ENABLE {0} \
           PCIE_APERTURES_SINGLE_ENABLE {1} \
+          PMC_BANK_1_IO_STANDARD {LVCMOS3.3} \
+          PMC_CRP_OSPI_REF_CTRL_FREQMHZ {200} \
           PMC_CRP_PL0_REF_CTRL_FREQMHZ {33.3333333} \
-          PMC_QSPI_FBCLK {{ENABLE 1} {IO {PMC_MIO 6}}} \
+          PMC_CRP_PL1_REF_CTRL_FREQMHZ {33.3333333} \
+          PMC_CRP_PL2_REF_CTRL_FREQMHZ {250} \
+          PMC_GLITCH_CONFIG {{DEPTH_SENSITIVITY 1} {MIN_PULSE_WIDTH 0.5} {TYPE CUSTOM} {VCC_PMC_VALUE 0.88}} \
+          PMC_GLITCH_CONFIG_1 {{DEPTH_SENSITIVITY 1} {MIN_PULSE_WIDTH 0.5} {TYPE CUSTOM} {VCC_PMC_VALUE 0.88}} \
+          PMC_GLITCH_CONFIG_2 {{DEPTH_SENSITIVITY 1} {MIN_PULSE_WIDTH 0.5} {TYPE CUSTOM} {VCC_PMC_VALUE 0.88}} \
+          PMC_GPIO_EMIO_PERIPHERAL_ENABLE {0} \
+          PMC_MIO11 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO12 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO13 {{AUX_IO 0} {DIRECTION inout} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
+          PMC_MIO17 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO26 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO27 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO28 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO29 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO30 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO31 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO32 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO33 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO34 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO35 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO36 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO37 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO38 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO39 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO40 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO41 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO42 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO43 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO44 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO48 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO49 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO50 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO51 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO_EN_FOR_PL_PCIE {0} \
+          PMC_OSPI_PERIPHERAL {{ENABLE 1} {IO {PMC_MIO 0 .. 11}} {MODE Single}} \
           PMC_QSPI_PERIPHERAL_ENABLE {0} \
           PMC_REF_CLK_FREQMHZ {33.333333} \
           PMC_SD0 {{CD_ENABLE 0} {CD_IO {PMC_MIO 24}} {POW_ENABLE 0} {POW_IO {PMC_MIO 17}} {RESET_ENABLE 0} {RESET_IO {PMC_MIO 17}} {WP_ENABLE 0} {WP_IO {PMC_MIO 25}}} \
-          PMC_SD0_PERIPHERAL {{CLK_100_SDR_OTAP_DLY 0x00} {CLK_200_SDR_OTAP_DLY 0x00} {CLK_50_DDR_ITAP_DLY 0x00} {CLK_50_DDR_OTAP_DLY 0x00} {CLK_50_SDR_ITAP_DLY 0x00} {CLK_50_SDR_OTAP_DLY 0x00} {ENABLE 0}\
-        {IO {PMC_MIO 13 .. 25}}} \
-          PMC_SD0_SLOT_TYPE {SD 2.0} \
-          PMC_SMAP_PERIPHERAL {{ENABLE 0} {IO {32 Bit}}} \
+          PMC_SD0_DATA_TRANSFER_MODE {8Bit} \
+          PMC_SD0_PERIPHERAL {{CLK_100_SDR_OTAP_DLY 0x00} {CLK_200_SDR_OTAP_DLY 0x2} {CLK_50_DDR_ITAP_DLY 0x1E} {CLK_50_DDR_OTAP_DLY 0x5} {CLK_50_SDR_ITAP_DLY 0x2C} {CLK_50_SDR_OTAP_DLY 0x5} {ENABLE 1} {IO {PMC_MIO 13 .. 25}}} \
+          PMC_SD0_SLOT_TYPE {eMMC} \
           PMC_USE_NOC_PMC_AXI0 {1} \
           PMC_USE_PMC_NOC_AXI0 {1} \
-          PS_USE_STARTUP {1} \
+          PS_BANK_2_IO_STANDARD {LVCMOS3.3} \
           PS_BOARD_INTERFACE {Custom} \
           PS_CRL_CPM_TOPSW_REF_CTRL_FREQMHZ {1000} \
+          PS_GEN_IPI0_ENABLE {0} \
+          PS_GEN_IPI1_ENABLE {0} \
+          PS_GEN_IPI2_ENABLE {0} \
+          PS_GEN_IPI3_ENABLE {1} \
+          PS_GEN_IPI3_MASTER {R5_0} \
+          PS_GEN_IPI4_ENABLE {1} \
+          PS_GEN_IPI4_MASTER {R5_0} \
+          PS_GEN_IPI5_ENABLE {1} \
+          PS_GEN_IPI5_MASTER {R5_1} \
+          PS_GEN_IPI6_ENABLE {1} \
+          PS_GEN_IPI6_MASTER {R5_1} \
+          PS_GPIO_EMIO_PERIPHERAL_ENABLE {0} \
+          PS_I2C0_PERIPHERAL {{ENABLE 1} {IO {PS_MIO 2 .. 3}}} \
+          PS_I2C1_PERIPHERAL {{ENABLE 1} {IO {PS_MIO 0 .. 1}}} \
+          PS_IRQ_USAGE {{CH0 1} {CH1 1} {CH10 0} {CH11 0} {CH12 0} {CH13 0} {CH14 0} {CH15 0} {CH2 0} {CH3 0} {CH4 0} {CH5 0} {CH6 0} {CH7 0} {CH8 0} {CH9 0}} \
+          PS_KAT_ENABLE {0} \
+          PS_KAT_ENABLE_1 {0} \
+          PS_KAT_ENABLE_2 {0} \
+          PS_MIO10 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO11 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO12 {{AUX_IO 0} {DIRECTION inout} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
+          PS_MIO13 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO14 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO18 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO19 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO22 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO23 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO24 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO25 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO4 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO5 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO6 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO7 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO8 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
+          PS_MIO9 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 1} {SLEW slow} {USAGE Reserved}} \
+          PS_M_AXI_FPD_DATA_WIDTH {64} \
+          PS_M_AXI_LPD_DATA_WIDTH {32} \
+          PS_NUM_FABRIC_RESETS {1} \
           PS_PCIE1_PERIPHERAL_ENABLE {0} \
           PS_PCIE2_PERIPHERAL_ENABLE {1} \
           PS_PCIE_EP_RESET1_IO {PMC_MIO 24} \
           PS_PCIE_EP_RESET2_IO {PMC_MIO 25} \
-          PS_PCIE_RESET {ENABLE 1} \
+          PS_PCIE_RESET {{ENABLE 1}} \
+          PS_PL_CONNECTIVITY_MODE {Custom} \
+          PS_SPI0 {{GRP_SS0_ENABLE 1} {GRP_SS0_IO {PS_MIO 15}} {GRP_SS1_ENABLE 0} {GRP_SS1_IO {PMC_MIO 14}} {GRP_SS2_ENABLE 0} {GRP_SS2_IO {PMC_MIO 13}} {PERIPHERAL_ENABLE 1} {PERIPHERAL_IO {PS_MIO 12 .. 17}}} \
+          PS_SPI1 {{GRP_SS0_ENABLE 0} {GRP_SS0_IO {PS_MIO 9}} {GRP_SS1_ENABLE 0} {GRP_SS1_IO {PS_MIO 8}} {GRP_SS2_ENABLE 0} {GRP_SS2_IO {PS_MIO 7}} {PERIPHERAL_ENABLE 0} {PERIPHERAL_IO {PS_MIO 6 .. 11}}} \
+          PS_TTC0_PERIPHERAL_ENABLE {1} \
+          PS_TTC1_PERIPHERAL_ENABLE {1} \
+          PS_TTC2_PERIPHERAL_ENABLE {1} \
+          PS_TTC3_PERIPHERAL_ENABLE {1} \
+          PS_UART0_PERIPHERAL {{ENABLE 1} {IO {PS_MIO 8 .. 9}}} \
+          PS_UART1_PERIPHERAL {{ENABLE 1} {IO {PS_MIO 20 .. 21}}} \
+          PS_USE_FPD_CCI_NOC {0} \
+          PS_USE_M_AXI_FPD {1} \
+          PS_USE_M_AXI_LPD {1} \
+          PS_USE_NOC_LPD_AXI0 {1} \
           PS_USE_PMCPL_CLK0 {1} \
+          PS_USE_PMCPL_CLK1 {1} \
+          PS_USE_PMCPL_CLK2 {1} \
+          PS_USE_S_AXI_LPD {0} \
+          PS_USE_STARTUP {1} \
           SMON_ALARMS {Set_Alarms_On} \
           SMON_ENABLE_TEMP_AVERAGING {0} \
+          SMON_MEAS100 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 4.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {4 V unipolar}} {NAME VCCO_500} {SUPPLY_NUM 9}} \
+          SMON_MEAS101 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 4.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {4 V unipolar}} {NAME VCCO_501} {SUPPLY_NUM 10}} \
+          SMON_MEAS102 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 4.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {4 V unipolar}} {NAME VCCO_502} {SUPPLY_NUM 11}} \
+          SMON_MEAS103 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 4.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {4 V unipolar}} {NAME VCCO_503} {SUPPLY_NUM 12}} \
+          SMON_MEAS104 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCO_700} {SUPPLY_NUM 13}} \
+          SMON_MEAS105 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCO_701} {SUPPLY_NUM 14}} \
+          SMON_MEAS106 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCO_702} {SUPPLY_NUM 15}} \
+          SMON_MEAS118 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_PMC} {SUPPLY_NUM 0}} \
+          SMON_MEAS119 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_PSFP} {SUPPLY_NUM 1}} \
+          SMON_MEAS120 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_PSLP} {SUPPLY_NUM 2}} \
+          SMON_MEAS121 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_RAM} {SUPPLY_NUM 3}} \
+          SMON_MEAS122 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_SOC} {SUPPLY_NUM 4}} \
+          SMON_MEAS47 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVCCAUX_104} {SUPPLY_NUM 20}} \
+          SMON_MEAS48 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVCCAUX_105} {SUPPLY_NUM 21}} \
+          SMON_MEAS64 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVCC_104} {SUPPLY_NUM 18}} \
+          SMON_MEAS65 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVCC_105} {SUPPLY_NUM 19}} \
+          SMON_MEAS81 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVTT_104} {SUPPLY_NUM 22}} \
+          SMON_MEAS82 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVTT_105} {SUPPLY_NUM 23}} \
+          SMON_MEAS96 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCAUX} {SUPPLY_NUM 6}} \
+          SMON_MEAS97 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCAUX_PMC} {SUPPLY_NUM 7}} \
+          SMON_MEAS98 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCAUX_SMON} {SUPPLY_NUM 8}} \
+          SMON_MEAS99 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCINT} {SUPPLY_NUM 5}} \
           SMON_OT {{THRESHOLD_LOWER -25} {THRESHOLD_UPPER 125}} \
           SMON_TEMP_AVERAGING_SAMPLES {0} \
           SMON_USER_TEMP {{THRESHOLD_LOWER 0} {THRESHOLD_UPPER 125} {USER_ALARM_TYPE window}} \
+          SMON_VOLTAGE_AVERAGING_SAMPLES {8} \
         } \
       ] $versal_cips_0
     } elseif {$cnfg(pcie_gen) eq 4} {
@@ -386,35 +537,150 @@ proc cr_bd_design_static { parentCell } {
         CONFIG.PS_PMC_CONFIG { \
           BOOT_MODE {Custom} \
           CLOCK_MODE {Custom} \
+          DDR_MEMORY_MODE {Custom} \
           DESIGN_MODE {1} \
           DEVICE_INTEGRITY_MODE {Custom} \
+          IO_CONFIG_MODE {Custom} \
           PCIE_APERTURES_DUAL_ENABLE {0} \
           PCIE_APERTURES_SINGLE_ENABLE {1} \
+          PMC_BANK_1_IO_STANDARD {LVCMOS3.3} \
+          PMC_CRP_OSPI_REF_CTRL_FREQMHZ {200} \
           PMC_CRP_PL0_REF_CTRL_FREQMHZ {33.3333333} \
-          PMC_QSPI_FBCLK {{ENABLE 1} {IO {PMC_MIO 6}}} \
+          PMC_CRP_PL1_REF_CTRL_FREQMHZ {33.3333333} \
+          PMC_CRP_PL2_REF_CTRL_FREQMHZ {250} \
+          PMC_GLITCH_CONFIG {{DEPTH_SENSITIVITY 1} {MIN_PULSE_WIDTH 0.5} {TYPE CUSTOM} {VCC_PMC_VALUE 0.88}} \
+          PMC_GLITCH_CONFIG_1 {{DEPTH_SENSITIVITY 1} {MIN_PULSE_WIDTH 0.5} {TYPE CUSTOM} {VCC_PMC_VALUE 0.88}} \
+          PMC_GLITCH_CONFIG_2 {{DEPTH_SENSITIVITY 1} {MIN_PULSE_WIDTH 0.5} {TYPE CUSTOM} {VCC_PMC_VALUE 0.88}} \
+          PMC_GPIO_EMIO_PERIPHERAL_ENABLE {0} \
+          PMC_MIO11 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO12 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO13 {{AUX_IO 0} {DIRECTION inout} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
+          PMC_MIO17 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO26 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO27 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO28 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO29 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO30 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO31 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO32 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO33 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO34 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO35 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO36 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO37 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO38 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO39 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO40 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO41 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO42 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO43 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO44 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO48 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO49 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO50 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO51 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PMC_MIO_EN_FOR_PL_PCIE {0} \
+          PMC_OSPI_PERIPHERAL {{ENABLE 1} {IO {PMC_MIO 0 .. 11}} {MODE Single}} \
           PMC_QSPI_PERIPHERAL_ENABLE {0} \
           PMC_REF_CLK_FREQMHZ {33.333333} \
           PMC_SD0 {{CD_ENABLE 0} {CD_IO {PMC_MIO 24}} {POW_ENABLE 0} {POW_IO {PMC_MIO 17}} {RESET_ENABLE 0} {RESET_IO {PMC_MIO 17}} {WP_ENABLE 0} {WP_IO {PMC_MIO 25}}} \
-          PMC_SD0_PERIPHERAL {{CLK_100_SDR_OTAP_DLY 0x00} {CLK_200_SDR_OTAP_DLY 0x00} {CLK_50_DDR_ITAP_DLY 0x00} {CLK_50_DDR_OTAP_DLY 0x00} {CLK_50_SDR_ITAP_DLY 0x00} {CLK_50_SDR_OTAP_DLY 0x00} {ENABLE 0}\
-        {IO {PMC_MIO 13 .. 25}}} \
-          PMC_SD0_SLOT_TYPE {SD 2.0} \
-          PMC_SMAP_PERIPHERAL {{ENABLE 0} {IO {32 Bit}}} \
+          PMC_SD0_DATA_TRANSFER_MODE {8Bit} \
+          PMC_SD0_PERIPHERAL {{CLK_100_SDR_OTAP_DLY 0x00} {CLK_200_SDR_OTAP_DLY 0x2} {CLK_50_DDR_ITAP_DLY 0x1E} {CLK_50_DDR_OTAP_DLY 0x5} {CLK_50_SDR_ITAP_DLY 0x2C} {CLK_50_SDR_OTAP_DLY 0x5} {ENABLE 1} {IO {PMC_MIO 13 .. 25}}} \
+          PMC_SD0_SLOT_TYPE {eMMC} \
           PMC_USE_NOC_PMC_AXI0 {1} \
           PMC_USE_PMC_NOC_AXI0 {1} \
-          PS_USE_STARTUP {1} \
+          PS_BANK_2_IO_STANDARD {LVCMOS3.3} \
           PS_BOARD_INTERFACE {Custom} \
           PS_CRL_CPM_TOPSW_REF_CTRL_FREQMHZ {1000} \
+          PS_GEN_IPI0_ENABLE {0} \
+          PS_GEN_IPI1_ENABLE {0} \
+          PS_GEN_IPI2_ENABLE {0} \
+          PS_GEN_IPI3_ENABLE {1} \
+          PS_GEN_IPI3_MASTER {R5_0} \
+          PS_GEN_IPI4_ENABLE {1} \
+          PS_GEN_IPI4_MASTER {R5_0} \
+          PS_GEN_IPI5_ENABLE {1} \
+          PS_GEN_IPI5_MASTER {R5_1} \
+          PS_GEN_IPI6_ENABLE {1} \
+          PS_GEN_IPI6_MASTER {R5_1} \
+          PS_GPIO_EMIO_PERIPHERAL_ENABLE {0} \
+          PS_I2C0_PERIPHERAL {{ENABLE 1} {IO {PS_MIO 2 .. 3}}} \
+          PS_I2C1_PERIPHERAL {{ENABLE 1} {IO {PS_MIO 0 .. 1}}} \
+          PS_IRQ_USAGE {{CH0 1} {CH1 1} {CH10 0} {CH11 0} {CH12 0} {CH13 0} {CH14 0} {CH15 0} {CH2 0} {CH3 0} {CH4 0} {CH5 0} {CH6 0} {CH7 0} {CH8 0} {CH9 0}} \
+          PS_KAT_ENABLE {0} \
+          PS_KAT_ENABLE_1 {0} \
+          PS_KAT_ENABLE_2 {0} \
+          PS_MIO10 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO11 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO12 {{AUX_IO 0} {DIRECTION inout} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
+          PS_MIO13 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO14 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO18 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO19 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO22 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO23 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO24 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO25 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO4 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO5 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO6 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO7 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE GPIO}} \
+          PS_MIO8 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
+          PS_MIO9 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 1} {SLEW slow} {USAGE Reserved}} \
+          PS_M_AXI_FPD_DATA_WIDTH {64} \
+          PS_M_AXI_LPD_DATA_WIDTH {32} \
+          PS_NUM_FABRIC_RESETS {1} \
           PS_PCIE1_PERIPHERAL_ENABLE {1} \
           PS_PCIE2_PERIPHERAL_ENABLE {0} \
           PS_PCIE_EP_RESET1_IO {PMC_MIO 24} \
           PS_PCIE_EP_RESET2_IO {PMC_MIO 25} \
-          PS_PCIE_RESET {ENABLE 1} \
+          PS_PCIE_RESET {{ENABLE 1}} \
+          PS_PL_CONNECTIVITY_MODE {Custom} \
+          PS_SPI0 {{GRP_SS0_ENABLE 1} {GRP_SS0_IO {PS_MIO 15}} {GRP_SS1_ENABLE 0} {GRP_SS1_IO {PMC_MIO 14}} {GRP_SS2_ENABLE 0} {GRP_SS2_IO {PMC_MIO 13}} {PERIPHERAL_ENABLE 1} {PERIPHERAL_IO {PS_MIO 12 .. 17}}} \
+          PS_SPI1 {{GRP_SS0_ENABLE 0} {GRP_SS0_IO {PS_MIO 9}} {GRP_SS1_ENABLE 0} {GRP_SS1_IO {PS_MIO 8}} {GRP_SS2_ENABLE 0} {GRP_SS2_IO {PS_MIO 7}} {PERIPHERAL_ENABLE 0} {PERIPHERAL_IO {PS_MIO 6 .. 11}}} \
+          PS_TTC0_PERIPHERAL_ENABLE {1} \
+          PS_TTC1_PERIPHERAL_ENABLE {1} \
+          PS_TTC2_PERIPHERAL_ENABLE {1} \
+          PS_TTC3_PERIPHERAL_ENABLE {1} \
+          PS_UART0_PERIPHERAL {{ENABLE 1} {IO {PS_MIO 8 .. 9}}} \
+          PS_UART1_PERIPHERAL {{ENABLE 1} {IO {PS_MIO 20 .. 21}}} \
+          PS_USE_FPD_CCI_NOC {0} \
+          PS_USE_M_AXI_FPD {1} \
+          PS_USE_M_AXI_LPD {1} \
+          PS_USE_NOC_LPD_AXI0 {1} \
           PS_USE_PMCPL_CLK0 {1} \
+          PS_USE_PMCPL_CLK1 {1} \
+          PS_USE_PMCPL_CLK2 {1} \
+          PS_USE_S_AXI_LPD {0} \
+          PS_USE_STARTUP {1} \
           SMON_ALARMS {Set_Alarms_On} \
           SMON_ENABLE_TEMP_AVERAGING {0} \
+          SMON_MEAS100 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 4.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {4 V unipolar}} {NAME VCCO_500} {SUPPLY_NUM 9}} \
+          SMON_MEAS101 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 4.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {4 V unipolar}} {NAME VCCO_501} {SUPPLY_NUM 10}} \
+          SMON_MEAS102 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 4.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {4 V unipolar}} {NAME VCCO_502} {SUPPLY_NUM 11}} \
+          SMON_MEAS103 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 4.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {4 V unipolar}} {NAME VCCO_503} {SUPPLY_NUM 12}} \
+          SMON_MEAS104 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCO_700} {SUPPLY_NUM 13}} \
+          SMON_MEAS105 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCO_701} {SUPPLY_NUM 14}} \
+          SMON_MEAS106 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCO_702} {SUPPLY_NUM 15}} \
+          SMON_MEAS118 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_PMC} {SUPPLY_NUM 0}} \
+          SMON_MEAS119 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_PSFP} {SUPPLY_NUM 1}} \
+          SMON_MEAS120 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_PSLP} {SUPPLY_NUM 2}} \
+          SMON_MEAS121 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_RAM} {SUPPLY_NUM 3}} \
+          SMON_MEAS122 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCC_SOC} {SUPPLY_NUM 4}} \
+          SMON_MEAS47 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVCCAUX_104} {SUPPLY_NUM 20}} \
+          SMON_MEAS48 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVCCAUX_105} {SUPPLY_NUM 21}} \
+          SMON_MEAS64 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVCC_104} {SUPPLY_NUM 18}} \
+          SMON_MEAS65 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVCC_105} {SUPPLY_NUM 19}} \
+          SMON_MEAS81 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVTT_104} {SUPPLY_NUM 22}} \
+          SMON_MEAS82 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME GTYP_AVTT_105} {SUPPLY_NUM 23}} \
+          SMON_MEAS96 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCAUX} {SUPPLY_NUM 6}} \
+          SMON_MEAS97 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCAUX_PMC} {SUPPLY_NUM 7}} \
+          SMON_MEAS98 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCAUX_SMON} {SUPPLY_NUM 8}} \
+          SMON_MEAS99 {{ALARM_ENABLE 1} {ALARM_LOWER 0.00} {ALARM_UPPER 2.00} {AVERAGE_EN 0} {ENABLE 1} {MODE {2 V unipolar}} {NAME VCCINT} {SUPPLY_NUM 5}} \
           SMON_OT {{THRESHOLD_LOWER -25} {THRESHOLD_UPPER 125}} \
           SMON_TEMP_AVERAGING_SAMPLES {0} \
           SMON_USER_TEMP {{THRESHOLD_LOWER 0} {THRESHOLD_UPPER 125} {USER_ALARM_TYPE window}} \
+          SMON_VOLTAGE_AVERAGING_SAMPLES {8} \
         } \
       ] $versal_cips_0
     } else {
@@ -426,8 +692,72 @@ proc cr_bd_design_static { parentCell } {
     exit 1
   }
 
-  # The optional processor platform enables R5-0/LPD connectivity and the
-  # supported debugger management IPI route. Keep the stock PCIe, NoC, MIO, and board-management properties
+  # Coyote AMC bringup: mark the PS/PMC configuration as user-applied.
+  #
+  # Without this flag the CIPS treats PS_PMC_CONFIG as a minimal, PL-oriented
+  # setup and emits a subsystem/PMC CDO that does NOT grant the R5 TCM banks to
+  # an R5-0 subsystem. Booting amc.elf on core=r5-0 then fails at partition load
+  # with PLM Error Major 0x347 (XLOADER_ERR_PM_DEV_TCM_0_A) and DONE stays LOW.
+  #
+  # AVED's reference V80 design (hw/amd_v80_gen5x8_25.1) sets exactly this sibling
+  # property; it is the only CIPS difference vs. the stock Coyote config (their
+  # PS_PMC_CONFIG key set is otherwise a subset of ours). Setting it makes CIPS
+  # finalize the R5-0 subsystem with TCM_0_A/B ownership in the generated CDO.
+  #
+  # AMC-only (V80): leave non-AMC builds on the stock CIPS behaviour.
+  # PS_USE_S_AXI_LPD {1} exposes the PL->LPD slave port that the Example 15 OCM
+  # channel (vFPGA ocm_mbx) uses to reach the R5's OCM @0xFFFC0000. Its clock
+  # (s_axi_lpd_aclk) and the S_AXI_LPD interface are wired in cr_aved_mgmt.tcl,
+  # which runs (and is validated) later in this same EN_AMC path.
+  if {$ddr4_needed} {
+    set_property -dict [list CONFIG.PS_PMC_CONFIG_APPLIED {1}] $versal_cips_0
+    # PS_USE_S_AXI_LPD is a KEY inside the CONFIG.PS_PMC_CONFIG dict, not a
+    # top-level CIPS parameter. Read-modify-write so all other keys are kept and
+    # only the EN_AMC path enables the slave (non-AMC builds untouched).
+    set _ppc [get_property CONFIG.PS_PMC_CONFIG $versal_cips_0]
+    if {$amc_enabled} {
+      dict set _ppc PS_USE_S_AXI_LPD 1
+    }
+    # EN_APU: give the A72 a NoC MASTER so Linux can reach DDR4.
+    #
+    # CIPS interface names read <source>_<dest>, and only the outbound direction
+    # is a Master (probed on versal_cips v3.4, xcv80):
+    #   FPD_CCI_NOC_0..3  Master  FPD -> NoC   <- what the APU needs
+    #   LPD_AXI_NOC_0     Master  LPD -> NoC   (the R5's proven path)
+    #   NOC_FPD_AXI_0/1   SLAVE   NoC -> FPD   (inbound; NOT usable here)
+    #   NOC_FPD_CCI_0     SLAVE   NoC -> FPD
+    # PS_USE_NOC_FPD_AXI0 therefore gives a slave and fails with
+    # [BD 41-171] modes ... incompatible when wired to a NoC slave port.
+    #
+    # PS_USE_FPD_CCI_NOC is all-or-nothing: there is no PS_USE_FPD_CCI_NOC<n>,
+    # so it always exposes all four masters. Only _0 is wired below; the DDR MC
+    # limit [BD 41-3265] counts S->MC connections, not CIPS ports, so the extra
+    # ports cost nothing as long as they stay unconnected.
+    if {$apu_enabled} {
+      dict set _ppc PS_USE_FPD_CCI_NOC 1
+      # A2 prerequisite: an APU-mastered IPI for TF-A's Versal PM. TF-A defaults
+      # IPI_ID_APU to IPI_ID_0 (0xFF330000) and talks to the PMC over it. Without
+      # it, bitgen/PLM warn "APU IPIs are not enabled. Linux boot would not work."
+      # (versal_plm.tcl requires a psv_ipi cell whose C_CPU_NAME is psv_cortexa72),
+      # and the PLM logs "IPIs disabled: IPI-0 IPI-1 IPI-2". IPI3-6 stay on the R5s.
+      # Probed on versal_cips v3.4: MASTER range is {A72,CPM,R5_0,R5_1,S_AXI_GP0,
+      # S_AXI_GP2,S_AXI_GP4,S_AXI_ACP,S_AXI_ACE}; 'APU' is REJECTED, 'A72' accepted.
+      dict set _ppc PS_GEN_IPI0_ENABLE 1
+      dict set _ppc PS_GEN_IPI0_MASTER A72
+    }
+    set_property CONFIG.PS_PMC_CONFIG $_ppc $versal_cips_0
+
+    # NOTE: BAR4 deliberately stays 256 MB, even for EN_APU.
+    # Enlarging it to 512 MB works in Vivado but is unusable on the host: the
+    # parent PCIe bridge's prefetchable window is sized during BOOT enumeration
+    # (on rose, 257 MB = 1 MB BAR0 + 256 MB BAR4). remove+rescan re-assigns
+    # device BARs but cannot grow a bridge window, so a 512 MB BAR4 comes back
+    # "can't assign; no space", BAR_SHELL_CONFIG never maps, and the driver
+    # faults in read_shell_config(). Recovering needs a full reboot, and only
+    # if the card retains its JTAG-loaded PDI across it. Keeping BAR4 at 256 MB
+    # keeps the SBR+remove+rescan reprogram shortcut working forever.
+  }
+
   # byte-for-byte equivalent when it is disabled.
   if {$r5_platform_enabled} {
     set r5_ps_pmc_config [get_property CONFIG.PS_PMC_CONFIG $versal_cips_0]
@@ -435,12 +765,14 @@ proc cr_bd_design_static { parentCell } {
     dict set r5_ps_pmc_config PS_M_AXI_LPD_DATA_WIDTH $cnfg(v80_r5_lpd_data_bits)
     dict set r5_ps_pmc_config PS_NUM_FABRIC_RESETS 1
     dict set r5_ps_pmc_config PS_USE_M_AXI_LPD 1
-    # XSDB uses IPI5 for PMC management requests. Retain default A72 ownership;
-    # enabling the route is platform policy, not a runtime register workaround.
+    # XSDB uses IPI5 for PMC management requests; preserve A72 ownership.
     dict set r5_ps_pmc_config PS_GEN_IPI5_ENABLE 1
     if {![dict exists $r5_ps_pmc_config PS_GEN_IPI5_MASTER]} {
       dict set r5_ps_pmc_config PS_GEN_IPI5_MASTER A72
     }
+    # The provider uses M_AXI_LPD. Disable the unused LPD NoC master in
+    # provider-only builds, but retain it when AMC consumes LPD_AXI_NOC_0.
+    dict set r5_ps_pmc_config PS_USE_NOC_LPD_AXI0 [expr {$amc_enabled ? 1 : 0}]
     set_property -dict [list \
       CONFIG.PS_PMC_CONFIG $r5_ps_pmc_config \
       CONFIG.PS_PMC_CONFIG_APPLIED {1} \
@@ -479,12 +811,38 @@ proc cr_bd_design_static { parentCell } {
   # The NoC is used to route AXI-MM interfaces from the QDMA to the shell
   # Additionally, it will perform clock-domain crossing, reducing the frequency from 1000 MHz to shell frequency
   set axi_noc_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 axi_noc_0 ]
+  # Base config: 3 NoC AXI slaves (PCIe shell ctrl, PCIe DMA data, PMC debug),
+  # 4 NoC AXI masters (mgmt SC, shell ctrl SC, NOC_PMC_AXI, debug hub), 5 clocks.
+  # When EN_AMC=1 on V80, this gets bumped to also route LPD↔DDR4 — see below.
+  set _noc_num_si   3
+  set _noc_num_clks 5
+  set _noc_num_nmi  0
+  # +1 SI/clock for CIPS LPD_AXI_NOC_0 (the AMC's R5 master into the NoC).
+  if {$amc_enabled} {
+    incr _noc_num_si
+    incr _noc_num_clks
+  }
+  # +4 SI/clocks for the CIPS FPD_CCI_NOC masters (the APU into the NoC). All
+  # four are required, not just one: the NoC interleaves APU traffic across the
+  # CCI ports and rejects a partial connection with [axi_noc 1.1-1] "The CCIs
+  # are interleaved and must all be connected ... Expected 0 or 4 CCI inputs".
+  if {$apu_enabled} {
+    incr _noc_num_si   4
+    incr _noc_num_clks 4
+  }
+  # +M00_INI for routing to axi_noc_mc_ddr4_0 whenever DDR4 is present at all
+  # (single path: Versal allows at most one S->MC connection per DDR
+  # controller, [BD 41-3265]).
+  if {$ddr4_needed} {
+    set _noc_num_nmi 1
+  }
   set_property -dict [list \
     CONFIG.MI_SIDEBAND_PINS {0} \
-    CONFIG.NUM_CLKS {5} \
-    CONFIG.NUM_HBM_BLI {0} \
-    CONFIG.NUM_MI {4} \
-    CONFIG.NUM_SI {3} \
+    CONFIG.NUM_CLKS         $_noc_num_clks \
+    CONFIG.NUM_HBM_BLI      {0} \
+    CONFIG.NUM_MI           {4} \
+    CONFIG.NUM_SI           $_noc_num_si \
+    CONFIG.NUM_NMI          $_noc_num_nmi \
     CONFIG.SI_SIDEBAND_PINS {} \
   ] $axi_noc_0
 
@@ -515,8 +873,17 @@ proc cr_bd_design_static { parentCell } {
 
   # CPM_PCIE_NOC_0 is used for shell and static layer registers
   set_property -dict [ list \
-    CONFIG.CONNECTIONS {M00_AXI {read_bw {8} write_bw {8} read_avg_burst {4} write_avg_burst {4}} M01_AXI {read_bw {8} write_bw {8} read_avg_burst {4} write_avg_burst {4}}} \
-    CONFIG.DEST_IDS {M01_AXI:0x0:M00_AXI:0x40} \
+    CONFIG.CONNECTIONS [expr {$ddr4_needed ? \
+        {M00_AXI {read_bw {8} write_bw {8} read_avg_burst {4} write_avg_burst {4}} M01_AXI {read_bw {8} write_bw {8} read_avg_burst {4} write_avg_burst {4}} M00_INI {read_bw {200} write_bw {200} read_avg_burst {16} write_avg_burst {16}}} : \
+        {M00_AXI {read_bw {8} write_bw {8} read_avg_burst {4} write_avg_burst {4}} M01_AXI {read_bw {8} write_bw {8} read_avg_burst {4} write_avg_burst {4}}}}] \
+    CONFIG.DEST_IDS [expr {$ddr4_needed ? \
+        {M01_AXI:0x0:M00_AXI:0x40:M00_INI:0x140} : \
+        {M01_AXI:0x0:M00_AXI:0x40}}] \
+    CONFIG.REMAPS [expr {$ddr4_needed ? \
+        (($cnfg(en_apu) eq 1) ? \
+            {M00_INI {{0x2080C000000 0x00000000 0x04000000}}} : \
+            {M00_INI {{0x2080A000000 0x00000000 0x02000000}}}) : \
+        {}}] \
     CONFIG.NOC_PARAMS {} \
     CONFIG.CATEGORY {ps_pcie} \
   ] [get_bd_intf_pins /axi_noc_0/S00_AXI]
@@ -557,13 +924,97 @@ proc cr_bd_design_static { parentCell } {
    CONFIG.ASSOCIATED_BUSIF {M02_AXI} \
   ] [get_bd_pins /axi_noc_0/aclk4]
 
+  ########################################################################################################
+  # AMC additions: S03 = CIPS LPD master into NoC; M00_INI = single route to DDR4 MC
+  ########################################################################################################
+  if {$amc_enabled} {
+    # S03_AXI: CIPS LPD_NOC_AXI_0 — R5 master traffic into the NoC. Single
+    # path to M00_INI (DDR4 ctrl S00_INI); a second path through M01_INI
+    # is rejected by validate_bd_design ([BD 41-3265] — max 1 NoC slave port
+    # per DDR MC) because we only have NUM_MC=1 on axi_noc_mc_ddr4_0.
+    set_property -dict [ list \
+      CONFIG.CONNECTIONS {M00_INI {read_bw {800} write_bw {800} read_avg_burst {16} write_avg_burst {16}}} \
+      CONFIG.DEST_IDS {M00_INI:0xC0} \
+      CONFIG.NOC_PARAMS {} \
+      CONFIG.CATEGORY {ps_rpu} \
+    ] [get_bd_intf_pins /axi_noc_0/S03_AXI]
+
+    # S02_AXI (PMC master): the PLM DMA-loads amc.elf during boot, and amc.elf's
+    # second load segment targets 0x4000_0000 (DDR4, see lscript.ld). The PMC
+    # therefore needs a NoC route to the DDR4 controller, not just to the debug
+    # hub. Without it the PLM's partition-load DMA to 0x4000_0000 has no route
+    # and the boot hangs ("PLM stalled", DONE LOW) — the R5's own runtime path
+    # (S03/LPD) is not enough, because loading happens on the PMC master.
+    # Add M00_INI alongside the existing M03_AXI (debug hub) connection. Both
+    # S02 (PMC) and S03 (LPD) share the single M00_INI -> DDR4/S00_INI path
+    # (dest id 0xC0), which stays within the "1 slave port per DDR MC" rule.
+  }
+
+  if {$ddr4_needed} {
+    # S02_AXI (PMC master) -> DDR4. Needed by BOTH consumers: the PLM DMA-loads
+    # partitions into DDR4 during boot (amc.elf's 0x4000_0000 segment for the
+    # AMC; TF-A / U-Boot / kernel for the APU). Without this the load has no
+    # route and boot stalls ("PLM stalled", DONE LOW) -- the R5's own runtime
+    # path (S03/LPD) is not enough, because loading happens on the PMC master.
+    # M00_INI is added alongside the existing M03_AXI (debug hub) connection,
+    # sharing the single M00_INI -> DDR4/S00_INI path (dest id 0xC0) with every
+    # other master, which stays within the "1 slave port per DDR MC" rule.
+    set_property -dict [ list \
+      CONFIG.CONNECTIONS {M03_AXI {read_bw {1500} write_bw {1500} read_avg_burst {4} write_avg_burst {4}} M00_INI {read_bw {200} write_bw {200} read_avg_burst {16} write_avg_burst {16}}} \
+      CONFIG.DEST_IDS {M03_AXI:0x120 M00_INI:0xC0} \
+      CONFIG.NOC_PARAMS {} \
+      CONFIG.CATEGORY {ps_pmc} \
+    ] [get_bd_intf_pins /axi_noc_0/S02_AXI]
+
+    # M00_INI: INI master port out to DDR4 MC. Aperture is in the POST-REMAP
+    # (DDR4-local) address space, so 4G at 0 covers all of DDR4.
+    set_property -dict [ list \
+      CONFIG.APERTURES {{0x0_0000_0000 4G}} \
+      CONFIG.CATEGORY {pl_to_ddrmc} \
+    ] [get_bd_intf_pins /axi_noc_0/M00_INI]
+  }
+
+  if {$amc_enabled} {
+
+    # aclk5: LPD slave clock domain (pl0_ref_clk, 100 MHz)
+    set_property -dict [ list \
+      CONFIG.ASSOCIATED_BUSIF {S03_AXI} \
+    ] [get_bd_pins /axi_noc_0/aclk5]
+  }
+
+  if {$apu_enabled} {
+    # The four CIPS FPD_CCI_NOC masters -- A72 traffic into the NoC, so Linux
+    # can reach DDR4. Each shares M00_INI (DDR4 ctrl S00_INI) at DEST_ID 0xC0
+    # with S00/S02 (and S03 when the AMC is in), exactly as PMC and LPD already
+    # share it; no new S->MC connection is created, so [BD 41-3265] does not
+    # apply. Bandwidth is split four ways to keep the aggregate comparable to
+    # the LPD port's. Indices pack down to S03..S06 when the AMC is absent.
+    for {set _i 0} {$_i < 4} {incr _i} {
+      set _si [format "S%02d_AXI" [expr {$noc_si_cci + $_i}]]
+      set_property -dict [ list \
+        CONFIG.CONNECTIONS {M00_INI {read_bw {400} write_bw {400} read_avg_burst {16} write_avg_burst {16}}} \
+        CONFIG.DEST_IDS {M00_INI:0xC0} \
+        CONFIG.NOC_PARAMS {} \
+        CONFIG.CATEGORY {ps_cci} \
+      ] [get_bd_intf_pins /axi_noc_0/$_si]
+
+      set_property -dict [ list \
+        CONFIG.ASSOCIATED_BUSIF $_si \
+      ] [get_bd_pins /axi_noc_0/aclk[expr {$noc_clk_cci + $_i}]]
+    }
+  }
+
   # AXI SmartSwitch, connecting the NoC outputs to BD output interfaces
   set smartconnect_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_0 ]
   set_property CONFIG.NUM_SI {1} $smartconnect_0
   set_property CONFIG.ADVANCED_PROPERTIES {__experimental_features__ {disable_low_area_mode 1} __view__ {functional {S00_Entry {SUPPORTS_WRAP 1 SUPPORTS_NARROW_BURST 1}}}} $smartconnect_0
   
+  # smartconnect_1 has two slave interfaces: S00 from PCIe (CPM_PCIE_NOC_0)
+  # and S01 from the APU/R5 via M_AXI_FPD. Both are merged into a single
+  # axi_main master that feeds the shell's vFPGA control fabric.
   set smartconnect_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_1 ]
-  set_property CONFIG.NUM_SI {1} $smartconnect_1
+  set_property CONFIG.NUM_SI {2} $smartconnect_1
+  set_property CONFIG.NUM_CLKS {1} $smartconnect_1
   set_property CONFIG.ADVANCED_PROPERTIES {__experimental_features__ {disable_low_area_mode 1} __view__ {functional {S00_Entry {SUPPORTS_WRAP 1 SUPPORTS_NARROW_BURST 1}}}} $smartconnect_1
 
   # Main clock gen
@@ -638,8 +1089,27 @@ proc cr_bd_design_static { parentCell } {
   connect_bd_intf_net [get_bd_intf_pins axi_noc_0/S02_AXI] [get_bd_intf_pins versal_cips_0/PMC_NOC_AXI_0]
   connect_bd_intf_net [get_bd_intf_pins axi_noc_0/M02_AXI] [get_bd_intf_pins versal_cips_0/NOC_PMC_AXI_0]
 
+  # AMC path: CIPS LPD master into the NoC (only when EN_AMC=1 on V80).
+  # PS_USE_NOC_LPD_AXI0=1 in the CIPS config exposes LPD_AXI_NOC_0 as a 128-bit
+  # NoC slave port; we drop it into axi_noc_0/S03_AXI for routing to DDR4.
+  if {$amc_enabled} {
+    connect_bd_intf_net [get_bd_intf_pins versal_cips_0/LPD_AXI_NOC_0] [get_bd_intf_pins axi_noc_0/S03_AXI]
+  }
+
+  # PS_USE_FPD_CCI_NOC=1 exposes FPD_CCI_NOC_0..3, the APU's coherent NoC
+  # masters. All four go into axi_noc_0/S04..S07, which route to DDR4 via
+  # M00_INI -- the NoC interleaves across them and rejects a partial connection.
+  if {$apu_enabled} {
+    for {set _i 0} {$_i < 4} {incr _i} {
+      connect_bd_intf_net [get_bd_intf_pins versal_cips_0/FPD_CCI_NOC_$_i] \
+                          [get_bd_intf_pins axi_noc_0/[format "S%02d_AXI" [expr {$noc_si_cci + $_i}]]]
+    }
+  }
+
   # Shell config & control --- axi_main
   connect_bd_intf_net [get_bd_intf_pins smartconnect_1/S00_AXI] [get_bd_intf_pins axi_noc_0/M01_AXI]
+  # APU/R5 path: M_AXI_FPD from CIPS into the shell control fabric (S01)
+  connect_bd_intf_net [get_bd_intf_pins versal_cips_0/M_AXI_FPD] [get_bd_intf_pins smartconnect_1/S01_AXI]
   connect_bd_intf_net [get_bd_intf_ports axi_main] [get_bd_intf_pins smartconnect_1/M00_AXI]
 
   # Static config --- axi_cnfg
@@ -649,6 +1119,7 @@ proc cr_bd_design_static { parentCell } {
   # Debug Hub config
   connect_bd_intf_net [get_bd_intf_pins axi_noc_0/M03_AXI] [get_bd_intf_ports axi_debug_hub]
 
+  # P2P NoC endpoints are in the reconfigurable shell, not design_static.
   if {$r5_platform_enabled} {
     # R5-0 reaches only this bounded persistent static scratch aperture.
     connect_bd_intf_net [get_bd_intf_pins versal_cips_0/M_AXI_LPD] [get_bd_intf_pins r5_scratch_interconnect/S00_AXI]
@@ -705,14 +1176,26 @@ proc cr_bd_design_static { parentCell } {
   connect_bd_net [get_bd_pins const_0/dout] [get_bd_pins versal_cips_0/cpm_irq0]
   connect_bd_net [get_bd_pins const_0/dout] [get_bd_pins versal_cips_0/cpm_irq1]
 
+  # PL->PS interrupts unused in this iteration; tie low.
+  # Reserved for future Micro Blossom completion notification.
+  connect_bd_net [get_bd_pins const_0/dout] [get_bd_pins versal_cips_0/pl_ps_irq0]
+  connect_bd_net [get_bd_pins const_0/dout] [get_bd_pins versal_cips_0/pl_ps_irq1]
+
   # NoC clocks
   connect_bd_net [get_bd_pins versal_cips_0/cpm_pcie_noc_axi0_clk] [get_bd_pins axi_noc_0/aclk0]
   connect_bd_net [get_bd_pins versal_cips_0/cpm_pcie_noc_axi1_clk] [get_bd_pins axi_noc_0/aclk1]
   connect_bd_net [get_bd_pins versal_cips_0/pmc_axi_noc_axi0_clk] [get_bd_pins axi_noc_0/aclk2]
   connect_bd_net [get_bd_pins versal_cips_0/noc_pmc_axi_axi0_clk] [get_bd_pins axi_noc_0/aclk4]
 
+  # M_AXI_LPD is enabled by the optional R5 platform and must be clocked.
   if {$r5_platform_enabled} {
     connect_bd_net [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins versal_cips_0/m_axi_lpd_aclk]
+  }
+  if {$amc_enabled} {
+    connect_bd_net [get_bd_pins versal_cips_0/lpd_axi_noc_clk] [get_bd_pins axi_noc_0/aclk5]
+  }
+
+  if {$r5_platform_enabled} {
     connect_bd_net [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins r5_scratch_interconnect/aclk]
     connect_bd_net [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins r5_scratch_ctrl/s_axi_aclk]
     connect_bd_net [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins proc_sys_reset_r5/slowest_sync_clk]
@@ -725,14 +1208,24 @@ proc cr_bd_design_static { parentCell } {
       connect_bd_net [get_bd_pins proc_sys_reset_r5/peripheral_aresetn] [get_bd_pins r5_provider_clock_converter/aresetn]
     }
   }
-  
+
+  # The four APU CCI NoC clocks are enabled only with EN_APU.
+  if {$apu_enabled} {
+    for {set _i 0} {$_i < 4} {incr _i} {
+      connect_bd_net [get_bd_pins versal_cips_0/fpd_cci_noc_axi${_i}_clk] \
+                     [get_bd_pins axi_noc_0/aclk[expr {$noc_clk_cci + $_i}]]
+    }
+  }
+
   # Main shell clock
   connect_bd_net [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins clk_wiz_0/clk_in1] 
 
-  connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_ports xclk] 
-  connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_noc_0/aclk3] 
+  connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_ports xclk]
+  connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_noc_0/aclk3]
   connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins smartconnect_0/aclk]
   connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins smartconnect_1/aclk]
+  # M_AXI_FPD runs on the shell clock
+  connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins versal_cips_0/m_axi_fpd_aclk]
   if {$cnfg(pcie_gen) eq 5} {
     connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins versal_cips_0/dma1_intrfc_clk]
   } elseif {$cnfg(pcie_gen) eq 4} {
@@ -782,9 +1275,24 @@ proc cr_bd_design_static { parentCell } {
 ########################################################################################################
 # Create address segments
 ########################################################################################################
-  # Shell & static config
+  # Shell & static config (host PCIe view)
   assign_bd_address -offset 0x020100000000 -range 1M -target_address_space [get_bd_addr_spaces versal_cips_0/CPM_PCIE_NOC_0] [get_bd_addr_segs axi_cnfg/Reg] -force
-  assign_bd_address -offset 0x020800000000 -range 256M -target_address_space [get_bd_addr_spaces versal_cips_0/CPM_PCIE_NOC_0] [get_bd_addr_segs axi_main/Reg] -force
+  # axi_main is 256 MB by default, which fills BAR4 entirely. Whenever DDR4 is
+  # present we carve a host window out of the top of BAR4, so axi_main must
+  # shrink to 128 MB to make room. cr_aved_mgmt.tcl re-asserts the same 128 MB
+  # for the AMC path (idempotent); this covers the APU-only path, which never
+  # calls it.
+  if {$ddr4_needed} {
+    assign_bd_address -offset 0x020800000000 -range 128M -target_address_space [get_bd_addr_spaces versal_cips_0/CPM_PCIE_NOC_0] [get_bd_addr_segs axi_main/Reg] -force
+  } else {
+    assign_bd_address -offset 0x020800000000 -range 256M -target_address_space [get_bd_addr_spaces versal_cips_0/CPM_PCIE_NOC_0] [get_bd_addr_segs axi_main/Reg] -force
+  }
+
+  # APU/R5 view via M_AXI_FPD: vFPGA control regs at 0x4_0000_0000 (8G FPD window).
+  # Only axi_main is reachable via smartconnect_1 (which now has S01 from M_AXI_FPD).
+  # axi_cnfg lives behind smartconnect_0 and is intentionally not exposed to the APU
+  # — it carries static-layer/host config registers that the APU shouldn't touch.
+  assign_bd_address -offset 0x000400000000 -range 256M -target_address_space [get_bd_addr_spaces versal_cips_0/M_AXI_FPD] [get_bd_addr_segs axi_main/Reg] -force
   
   # PR control (SBI CSR) --- currently unused
   # assign_bd_address -offset 0x000101220000 -range 64K -target_address_space [get_bd_addr_spaces versal_cips_0/CPM_PCIE_NOC_1] [get_bd_addr_segs versal_cips_0/NOC_PMC_AXI_0/pspmc_0_psv_pmc_slave_boot] -force
@@ -792,9 +1300,7 @@ proc cr_bd_design_static { parentCell } {
   # PR data (address to write partial PDI to)
   assign_bd_address -offset 0x000102100000 -range 64K -target_address_space [get_bd_addr_spaces versal_cips_0/CPM_PCIE_NOC_1] [get_bd_addr_segs versal_cips_0/NOC_PMC_AXI_0/pspmc_0_psv_pmc_slave_boot_stream] -force
 
-  # PMC_NOC_AXI_0 for configuring the Debug Hub IP. Each application hub
-  # retains its vendor 2 MiB aperture; reserve enough power-of-two space for
-  # every region, including static-only builds where EN_PR is cleared.
+  # Reserve a power-of-two aperture covering each region's 2 MiB debug hub.
   set debug_range 0x200000
   while {$debug_range < (0x200000 * $cnfg(n_reg))} {
     set debug_range [expr {$debug_range * 2}]
@@ -819,9 +1325,76 @@ proc cr_bd_design_static { parentCell } {
   # Restore current instance
   current_bd_instance $oldCurInst
 
+  # AMC enablement (V80 + EN_AMC=1):
+  #   - DDR4 controller (provides backing memory for AMC binary at 0x40000000)
+  #   - GCQ + rpu_sc (host↔R5 mailbox)
+  # Order matters: DDR4 must be instantiated before address-map assignments that
+  # reference axi_noc_mc_ddr4_0's segments, and before validate_bd_design.
+  if {$ddr4_needed} {
+    cr_bd_design_ddr4_v80 ""
+  }
+  if {$amc_enabled} {
+    cr_bd_design_aved_mgmt ""
+
+    # Address map: DDR4 visible from CIPS LPD master via NoC route.
+    # AVED-canonical mapping: 2 GB window at 0x0_0000_0000..0x0_7FFF_FFFF in
+    # the LPD address space. AMC's lscript.ld places code at 0x4000_0000 which
+    # falls inside this window. Mirrors AVED create_bd_design.tcl:1135.
+    assign_bd_address -offset 0x00000000 -range 2G \
+        -target_address_space [get_bd_addr_spaces versal_cips_0/LPD_AXI_NOC_0] \
+        [get_bd_addr_segs axi_noc_mc_ddr4_0/S00_INI/C0_DDR_LOW0] -force
+  }
+
+  if {$ddr4_needed} {
+    # PMC master view of DDR4 at 0x0..0x7FFF_FFFF (DDR_LOW0). The PLM DMA-loads
+    # amc.elf's 0x4000_0000 segment through PMC_NOC_AXI_0; without this mapping
+    # the load has no route and boot stalls. Mirrors the LPD mapping above; both
+    # ride the shared S02/S03 -> M00_INI -> DDR4 path.
+    assign_bd_address -offset 0x00000000 -range 2G \
+        -target_address_space [get_bd_addr_spaces versal_cips_0/PMC_NOC_AXI_0] \
+        [get_bd_addr_segs axi_noc_mc_ddr4_0/S00_INI/C0_DDR_LOW0] -force
+
+    # APU (A72) view of DDR4 at 0x0..0x7FFF_FFFF, identical to the LPD and PMC
+    # mappings above and riding the same M00_INI -> DDR4 path. Linux's memory
+    # node lives at 0x0200_0000..0x4000_0000 inside this, clear of the AMC's
+    # shared memory (0x0010_0000) and amc.elf (0x4000_0000) when both are in.
+    if {$apu_enabled} {
+      # Every CCI master needs the mapping: APU traffic is interleaved across all
+      # four, so a segment on only _0 would leave three quarters undecoded.
+      for {set _i 0} {$_i < 4} {incr _i} {
+        assign_bd_address -offset 0x00000000 -range 2G \
+            -target_address_space [get_bd_addr_spaces versal_cips_0/FPD_CCI_NOC_$_i] \
+            [get_bd_addr_segs axi_noc_mc_ddr4_0/S00_INI/C0_DDR_LOW0] -force
+      }
+    }
+
+    # Host-side PCIe window onto DDR4. This is how the host reaches AMC's
+    # partition table + GCQ ring buffers in shared mem (AMC's
+    # HAL_RPU_SHARED_MEMORY_BASE_ADDR=0x00100000 lives inside it). Both offset
+    # and size must be self-aligned -- a NoC REMAPS requirement -- and must sit
+    # above the axi_main (128 MB) + gcq_m2r (64 KB) regions. Keep in sync with
+    # AMC_DDR_OFFS in driver/include/coyote_defs.h.
+    if {$apu_enabled} {
+      # EN_APU: 64 MB window at BAR4+192M (0x0208_0C00_0000), mapping DDR4
+      # 0x0..0x0400_0000. 192M is 64 MB-aligned as the NoC REMAPS requires, and
+      # 192M..256M is the free space above axi_main (128 MB) + gcq_m2r (64 KB).
+      # Linux lives at DDR 0x0200_0000, so its DTB (0x0200_0000), kernel
+      # (0x0208_0000) and initramfs (0x0300_0000) all fall inside this window:
+      # the host writes them straight to their final addresses, no staging copy.
+      assign_bd_address -offset 0x02080C000000 -range 64M \
+          -target_address_space [get_bd_addr_spaces versal_cips_0/CPM_PCIE_NOC_0] \
+          [get_bd_addr_segs axi_noc_mc_ddr4_0/S00_INI/C0_DDR_LOW0] -force
+    } else {
+      # Maps PCIe 0x0208_0A00_0000..0x0208_0C00_0000 to DDR4 0x0..0x0200_0000.
+      assign_bd_address -offset 0x02080A000000 -range 32M \
+          -target_address_space [get_bd_addr_spaces versal_cips_0/CPM_PCIE_NOC_0] \
+          [get_bd_addr_segs axi_noc_mc_ddr4_0/S00_INI/C0_DDR_LOW0] -force
+    }
+  }
+
   validate_bd_design
   save_bd_design
-  close_bd_design $design_name 
+  close_bd_design $design_name
 
   return 0
 }

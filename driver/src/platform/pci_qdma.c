@@ -211,6 +211,13 @@ int wait_until_busy_cleared(struct bus_driver_data *bd_data, const char *op, uin
     do {
         usleep_range(DMA_MIN_SLEEP_CMD, DMA_MAX_SLEEP_CMD);
         status = ioread32(bd_data->bar[BAR_DMA_CONFIG] + QDMA_CTX_CMD_REG);
+        // All-ones is the classic "device not responding" signature (BAR decode
+        // off, endpoint reset, or QDMA block dead). Bail at once instead of
+        // burning the whole deadline on every context of every queue.
+        if (status == 0xffffffff) {
+            pr_err("QDMA context command read 0xffffffff during %s; device not responding\n", op);
+            return -ENODEV;
+        }
         if ((status & 0x1) == 0) {
             return 0;
         }
@@ -648,6 +655,16 @@ success:
 void disable_queues(struct bus_driver_data *bd_data) {
     BUG_ON(!bd_data);
 
+    // When the device is gone or its link is offline, issuing QDMA context
+    // invalidations is futile and can wedge teardown in an uninterruptible MMIO
+    // poll. Skip the hardware pokes in that case, but still free the per-queue
+    // bookkeeping below so removal completes without leaking.
+    bool dev_live = pci_device_is_present(bd_data->pci_dev) &&
+                    !pci_channel_offline(bd_data->pci_dev);
+    if (!dev_live) {
+        pr_warn("device not present/offline; freeing queues without QDMA context invalidation\n");
+    }
+
     int num_queues = bd_data->num_queues;
     for (int i = 0; i < num_queues; i++) {
         struct qdma_queue *tmp_queue = bd_data->queues[i];
@@ -655,7 +672,7 @@ void disable_queues(struct bus_driver_data *bd_data) {
             dbg_info("disabling queue with qid %d\n", tmp_queue->qid);
             
             // Invalidate contexts, as per QDMA specification from PG347 (v3.4), p301
-            if (tmp_queue->c2h) {
+            if (dev_live && tmp_queue->c2h) {
                 if (invalidate_ctx_reg(bd_data, tmp_queue->qid, QDMA_CTXT_SELC_PFTCH)) {
                     pr_warn("failed to invalidate QDMA prefetch context during disable, qid %d\n", tmp_queue->qid);
                 }
@@ -668,7 +685,7 @@ void disable_queues(struct bus_driver_data *bd_data) {
                 if (invalidate_ctx_reg(bd_data, tmp_queue->qid, QDMA_CTXT_SELC_TIMER)) {
                     pr_warn("failed to invalidate QDMA timer context during disable, qid %d\n", tmp_queue->qid);
                 }
-            } else {
+            } else if (dev_live) {
                 if (invalidate_ctx_reg(bd_data, tmp_queue->qid, QDMA_CTXT_SELC_WRB)) {
                     pr_warn("failed to invalidate QDMA completion context during disable, qid %d\n", tmp_queue->qid);
                 }
@@ -681,6 +698,7 @@ void disable_queues(struct bus_driver_data *bd_data) {
 
             // Release the dynamically allocated memory for this engine
             kfree(tmp_queue);
+            bd_data->queues[i] = NULL;  // guard against a double-free if teardown runs twice
 
             bd_data->num_queues--;
         }
@@ -847,7 +865,7 @@ int pci_probe(struct pci_dev *pdev, const struct pci_device_id *id) {
 
     // DMA addressing
     dbg_info("sizeof(dma_addr_t) == %ld\n", sizeof(dma_addr_t));
-    ret_val = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+    ret_val = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(TLB_PADDR_RANGE)); // 44
     if (ret_val) {
         dev_err(&pdev->dev, "failed to set 64b DMA mask\n");
         goto err_mask;

@@ -60,7 +60,52 @@ module shell_top (
 {% endif %}
 
     // ISR
-    (* io_buffer_type = "none" *) output logic [14:0]                       m_usr_irq,
+    (* io_buffer_type = "none" *) output logic [N_USR_IRQ-1:0]              m_usr_irq,
+
+{% if cnfg.en_amc %}
+    // OCM mailbox: raw 32-bit AXI master out to cyt_top (-> static -> S_AXI_LPD -> OCM)
+    // + doorbell irq to R5. Master: AW/AR/W outputs, ready/R/B inputs.
+    (* io_buffer_type = "none" *) output logic[0:0]                         m_axi_ocm_awid,
+    (* io_buffer_type = "none" *) output logic[63:0]                        m_axi_ocm_awaddr,
+    (* io_buffer_type = "none" *) output logic[7:0]                         m_axi_ocm_awlen,
+    (* io_buffer_type = "none" *) output logic[2:0]                         m_axi_ocm_awsize,
+    (* io_buffer_type = "none" *) output logic[1:0]                         m_axi_ocm_awburst,
+    (* io_buffer_type = "none" *) output logic[0:0]                         m_axi_ocm_awlock,
+    (* io_buffer_type = "none" *) output logic[3:0]                         m_axi_ocm_awcache,
+    (* io_buffer_type = "none" *) output logic[2:0]                         m_axi_ocm_awprot,
+    (* io_buffer_type = "none" *) output logic[3:0]                         m_axi_ocm_awqos,
+    (* io_buffer_type = "none" *) output logic[3:0]                         m_axi_ocm_awregion,
+    (* io_buffer_type = "none" *) output logic                             m_axi_ocm_awvalid,
+    (* io_buffer_type = "none" *) input  logic                             m_axi_ocm_awready,
+    (* io_buffer_type = "none" *) output logic[31:0]                        m_axi_ocm_wdata,
+    (* io_buffer_type = "none" *) output logic[3:0]                         m_axi_ocm_wstrb,
+    (* io_buffer_type = "none" *) output logic                             m_axi_ocm_wlast,
+    (* io_buffer_type = "none" *) output logic                             m_axi_ocm_wvalid,
+    (* io_buffer_type = "none" *) input  logic                             m_axi_ocm_wready,
+    (* io_buffer_type = "none" *) input  logic[0:0]                         m_axi_ocm_bid,
+    (* io_buffer_type = "none" *) input  logic[1:0]                         m_axi_ocm_bresp,
+    (* io_buffer_type = "none" *) input  logic                             m_axi_ocm_bvalid,
+    (* io_buffer_type = "none" *) output logic                             m_axi_ocm_bready,
+    (* io_buffer_type = "none" *) output logic[0:0]                         m_axi_ocm_arid,
+    (* io_buffer_type = "none" *) output logic[63:0]                        m_axi_ocm_araddr,
+    (* io_buffer_type = "none" *) output logic[7:0]                         m_axi_ocm_arlen,
+    (* io_buffer_type = "none" *) output logic[2:0]                         m_axi_ocm_arsize,
+    (* io_buffer_type = "none" *) output logic[1:0]                         m_axi_ocm_arburst,
+    (* io_buffer_type = "none" *) output logic[0:0]                         m_axi_ocm_arlock,
+    (* io_buffer_type = "none" *) output logic[3:0]                         m_axi_ocm_arcache,
+    (* io_buffer_type = "none" *) output logic[2:0]                         m_axi_ocm_arprot,
+    (* io_buffer_type = "none" *) output logic[3:0]                         m_axi_ocm_arqos,
+    (* io_buffer_type = "none" *) output logic[3:0]                         m_axi_ocm_arregion,
+    (* io_buffer_type = "none" *) output logic                             m_axi_ocm_arvalid,
+    (* io_buffer_type = "none" *) input  logic                             m_axi_ocm_arready,
+    (* io_buffer_type = "none" *) input  logic[0:0]                         m_axi_ocm_rid,
+    (* io_buffer_type = "none" *) input  logic[31:0]                        m_axi_ocm_rdata,
+    (* io_buffer_type = "none" *) input  logic[1:0]                         m_axi_ocm_rresp,
+    (* io_buffer_type = "none" *) input  logic                             m_axi_ocm_rlast,
+    (* io_buffer_type = "none" *) input  logic                             m_axi_ocm_rvalid,
+    (* io_buffer_type = "none" *) output logic                             m_axi_ocm_rready,
+    (* io_buffer_type = "none" *) output logic                             ocm_irq,
+{% endif %}
 
     //
     // Shell interfaces
@@ -173,6 +218,27 @@ module shell_top (
     (* io_buffer_type = "none" *) output  logic[3:0]                        gt1_txn_out,
     (* io_buffer_type = "none" *)  input  logic                             gt1_refclk_p,
     (* io_buffer_type = "none" *)  input  logic                             gt1_refclk_n,
+    {% endif %}
+    {% elif cnfg.en_net %}
+    // V80: one GT pair, selected by the DCMAC index. EN_NET_0 -> DCMAC_X1Y1,
+    // bank 209 (qsfp0). EN_NET_1 -> DCMAC_X0Y2, bank 111 (qsfp3). The serial
+    // lanes need no LOCs (the quad anchors them); the refclk does — see
+    // hw/constraints/v80/dynamic/impl/v80_shell_net_0.xdc.
+    {% if cnfg.en_net_0 %}
+    (* io_buffer_type = "none" *) input  logic[3:0]                         gt0_rxp_in,
+    (* io_buffer_type = "none" *) input  logic[3:0]                         gt0_rxn_in,
+    (* io_buffer_type = "none" *) output  logic[3:0]                        gt0_txp_out,
+    (* io_buffer_type = "none" *) output  logic[3:0]                        gt0_txn_out,
+    (* io_buffer_type = "none" *) input  logic                              gt0_refclk_p,
+    (* io_buffer_type = "none" *) input  logic                              gt0_refclk_n,
+    {% endif %}
+    {% if cnfg.en_net_1 %}
+    (* io_buffer_type = "none" *) input  logic[3:0]                         gt1_rxp_in,
+    (* io_buffer_type = "none" *) input  logic[3:0]                         gt1_rxn_in,
+    (* io_buffer_type = "none" *) output  logic[3:0]                        gt1_txp_out,
+    (* io_buffer_type = "none" *) output  logic[3:0]                        gt1_txn_out,
+    (* io_buffer_type = "none" *) input  logic                              gt1_refclk_p,
+    (* io_buffer_type = "none" *) input  logic                              gt1_refclk_n,
     {% endif %}
     {% endif %}
 
@@ -423,6 +489,8 @@ module shell_top (
     (* io_buffer_type = "none" *) output logic                              s_axi_debug_hub_bvalid,
     {% endif %}
 
+    // (Network-3 P2P: no m_axi_p2p/s_axi_p2p boundary ports; the NoC endpoints
+    // (xpm_nmu_strm/xpm_nsu_strm) are instantiated inside this shell — see below.)
     // WB
     (* io_buffer_type = "none" *) output logic                              m_wback_valid,
     (* io_buffer_type = "none" *) input  logic                              m_wback_ready,
@@ -499,6 +567,151 @@ module shell_top (
     AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ADDR_BITS(64), .AXI4_ID_BITS(2)) s_axi_debug_hub ();
     `AXI_ASSIGN_S2I(s_axi_debug_hub, s_axi_debug_hub)
     {% endif %}
+
+{% if cnfg.fdev == 'v80' and cnfg.en_p2p == 1 and cnfg.n_reg > 1 %}
+{% set P2P_S  = [cnfg.n_reg, 4] | min %}
+{% set P2P_SK = (cnfg.n_reg + P2P_S - 1) // P2P_S %}
+{% set P2P_M  = [cnfg.n_reg, 4] | min %}
+{% set P2P_MK = (cnfg.n_reg + P2P_M - 1) // P2P_M %}
+    // ============================================================
+    // Inter-vFPGA P2P NoC — Network-3 (endpoints in the reconfigurable shell),
+    // HUB-SHARED to fit the streaming NoC's 16-connection limit and to keep few
+    // endpoints crowding the NoC column. P2P_N_SEND send-groups (each = a K->1
+    // axis_p2p_arbiter -> one xpm_nmu_strm) x P2P_N_HUB receive-hubs (each = one
+    // xpm_nsu_strm -> a 1->K axis_p2p_demux). tdest = target vFPGA id; the NoC
+    // routes to hub h=tdest/HUB_K (TDEST_ID range per NSU in p2p_noc_conn.xdc), the
+    // demux forwards to sub=tdest-h*HUB_K. RM cells (HDPR-116-clean), GND ties off
+    // in-shell. DONT_TOUCH keeps idle endpoints alive.
+    // ============================================================
+
+    // Per-vFPGA AXIS to/from the dynamic layer. from_dyn = vFPGA send;
+    // to_dyn = vFPGA recv. tdest travels beside from_dyn (AXI4S has no tid here).
+    AXI4S axis_p2p_from_dyn [N_REGIONS] ();
+    AXI4S axis_p2p_to_dyn   [N_REGIONS] ();
+    logic [P2P_DEST_BITS-1:0] axis_p2p_from_dyn_tdest [N_REGIONS];
+
+{% for g in range(P2P_S) %}
+    // ---- send-group {{ '%02d' % g }} : {{ P2P_SK }} vFPGA streams -> arbiter -> xpm_nmu_strm ----
+    logic [P2P_SEND_K-1:0]                    p2p_arb_tvalid_{{ '%02d' % g }};
+    logic [P2P_SEND_K-1:0]                    p2p_arb_tready_{{ '%02d' % g }};
+    logic [P2P_SEND_K-1:0][511:0]             p2p_arb_tdata_{{ '%02d' % g }};
+    logic [P2P_SEND_K-1:0][63:0]              p2p_arb_tkeep_{{ '%02d' % g }};
+    logic [P2P_SEND_K-1:0]                    p2p_arb_tlast_{{ '%02d' % g }};
+    logic [P2P_SEND_K-1:0][P2P_DEST_BITS-1:0] p2p_arb_tdest_{{ '%02d' % g }};
+{% for j in range(P2P_SK) %}
+{% set vf = g * P2P_SK + j %}
+{% if vf < cnfg.n_reg %}
+    assign p2p_arb_tvalid_{{ '%02d' % g }}[{{ j }}] = axis_p2p_from_dyn[{{ vf }}].tvalid;
+    assign axis_p2p_from_dyn[{{ vf }}].tready       = p2p_arb_tready_{{ '%02d' % g }}[{{ j }}];
+    assign p2p_arb_tdata_{{ '%02d' % g }}[{{ j }}]  = axis_p2p_from_dyn[{{ vf }}].tdata;
+    assign p2p_arb_tkeep_{{ '%02d' % g }}[{{ j }}]  = axis_p2p_from_dyn[{{ vf }}].tkeep;
+    assign p2p_arb_tlast_{{ '%02d' % g }}[{{ j }}]  = axis_p2p_from_dyn[{{ vf }}].tlast;
+    assign p2p_arb_tdest_{{ '%02d' % g }}[{{ j }}]  = axis_p2p_from_dyn_tdest[{{ vf }}];
+{% else %}
+    assign p2p_arb_tvalid_{{ '%02d' % g }}[{{ j }}] = 1'b0;
+    assign p2p_arb_tdata_{{ '%02d' % g }}[{{ j }}]  = '0;
+    assign p2p_arb_tkeep_{{ '%02d' % g }}[{{ j }}]  = '0;
+    assign p2p_arb_tlast_{{ '%02d' % g }}[{{ j }}]  = 1'b0;
+    assign p2p_arb_tdest_{{ '%02d' % g }}[{{ j }}]  = '0;
+{% endif %}
+{% endfor %}
+    logic                     p2p_nmu_tvalid_{{ '%02d' % g }};
+    logic                     p2p_nmu_tready_{{ '%02d' % g }};
+    logic [511:0]             p2p_nmu_tdata_{{ '%02d' % g }};
+    logic [63:0]              p2p_nmu_tkeep_{{ '%02d' % g }};
+    logic                     p2p_nmu_tlast_{{ '%02d' % g }};
+    logic [P2P_DEST_BITS-1:0] p2p_nmu_tdest_{{ '%02d' % g }};
+    (* DONT_TOUCH = "yes" *)
+    axis_p2p_arbiter #(
+        .K(P2P_SEND_K), .DATA_BITS(512), .DEST_BITS(P2P_DEST_BITS)
+    ) inst_p2p_arb_{{ '%02d' % g }} (
+        .aclk(aclk), .aresetn(aresetn),
+        .s_axis_tvalid(p2p_arb_tvalid_{{ '%02d' % g }}),
+        .s_axis_tready(p2p_arb_tready_{{ '%02d' % g }}),
+        .s_axis_tdata (p2p_arb_tdata_{{ '%02d' % g }}),
+        .s_axis_tkeep (p2p_arb_tkeep_{{ '%02d' % g }}),
+        .s_axis_tlast (p2p_arb_tlast_{{ '%02d' % g }}),
+        .s_axis_tdest (p2p_arb_tdest_{{ '%02d' % g }}),
+        .m_axis_tvalid(p2p_nmu_tvalid_{{ '%02d' % g }}),
+        .m_axis_tready(p2p_nmu_tready_{{ '%02d' % g }}),
+        .m_axis_tdata (p2p_nmu_tdata_{{ '%02d' % g }}),
+        .m_axis_tkeep (p2p_nmu_tkeep_{{ '%02d' % g }}),
+        .m_axis_tlast (p2p_nmu_tlast_{{ '%02d' % g }}),
+        .m_axis_tdest (p2p_nmu_tdest_{{ '%02d' % g }})
+    );
+    (* DONT_TOUCH = "yes" *)
+    xpm_nmu_strm #(
+        .NOC_FABRIC("VNOC"), .DATA_WIDTH(512), .DST_ID_WIDTH(P2P_DEST_BITS), .ID_WIDTH(16)
+    ) inst_p2p_nmu_{{ '%02d' % g }} (
+        .s_axis_aclk  (aclk),
+        .s_axis_tid   ('0),
+        .s_axis_tdata (p2p_nmu_tdata_{{ '%02d' % g }}),
+        .s_axis_tkeep (p2p_nmu_tkeep_{{ '%02d' % g }}),
+        .s_axis_tlast (p2p_nmu_tlast_{{ '%02d' % g }}),
+        .s_axis_tvalid(p2p_nmu_tvalid_{{ '%02d' % g }}),
+        .s_axis_tready(p2p_nmu_tready_{{ '%02d' % g }}),
+        .s_axis_tdest (p2p_nmu_tdest_{{ '%02d' % g }}),
+        .dst_id_err   ()
+    );
+{% endfor %}
+
+{% for h in range(P2P_M) %}
+    // ---- receive-hub {{ '%02d' % h }} : xpm_nsu_strm -> demux -> {{ P2P_MK }} vFPGA streams ----
+    logic                     p2p_nsu_tvalid_{{ '%02d' % h }};
+    logic                     p2p_nsu_tready_{{ '%02d' % h }};
+    logic [511:0]             p2p_nsu_tdata_{{ '%02d' % h }};
+    logic [63:0]              p2p_nsu_tkeep_{{ '%02d' % h }};
+    logic                     p2p_nsu_tlast_{{ '%02d' % h }};
+    logic [P2P_DEST_BITS-1:0] p2p_nsu_tdest_{{ '%02d' % h }};
+    (* DONT_TOUCH = "yes" *)
+    xpm_nsu_strm #(
+        .NOC_FABRIC("VNOC"), .DATA_WIDTH(512), .DST_ID_WIDTH(P2P_DEST_BITS), .ID_WIDTH(6)
+    ) inst_p2p_nsu_{{ '%02d' % h }} (
+        .m_axis_aclk  (aclk),
+        .m_axis_tid   (),
+        .m_axis_tdata (p2p_nsu_tdata_{{ '%02d' % h }}),
+        .m_axis_tkeep (p2p_nsu_tkeep_{{ '%02d' % h }}),
+        .m_axis_tlast (p2p_nsu_tlast_{{ '%02d' % h }}),
+        .m_axis_tvalid(p2p_nsu_tvalid_{{ '%02d' % h }}),
+        .m_axis_tdest (p2p_nsu_tdest_{{ '%02d' % h }}),
+        .m_axis_tready(p2p_nsu_tready_{{ '%02d' % h }})
+    );
+    logic [P2P_HUB_K-1:0]        p2p_dmx_tvalid_{{ '%02d' % h }};
+    logic [P2P_HUB_K-1:0]        p2p_dmx_tready_{{ '%02d' % h }};
+    logic [P2P_HUB_K-1:0][511:0] p2p_dmx_tdata_{{ '%02d' % h }};
+    logic [P2P_HUB_K-1:0][63:0]  p2p_dmx_tkeep_{{ '%02d' % h }};
+    logic [P2P_HUB_K-1:0]        p2p_dmx_tlast_{{ '%02d' % h }};
+    (* DONT_TOUCH = "yes" *)
+    axis_p2p_demux #(
+        .K(P2P_HUB_K), .DATA_BITS(512), .DEST_BITS(P2P_DEST_BITS), .BASE({{ h * P2P_MK }})
+    ) inst_p2p_dmx_{{ '%02d' % h }} (
+        .aclk(aclk), .aresetn(aresetn),
+        .s_axis_tvalid(p2p_nsu_tvalid_{{ '%02d' % h }}),
+        .s_axis_tready(p2p_nsu_tready_{{ '%02d' % h }}),
+        .s_axis_tdata (p2p_nsu_tdata_{{ '%02d' % h }}),
+        .s_axis_tkeep (p2p_nsu_tkeep_{{ '%02d' % h }}),
+        .s_axis_tlast (p2p_nsu_tlast_{{ '%02d' % h }}),
+        .s_axis_tdest (p2p_nsu_tdest_{{ '%02d' % h }}),
+        .m_axis_tvalid(p2p_dmx_tvalid_{{ '%02d' % h }}),
+        .m_axis_tready(p2p_dmx_tready_{{ '%02d' % h }}),
+        .m_axis_tdata (p2p_dmx_tdata_{{ '%02d' % h }}),
+        .m_axis_tkeep (p2p_dmx_tkeep_{{ '%02d' % h }}),
+        .m_axis_tlast (p2p_dmx_tlast_{{ '%02d' % h }})
+    );
+{% for k in range(P2P_MK) %}
+{% set vf = h * P2P_MK + k %}
+{% if vf < cnfg.n_reg %}
+    assign axis_p2p_to_dyn[{{ vf }}].tvalid = p2p_dmx_tvalid_{{ '%02d' % h }}[{{ k }}];
+    assign axis_p2p_to_dyn[{{ vf }}].tdata  = p2p_dmx_tdata_{{ '%02d' % h }}[{{ k }}];
+    assign axis_p2p_to_dyn[{{ vf }}].tkeep  = p2p_dmx_tkeep_{{ '%02d' % h }}[{{ k }}];
+    assign axis_p2p_to_dyn[{{ vf }}].tlast  = p2p_dmx_tlast_{{ '%02d' % h }}[{{ k }}];
+    assign p2p_dmx_tready_{{ '%02d' % h }}[{{ k }}] = axis_p2p_to_dyn[{{ vf }}].tready;
+{% else %}
+    assign p2p_dmx_tready_{{ '%02d' % h }}[{{ k }}] = 1'b1;   // no vFPGA at this slot; sink
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endif %}
 
     shell_ctrl_cc inst_shell_ctrl_cc (
         .xclk(xclk),
@@ -616,7 +829,7 @@ module shell_top (
     m_wback_data = 0;
 {% endif %}
 
-    logic [14:0] usr_irq;
+    logic [N_USR_IRQ-1:0] usr_irq;
     AXI4S axis_dyn_in_int [N_SCHAN] ();
     AXI4S axis_dyn_out_int [N_SCHAN] ();
     dmaIntf dma_rd_req_int [N_SCHAN] ();
@@ -903,9 +1116,32 @@ module shell_top (
     AXI4S #(.AXI4S_DATA_BITS(AXI_NET_BITS)) tx_sniffer ();
     metaIntf #(.STYPE(logic[64-1:0])) filter_config ();
 {% endif %}
-    
+{% if cnfg.en_net_raw %}
+    // Raw Ethernet: whole frames between the MAC and vFPGA {{ cnfg.net_raw_vfpga_id }},
+    // with the network stack bypassed. mac_status carries the MAC's bring-up
+    // state so the vFPGA can expose it without a separate control path.
+    AXI4S #(.AXI4S_DATA_BITS(AXI_NET_BITS)) net_raw_rx ();
+    AXI4S #(.AXI4S_DATA_BITS(AXI_NET_BITS)) net_raw_tx ();
+    logic [7:0] mac_status;
+    // Debug register port into the MAC (aclk, one request in flight): the
+    // DCMAC's own registers and a segment monitor on Versal.
+    logic        mac_reg_req;
+    logic        mac_reg_wr;
+    logic [31:0] mac_reg_addr;
+    logic [31:0] mac_reg_wdata;
+    logic        mac_reg_rsp;
+    logic [31:0] mac_reg_rdata;
+    logic [1:0]  mac_reg_resp;
+{% endif %}
+
+{% if cnfg.en_net %}
     network_top #(
-{% if cnfg.en_nclk %}
+{% if cnfg.fpga_arch == 'versal' %}
+        // The DCMAC block design runs on nclk and does its own CDC, so the
+        // MAC clock and the stack clock are already the same net; an early
+        // crossing here would be a FIFO between a clock and itself.
+        .CROSS_EARLY(0),
+{% elif cnfg.en_nclk %}
         .CROSS_EARLY(1),
 {% else %}
         .CROSS_EARLY(0),
@@ -970,11 +1206,24 @@ module shell_top (
         .m_tx_sniffer(tx_sniffer),
         .s_filter_config(filter_config),
 {% endif %}
+{% if cnfg.en_net_raw %}
+        .m_axis_net_rx_raw(net_raw_rx),
+        .s_axis_net_tx_raw(net_raw_tx),
+        .mac_status(mac_status),
+        .mac_reg_req(mac_reg_req),
+        .mac_reg_wr(mac_reg_wr),
+        .mac_reg_addr(mac_reg_addr),
+        .mac_reg_wdata(mac_reg_wdata),
+        .mac_reg_rsp(mac_reg_rsp),
+        .mac_reg_rdata(mac_reg_rdata),
+        .mac_reg_resp(mac_reg_resp),
+{% endif %}
         .aclk(aclk),
         .aresetn(aresetn),
         .nclk(nclk),
         .nresetn(nresetn)
-    );	
+    );
+{% endif %}
 
 {% if cnfg.en_stats and cnfg.fpga_arch == 'ultrascale_plus' %}
     vio_shell_nstats inst_vio_shell_nstats (
@@ -997,8 +1246,98 @@ module shell_top (
         .probe_in15(net_stats.axis_stream_down)
     );
 {% endif %}
-		
+
 {% endif %}
+
+{% if cnfg.en_aurora_1 %}
+    // ================-----------------------------------------------------------------
+    // AURORA 64B/66B (parallel to CMAC, occupies QSFP1)
+    // ================-----------------------------------------------------------------
+    // Rendered independently of en_net: Aurora owns QSFP1 with EN_NET disabled.
+    // 256-bit AXI4-Stream user interface, aclk domain after CDC inside aurora_module.
+    AXI4S #(.AXI4S_DATA_BITS(256)) aurora_rx ();
+    AXI4S #(.AXI4S_DATA_BITS(256)) aurora_tx ();
+
+    // Aurora status (aclk domain)
+    logic        aurora_channel_up;
+    logic [3:0]  aurora_lane_up;
+    logic        aurora_hard_err;
+    logic        aurora_soft_err;
+    logic        aurora_mmcm_not_locked;
+    logic        aurora_gt_pll_lock;
+
+    aurora_module inst_aurora_module (
+        .init_clk        (dclk),
+        .sys_reset       (sys_reset),
+        .aclk            (aclk),
+        .aresetn         (aresetn),
+        .gt_refclk_p     (gt1_refclk_p),
+        .gt_refclk_n     (gt1_refclk_n),
+        .gt_rxp_in       (gt1_rxp_in),
+        .gt_rxn_in       (gt1_rxn_in),
+        .gt_txp_out      (gt1_txp_out),
+        .gt_txn_out      (gt1_txn_out),
+        .m_aurora_rx     (aurora_rx),
+        .s_aurora_tx     (aurora_tx),
+        .channel_up      (aurora_channel_up),
+        .lane_up         (aurora_lane_up),
+        .hard_err        (aurora_hard_err),
+        .soft_err        (aurora_soft_err),
+        .mmcm_not_locked (aurora_mmcm_not_locked),
+        .gt_pll_lock     (aurora_gt_pll_lock)
+    );
+{% endif %}
+
+{% if cnfg.en_qlink_gty %}
+    // ================-----------------------------------------------------------------
+    // QLINK raw-GTY link (occupies QSFP1)
+    // ================-----------------------------------------------------------------
+    // Single GTY lane, 10.3125 Gbps, 8B/10B, for low-latency QEC syndrome
+    // transport (examples/16_qlink). Deliberately reuses the SAME signal names
+    // and 256-bit AXIS shape as the Aurora branch above, so the dynamic/user
+    // templates and the vFPGA need no QLINK-specific plumbing. Mutually
+    // exclusive with en_aurora_1 and en_net_1 -- enforced in FindCoyoteHW.cmake.
+    //
+    // WARNING: unlike the Aurora branch above, these two streams are NOT in the
+    // aclk domain. aurora_tx is in qlink_tx_clk and aurora_rx is in qlink_rx_clk
+    // -- the fabric CDC FIFOs that used to sit inside the wrapper were the
+    // single largest known term in the latency budget and are gone. The four
+    // clock/reset wires below carry the domains up to the vFPGA, which runs the
+    // protocol core on them directly. An AXI4S interface object carries no clock
+    // of its own, so nothing in the tooling will catch it if aclk logic is
+    // attached to these by mistake.
+    AXI4S #(.AXI4S_DATA_BITS(256)) aurora_rx ();
+    AXI4S #(.AXI4S_DATA_BITS(256)) aurora_tx ();
+
+    logic        aurora_channel_up;
+    logic [3:0]  aurora_lane_up;
+    logic        qlink_tx_clk, qlink_rx_clk, qlink_tx_rstn, qlink_rx_rstn;
+    logic [2:0]  qlink_loopback_sel;
+
+    qlink_gty_wrapper #(.LOOPBACK({{ cnfg.en_qlink_loopback }})) inst_qlink_gty (
+        .init_clk     (dclk),
+        .sys_reset    (sys_reset),
+        .aclk         (aclk),
+        .aresetn      (aresetn),
+        .gt_refclk_p  (gt1_refclk_p),
+        .gt_refclk_n  (gt1_refclk_n),
+        // Lane 0 only; the other three lanes of the cage are unused.
+        .gt_rxp_in    (gt1_rxp_in[0]),
+        .gt_rxn_in    (gt1_rxn_in[0]),
+        .gt_txp_out   (gt1_txp_out[0]),
+        .gt_txn_out   (gt1_txn_out[0]),
+        .tx_clk       (qlink_tx_clk),
+        .rx_clk       (qlink_rx_clk),
+        .tx_rstn      (qlink_tx_rstn),
+        .rx_rstn      (qlink_rx_rstn),
+        .m_qlink_rx   (aurora_rx),
+        .s_qlink_tx   (aurora_tx),
+        .loopback_sel (qlink_loopback_sel),
+        .channel_up   (aurora_channel_up),
+        .lane_up      (aurora_lane_up)
+    );
+{% endif %}
+
 {% if cnfg.en_card %}
     // ================-----------------------------------------------------------------
     // MEMORY STACK
@@ -1603,6 +1942,50 @@ module shell_top (
     // DYNAMIC WRAPPER
     // ================-----------------------------------------------------------------
 
+{% if cnfg.en_amc %}
+    // OCM mailbox master: inst_dynamic drives this interface; bridge to flat shell ports
+    AXI4 #(.AXI4_DATA_BITS(32), .AXI4_ADDR_BITS(64), .AXI4_ID_BITS(1)) m_axi_ocm_int();
+    assign m_axi_ocm_awid       = m_axi_ocm_int.awid;
+    assign m_axi_ocm_awaddr     = m_axi_ocm_int.awaddr;
+    assign m_axi_ocm_awlen      = m_axi_ocm_int.awlen;
+    assign m_axi_ocm_awsize     = m_axi_ocm_int.awsize;
+    assign m_axi_ocm_awburst    = m_axi_ocm_int.awburst;
+    assign m_axi_ocm_awlock     = m_axi_ocm_int.awlock;
+    assign m_axi_ocm_awcache    = m_axi_ocm_int.awcache;
+    assign m_axi_ocm_awprot     = m_axi_ocm_int.awprot;
+    assign m_axi_ocm_awqos      = m_axi_ocm_int.awqos;
+    assign m_axi_ocm_awregion   = m_axi_ocm_int.awregion;
+    assign m_axi_ocm_awvalid    = m_axi_ocm_int.awvalid;
+    assign m_axi_ocm_wdata      = m_axi_ocm_int.wdata;
+    assign m_axi_ocm_wstrb      = m_axi_ocm_int.wstrb;
+    assign m_axi_ocm_wlast      = m_axi_ocm_int.wlast;
+    assign m_axi_ocm_wvalid     = m_axi_ocm_int.wvalid;
+    assign m_axi_ocm_bready     = m_axi_ocm_int.bready;
+    assign m_axi_ocm_arid       = m_axi_ocm_int.arid;
+    assign m_axi_ocm_araddr     = m_axi_ocm_int.araddr;
+    assign m_axi_ocm_arlen      = m_axi_ocm_int.arlen;
+    assign m_axi_ocm_arsize     = m_axi_ocm_int.arsize;
+    assign m_axi_ocm_arburst    = m_axi_ocm_int.arburst;
+    assign m_axi_ocm_arlock     = m_axi_ocm_int.arlock;
+    assign m_axi_ocm_arcache    = m_axi_ocm_int.arcache;
+    assign m_axi_ocm_arprot     = m_axi_ocm_int.arprot;
+    assign m_axi_ocm_arqos      = m_axi_ocm_int.arqos;
+    assign m_axi_ocm_arregion   = m_axi_ocm_int.arregion;
+    assign m_axi_ocm_arvalid    = m_axi_ocm_int.arvalid;
+    assign m_axi_ocm_rready     = m_axi_ocm_int.rready;
+    assign m_axi_ocm_int.awready = m_axi_ocm_awready;
+    assign m_axi_ocm_int.wready  = m_axi_ocm_wready;
+    assign m_axi_ocm_int.bid     = m_axi_ocm_bid;
+    assign m_axi_ocm_int.bresp   = m_axi_ocm_bresp;
+    assign m_axi_ocm_int.bvalid  = m_axi_ocm_bvalid;
+    assign m_axi_ocm_int.arready = m_axi_ocm_arready;
+    assign m_axi_ocm_int.rid     = m_axi_ocm_rid;
+    assign m_axi_ocm_int.rdata   = m_axi_ocm_rdata;
+    assign m_axi_ocm_int.rresp   = m_axi_ocm_rresp;
+    assign m_axi_ocm_int.rlast   = m_axi_ocm_rlast;
+    assign m_axi_ocm_int.rvalid  = m_axi_ocm_rvalid;
+{% endif %}
+
     design_dynamic_top inst_dynamic (
 {% if cnfg.fpga_arch == 'versal' and cnfg.en_app_reset_copies %}
         .app_aresetn(app_aresetn),
@@ -1665,6 +2048,31 @@ module shell_top (
         .s_rx_sniffer(rx_sniffer),
         .s_tx_sniffer(tx_sniffer),
         .m_filter_config(filter_config),
+{% endif %}
+{% if cnfg.en_net_raw %}
+        .s_net_raw_rx(net_raw_rx),
+        .m_net_raw_tx(net_raw_tx),
+        .mac_status(mac_status),
+        .mac_reg_req(mac_reg_req),
+        .mac_reg_wr(mac_reg_wr),
+        .mac_reg_addr(mac_reg_addr),
+        .mac_reg_wdata(mac_reg_wdata),
+        .mac_reg_rsp(mac_reg_rsp),
+        .mac_reg_rdata(mac_reg_rdata),
+        .mac_reg_resp(mac_reg_resp),
+{% endif %}
+{% if cnfg.en_aurora_1 or cnfg.en_qlink_gty %}
+        .s_aurora_rx(aurora_rx),
+        .m_aurora_tx(aurora_tx),
+        .aurora_channel_up(aurora_channel_up),
+        .aurora_lane_up(aurora_lane_up),
+{% endif %}
+{% if cnfg.en_qlink_gty %}
+        .qlink_tx_clk(qlink_tx_clk),
+        .qlink_rx_clk(qlink_rx_clk),
+        .qlink_tx_rstn(qlink_tx_rstn),
+        .qlink_rx_rstn(qlink_rx_rstn),
+        .qlink_loopback_sel(qlink_loopback_sel),
 {% endif %}
 {% if cnfg.en_wb %}
         .m_wback(wback),
@@ -1732,6 +2140,27 @@ module shell_top (
 {% else %}
         .dresetn(xresetn),
 {% endif %}
+{% endif %}
+{% if cnfg.fdev == 'v80' and cnfg.en_p2p == 1 and cnfg.n_reg > 1 %}
+        // P2P AXIS to/from the vFPGA layer. from_dyn = vFPGA send (into xpm_nmu_strm);
+        // to_dyn = vFPGA recv (out of xpm_nsu_strm). See the Network-3 endpoints above.
+{% for i in range(cnfg.n_reg) %}
+        .m_axis_p2p_send_{{ '%02d' % i }}_tdata(axis_p2p_from_dyn[{{ i }}].tdata),
+        .m_axis_p2p_send_{{ '%02d' % i }}_tkeep(axis_p2p_from_dyn[{{ i }}].tkeep),
+        .m_axis_p2p_send_{{ '%02d' % i }}_tlast(axis_p2p_from_dyn[{{ i }}].tlast),
+        .m_axis_p2p_send_{{ '%02d' % i }}_tdest(axis_p2p_from_dyn_tdest[{{ i }}]),
+        .m_axis_p2p_send_{{ '%02d' % i }}_tvalid(axis_p2p_from_dyn[{{ i }}].tvalid),
+        .m_axis_p2p_send_{{ '%02d' % i }}_tready(axis_p2p_from_dyn[{{ i }}].tready),
+        .s_axis_p2p_recv_{{ '%02d' % i }}_tdata(axis_p2p_to_dyn[{{ i }}].tdata),
+        .s_axis_p2p_recv_{{ '%02d' % i }}_tkeep(axis_p2p_to_dyn[{{ i }}].tkeep),
+        .s_axis_p2p_recv_{{ '%02d' % i }}_tlast(axis_p2p_to_dyn[{{ i }}].tlast),
+        .s_axis_p2p_recv_{{ '%02d' % i }}_tvalid(axis_p2p_to_dyn[{{ i }}].tvalid),
+        .s_axis_p2p_recv_{{ '%02d' % i }}_tready(axis_p2p_to_dyn[{{ i }}].tready),
+{% endfor %}
+{% endif %}
+{% if cnfg.en_amc %}
+        .m_axi_ocm(m_axi_ocm_int),
+        .ocm_irq(ocm_irq),
 {% endif %}
         .aresetn(aresetn),
         .aclk(aclk),

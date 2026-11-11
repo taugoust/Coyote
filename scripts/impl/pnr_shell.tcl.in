@@ -43,6 +43,76 @@ puts "[color $clr_flow "**"]"
 
 open_checkpoint "$dcp_dir/shell_linked.dcp"
 
+# Network-3 inter-vFPGA P2P: compile the shell's xpm_nmu_strm/xpm_nsu_strm NoC
+# endpoints + their create_noc_connection paths into the device NoC. This runs on
+# the LINKED design (design_static supplies CIPS -> the NoC clock/config), which a
+# shell-only synth cannot do. If it fails, the likely cause is that design_static
+# was built with no reservation for the RM's P2P NoC paths (see build notes).
+if {$cfg(fdev) eq "v80" && ($cfg(en_p2p) eq 1 || $cfg(en_host_noc) eq 1) && $cfg(n_reg) > 1} {
+    puts "[color $clr_flow "** Network-3 P2P: running validate_noc on the linked design ..."]"
+    if {[catch {validate_noc} p2p_noc_err]} {
+        puts "[color $clr_error "** validate_noc FAILED: $p2p_noc_err"]"
+        error "Network-3 P2P NoC validation failed; see log."
+    }
+    puts "[color $clr_flow "** Network-3 P2P: validate_noc completed"]"
+}
+
+# Vivado 2023.2's generated Aurora GT XDC initially constrains the U280
+# aurora_qsfp1 GT shape into the PCIe/XDMA quad. The later zaurora XDC moves
+# the GT cells to QSFP1, but the linked checkpoint can still restore stale
+# top-level port placement on the PCIe GT pads. Re-assert both port pins and
+# GT channel LOCs after opening the checkpoint so place_design sees a coherent
+# shape.
+if {$cfg(en_aurora_1) eq 1} {
+    puts "WARNING: Re-applying Aurora QSFP1 GT port and channel placement after checkpoint restore."
+
+    foreach {port pin} {
+        gt1_refclk_n M43
+        gt1_refclk_p M42
+        gt1_rxn_in[0] G54
+        gt1_rxn_in[1] F52
+        gt1_rxn_in[2] E54
+        gt1_rxn_in[3] D52
+        gt1_rxp_in[0] G53
+        gt1_rxp_in[1] F51
+        gt1_rxp_in[2] E53
+        gt1_rxp_in[3] D51
+        gt1_txn_out[0] G49
+        gt1_txn_out[1] E49
+        gt1_txn_out[2] C49
+        gt1_txn_out[3] A50
+        gt1_txp_out[0] G48
+        gt1_txp_out[1] E48
+        gt1_txp_out[2] C48
+        gt1_txp_out[3] A49
+    } {
+        set p [get_ports -quiet [list $port]]
+        if {[llength $p] != 1} {
+            puts "WARNING: Expected one Aurora QSFP1 port '$port', found [llength $p]."
+            continue
+        }
+        catch {reset_property LOC $p}
+        catch {reset_property PACKAGE_PIN $p}
+        set_property PACKAGE_PIN $pin $p
+        set_property LOC $pin $p
+    }
+
+    foreach {idx loc} {
+        3 GTYE4_CHANNEL_X0Y44
+        2 GTYE4_CHANNEL_X0Y45
+        1 GTYE4_CHANNEL_X0Y46
+        0 GTYE4_CHANNEL_X0Y47
+    } {
+        set c [get_cells -hierarchical -quiet -filter "NAME =~ *inst_aurora*gen_channel_container\[24\].*gen_gtye4_channel_inst\[$idx\].GTYE4_CHANNEL_PRIM_INST"]
+        if {[llength $c] != 1} {
+            puts "WARNING: Expected one Aurora QSFP1 GT channel cell for generated index $idx, found [llength $c]."
+            continue
+        }
+        catch {reset_property LOC $c}
+        set_property LOC $loc $c
+    }
+}
+
 set opt_directive "${IMPLEMENTATION_OPT_DIRECTIVE}"
 if {$opt_directive eq "project"} {
     set opt_directive [expr {$cfg(build_opt) eq 1 ? "Explore" : ""}]
@@ -52,7 +122,11 @@ if {$opt_directive ne ""} {
 } else {
     opt_design
 }
-write_checkpoint -force "$dcp_dir/shell_opted.dcp"
+if {$cfg(en_aurora_1) ne 1} {
+    write_checkpoint -force "$dcp_dir/shell_opted.dcp"
+} else {
+    puts "WARNING: Skipping Aurora QSFP1 intermediate shell_opted checkpoint; Vivado 2023.2 can segfault while writing this post-opt DCP."
+}
 puts "[color $clr_flow "** Shell opt_design completed"]"
 puts "[color $clr_flow "**"]"
 
@@ -62,6 +136,7 @@ if {$place_directive eq "project"} {
         if {$cfg(fpga_arch) eq "versal" &&
             [package vcompare [version -short] "2024.2"] >= 0} {
             set place_directive AggressiveExplore
+
         } else {
             set place_directive Auto_1
         }

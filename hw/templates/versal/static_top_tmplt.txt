@@ -40,7 +40,7 @@ module static_top (
     output logic                            xclk,
 
     // ISR
-    input  logic [14:0]                     s_usr_irq,
+    input  logic [N_USR_IRQ-1:0]            s_usr_irq,
 
     // AXI control interface
     AXI4.m                                  m_axi_main,
@@ -52,6 +52,17 @@ module static_top (
 
     // AXI debug hub control
     AXI4.m                                  m_axi_debug_hub,
+
+{% if cnfg.en_amc %}
+    // Example 15 — OCM channel: shell master (vFPGA ocm_mbx) drives this slave,
+    // which the design_static BD width/clock-converts into CIPS S_AXI_LPD and on
+    // to OCM @0xFFFC0000. ocm_irq feeds CIPS pl_ps_irq[1] to wake the R5.
+    AXI4.s                                  s_axi_ocm,
+    input  logic                            ocm_irq,
+{% endif %}
+
+    // (Network-3 P2P: no s_axi_p2p/m_axi_p2p ports — the inter-vFPGA NoC
+    // endpoints live in the shell, not design_static.)
 
     // AXI4 Stream Data interfaces
     AXI4S.m                                 m_axis_dyn_out [N_SCHAN],
@@ -71,14 +82,33 @@ module static_top (
     input  wire[PCIE_GT_BITS-1:0]           pcie_rxn,
     input  wire[PCIE_GT_BITS-1:0]           pcie_rxp,
     output wire[PCIE_GT_BITS-1:0]           pcie_txn,
-    output wire[PCIE_GT_BITS-1:0]           pcie_txp
+    output wire[PCIE_GT_BITS-1:0]           pcie_txp{% if cnfg.fdev == 'v80' and cnfg.en_ddr4 == 1 %},
+
+    // V80 onboard DDR4 (4 GB, axi_noc_mc_ddr4_0) — whenever EN_AMC or EN_APU.
+    // Port names mirror the BD wrapper: CH0_DDR4_0_0_* / sys_clk0_0_*.
+    input  wire[0:0]                        sys_clk0_0_clk_n,
+    input  wire[0:0]                        sys_clk0_0_clk_p,
+    output wire[0:0]                        CH0_DDR4_0_0_act_n,
+    output wire[16:0]                       CH0_DDR4_0_0_adr,
+    output wire[1:0]                        CH0_DDR4_0_0_ba,
+    output wire[0:0]                        CH0_DDR4_0_0_bg,
+    output wire[0:0]                        CH0_DDR4_0_0_ck_c,
+    output wire[0:0]                        CH0_DDR4_0_0_ck_t,
+    output wire[0:0]                        CH0_DDR4_0_0_cke,
+    output wire[0:0]                        CH0_DDR4_0_0_cs_n,
+    inout  wire[8:0]                        CH0_DDR4_0_0_dm_n,
+    inout  wire[71:0]                       CH0_DDR4_0_0_dq,
+    inout  wire[8:0]                        CH0_DDR4_0_0_dqs_c,
+    inout  wire[8:0]                        CH0_DDR4_0_0_dqs_t,
+    output wire[0:0]                        CH0_DDR4_0_0_odt,
+    output wire[0:0]                        CH0_DDR4_0_0_reset_n{% endif %}
 );
 
     // Clocks and resets
     logic sresetn;
 
     // Interrupts
-    logic [15:0] usr_irq;
+    logic [N_USR_IRQ:0] usr_irq;
 
     // AXI static config & control
     AXI4L #(.AXI4L_DATA_BITS(32), .AXI4L_ADDR_BITS(32)) axi_cnfg_int ();
@@ -120,12 +150,12 @@ module static_top (
     // QDMA INTERRUPT WRAPPER
     // ================----------------------------------------------------------------- 
     logic        usr_irq_valid;
-    logic [4:0]  usr_irq_vec;
+    logic [USR_IRQ_VEC_BITS-1:0]  usr_irq_vec;
     logic [12:0] usr_irq_fnc;   
     logic        usr_irq_ack;
     logic        usr_irq_fail;
     
-    qdma_interrupt_wrapper inst_qdma_interrupt_wrapper (
+    qdma_interrupt_wrapper #(.N_IRQ(N_USR_IRQ + 1), .VEC_BITS(USR_IRQ_VEC_BITS)) inst_qdma_interrupt_wrapper (
         .aclk(xclk),
         .aresetn(sresetn),
         .usr_irq(usr_irq),
@@ -349,6 +379,52 @@ module static_top (
         .axi_debug_hub_wstrb(m_axi_debug_hub.wstrb),
         .axi_debug_hub_wvalid(m_axi_debug_hub.wvalid),
 
+        // (Network-3 P2P: NoC endpoints are in the shell; no p2p port map here.)
+{% if cnfg.en_amc %}
+        // Example 15 — OCM channel slave (BD s_axi_ocm -> S_AXI_LPD -> OCM).
+        // Full AXI4 set; names mirror the design_static BD wrapper (cr_aved_mgmt.tcl).
+        .s_axi_ocm_awid(s_axi_ocm.awid),
+        .s_axi_ocm_awaddr(s_axi_ocm.awaddr),
+        .s_axi_ocm_awlen(s_axi_ocm.awlen),
+        .s_axi_ocm_awsize(s_axi_ocm.awsize),
+        .s_axi_ocm_awburst(s_axi_ocm.awburst),
+        .s_axi_ocm_awlock(s_axi_ocm.awlock),
+        .s_axi_ocm_awcache(s_axi_ocm.awcache),
+        .s_axi_ocm_awprot(s_axi_ocm.awprot),
+        .s_axi_ocm_awqos(s_axi_ocm.awqos),
+        // NB: BD slave s_axi_ocm has no awregion/arregion (SmartConnect drops
+        // region on the slave side); the interface members are simply left unused.
+        .s_axi_ocm_awvalid(s_axi_ocm.awvalid),
+        .s_axi_ocm_awready(s_axi_ocm.awready),
+        .s_axi_ocm_wdata(s_axi_ocm.wdata),
+        .s_axi_ocm_wstrb(s_axi_ocm.wstrb),
+        .s_axi_ocm_wlast(s_axi_ocm.wlast),
+        .s_axi_ocm_wvalid(s_axi_ocm.wvalid),
+        .s_axi_ocm_wready(s_axi_ocm.wready),
+        .s_axi_ocm_bid(s_axi_ocm.bid),
+        .s_axi_ocm_bresp(s_axi_ocm.bresp),
+        .s_axi_ocm_bvalid(s_axi_ocm.bvalid),
+        .s_axi_ocm_bready(s_axi_ocm.bready),
+        .s_axi_ocm_arid(s_axi_ocm.arid),
+        .s_axi_ocm_araddr(s_axi_ocm.araddr),
+        .s_axi_ocm_arlen(s_axi_ocm.arlen),
+        .s_axi_ocm_arsize(s_axi_ocm.arsize),
+        .s_axi_ocm_arburst(s_axi_ocm.arburst),
+        .s_axi_ocm_arlock(s_axi_ocm.arlock),
+        .s_axi_ocm_arcache(s_axi_ocm.arcache),
+        .s_axi_ocm_arprot(s_axi_ocm.arprot),
+        .s_axi_ocm_arqos(s_axi_ocm.arqos),
+        .s_axi_ocm_arvalid(s_axi_ocm.arvalid),
+        .s_axi_ocm_arready(s_axi_ocm.arready),
+        .s_axi_ocm_rid(s_axi_ocm.rid),
+        .s_axi_ocm_rdata(s_axi_ocm.rdata),
+        .s_axi_ocm_rresp(s_axi_ocm.rresp),
+        .s_axi_ocm_rlast(s_axi_ocm.rlast),
+        .s_axi_ocm_rvalid(s_axi_ocm.rvalid),
+        .s_axi_ocm_rready(s_axi_ocm.rready),
+        // R5 wake IRQ -> CIPS pl_ps_irq[1]
+        .ocm_irq(ocm_irq),
+{% endif %}
         // Interrupts
         .usr_irq_valid(usr_irq_valid),
         .usr_irq_vec(usr_irq_vec),
@@ -454,7 +530,25 @@ module static_top (
 {% if cnfg.en_debug_reset_copies %}
         .debug_resetn(debug_resetn),
 {% endif %}
-        .xresetn(xresetn)
+        .xresetn(xresetn){% if cnfg.fdev == 'v80' and cnfg.en_ddr4 == 1 %},
+
+        // V80 onboard DDR4 PHY pass-through
+        .sys_clk0_0_clk_n(sys_clk0_0_clk_n),
+        .sys_clk0_0_clk_p(sys_clk0_0_clk_p),
+        .CH0_DDR4_0_0_act_n(CH0_DDR4_0_0_act_n),
+        .CH0_DDR4_0_0_adr(CH0_DDR4_0_0_adr),
+        .CH0_DDR4_0_0_ba(CH0_DDR4_0_0_ba),
+        .CH0_DDR4_0_0_bg(CH0_DDR4_0_0_bg),
+        .CH0_DDR4_0_0_ck_c(CH0_DDR4_0_0_ck_c),
+        .CH0_DDR4_0_0_ck_t(CH0_DDR4_0_0_ck_t),
+        .CH0_DDR4_0_0_cke(CH0_DDR4_0_0_cke),
+        .CH0_DDR4_0_0_cs_n(CH0_DDR4_0_0_cs_n),
+        .CH0_DDR4_0_0_dm_n(CH0_DDR4_0_0_dm_n),
+        .CH0_DDR4_0_0_dq(CH0_DDR4_0_0_dq),
+        .CH0_DDR4_0_0_dqs_c(CH0_DDR4_0_0_dqs_c),
+        .CH0_DDR4_0_0_dqs_t(CH0_DDR4_0_0_dqs_t),
+        .CH0_DDR4_0_0_odt(CH0_DDR4_0_0_odt),
+        .CH0_DDR4_0_0_reset_n(CH0_DDR4_0_0_reset_n){% endif %}
     );
 
     // The NoC addresses are 64-bit long and start 0x201_0000_0000
@@ -483,7 +577,7 @@ module static_top (
         // End-of-startup after PR 
         .eos(eos_ctrl),
         .eos_resetn(eos_resetn_sw),
-        .pr_irq(usr_irq[15]),
+        .pr_irq(usr_irq[N_USR_IRQ]),
 
         // Unlike UltraScale+, on Versal devices, the PMC issues an EOS signal after PR completion
         // Therefore, no need to wait for eos_time after PR
@@ -531,7 +625,7 @@ module static_top (
         .s_decouple(decouple),
 
         .s_usr_irq(s_usr_irq),
-        .m_usr_irq(usr_irq[14:0]),
+        .m_usr_irq(usr_irq[N_USR_IRQ-1:0]),
         
         .s_axi_main(axi_main_int),
         .m_axi_main(m_axi_main),

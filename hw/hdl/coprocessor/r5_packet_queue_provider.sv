@@ -649,13 +649,16 @@ module r5_packet_queue_provider #(
                 REG_IDENTITY_BASE, REG_IDENTITY_BASE + 4, REG_IDENTITY_BASE + 8,
                 REG_IDENTITY_BASE + 12, REG_IDENTITY_BASE + 16, REG_IDENTITY_BASE + 20,
                 REG_IDENTITY_BASE + 24, REG_IDENTITY_BASE + 28: begin
-                    if (identity_valid || provider_selected) begin
+                    // Identity may be refreshed while unselected. A successful
+                    // commit advances endpoint_generation; bind validates the
+                    // newly published generation before selecting this provider.
+                    if (provider_selected) begin
                         write_result = RESULT_NOT_READY;
                     end
                 end
                 REG_IDENTITY_COMMIT: begin
                     write_opcode = CMD_IDENTITY;
-                    if (held_wdata != IDENTITY_COMMIT_MAGIC || identity_valid || provider_selected ||
+                    if (held_wdata != IDENTITY_COMMIT_MAGIC || provider_selected ||
                         rx_count != 0 || tx_count != 0 || tx_stage_dirty || mmio_busy ||
                         runtime_abi == 0 || firmware_abi != EXPECTED_FIRMWARE_ABI ||
                         !firmware_identity_nonzero || (&endpoint_generation)) begin
@@ -1593,7 +1596,7 @@ module r5_packet_queue_provider #(
         assert(STREAM_ID_BITS == 6);
         assert(GENERATION_BITS == 32);
         assert(MMIO_DATA_BITS == 64);
-        assert(MAX_PACKET_BEATS == 64);
+        assert(MAX_PACKET_BEATS > 0 && MAX_PACKET_BEATS <= 64);
         assert(QUEUE_DEPTH > 0);
         assert((QUEUE_DEPTH & (QUEUE_DEPTH - 1)) == 0);
         assert(MMIO_TIMEOUT_CYCLES > 1);

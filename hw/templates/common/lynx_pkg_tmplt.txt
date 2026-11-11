@@ -68,6 +68,12 @@
 {% if cnfg.en_net %}
 `define EN_NET
 {% endif %}
+{% if cnfg.en_net_raw %}
+`define EN_NET_RAW
+{% endif %}
+{% if cnfg.fpga_arch == 'versal' %}
+`define FPGA_ARCH_VERSAL
+{% endif %}
 {% if cnfg.en_nclk %}
 `define EN_NCLK
 {% endif %}
@@ -250,10 +256,11 @@ package lynxTypes;
     localparam integer MEM_STS_BITS = 8;
 
     // Network RDMA
-    localparam integer APP_READ = 0;
-    localparam integer APP_WRITE = 1;
-    localparam integer APP_SEND = 2;
-    localparam integer APP_IMMED = 3;
+    // RDMA operations issued on sq_* / host invoke with STRM_RDMA; segmented by the shell into RC_* wire opcodes.
+    localparam integer RDMA_READ = 0;
+    localparam integer RDMA_WRITE = 1;
+    localparam integer RDMA_SEND = 2;
+    localparam integer RDMA_IMMED = 3;
 
     localparam integer RC_SEND_FIRST = 5'h0;
     localparam integer RC_SEND_MIDDLE = 5'h1;
@@ -295,8 +302,6 @@ package lynxTypes;
     localparam integer RDMA_N_RD_OUTSTANDING = 8;
     localparam integer RDMA_N_WR_OUTSTANDING = 16;
     localparam integer RDMA_MAX_SINGLE_READ = 32 * 1024;
-    localparam integer RDMA_MODE_PARSE = 0;
-    localparam integer RDMA_MODE_RAW = 1;
     localparam integer RDMA_WR_NET_THRS = 256; // beats
     localparam integer RDMA_MEM_SHIFT = 27;
 
@@ -370,6 +375,20 @@ package lynxTypes;
     localparam integer N_REGIONS = {{ cnfg.n_reg }};
     localparam integer N_REGIONS_BITS = clog2s({{ cnfg.n_reg }});
 
+    // Width of the parallel user-interrupt vector (one IRQ line per vFPGA).
+    // Versal serializes it via qdma_interrupt_wrapper (usr_irq_vec is 5 bits ->
+    // up to 32), so it scales with N_REGIONS. UltraScale+ drives XDMA's fixed
+    // 16-line usr_irq (15 user + 1 PR), so it stays 15 there.
+{% if cnfg.fpga_arch == 'versal' %}
+    localparam integer N_USR_IRQ = {{ cnfg.n_reg }};
+{% else %}
+    localparam integer N_USR_IRQ = 15;
+{% endif %}
+    // Serialized QDMA interrupt-vector width: enough to index N_USR_IRQ user IRQs
+    // + 1 PR IRQ, but never narrower than the legacy 5 bits (32 vectors) so
+    // existing <=31-region builds are unchanged. N=32 -> 6 bits.
+    localparam integer USR_IRQ_VEC_BITS = (clog2s(N_USR_IRQ + 1) < 5) ? 5 : clog2s(N_USR_IRQ + 1);
+
     localparam integer N_OUTSTANDING = {{ cnfg.n_outs }};
     localparam integer N_OUTSTANDING_REGION = {{ 4 * cnfg.n_outs }};
 
@@ -398,6 +417,33 @@ package lynxTypes;
     localparam integer MEM_FLOW = {{ cnfg.en_mem }};
     localparam integer RDMA_FLOW = {{ cnfg.en_rdma }};
     localparam integer TCP_FLOW = {{ cnfg.en_tcp }};
+    localparam integer P2P_FLOW = {{ cnfg.en_p2p }};
+    // Inter-vFPGA P2P NoC (Network-3). tdest carries the target vFPGA id; it is the
+    // NoC dest-id width for the shell's xpm_nmu_strm/xpm_nsu_strm endpoints. No MM
+    // addressing params: routing is by tdest over create_noc_connection paths.
+    localparam integer P2P_DEST_BITS = clog2s({{ cnfg.n_reg }});
+    // Hub sharing: a streaming NMU/NSU caps at 16 NoC connections, and 1 endpoint
+    // per vFPGA also over-crowds the NoC column (routing congestion). So senders
+    // group into P2P_N_SEND NMUs (K->1 axis_p2p_arbiter) and receivers into
+    // P2P_N_HUB NSUs (1->K axis_p2p_demux). Capped small (<=4) to minimise endpoints.
+    // Any-to-any = P2P_N_SEND x P2P_N_HUB connections; each endpoint has <=max(S,M).
+    localparam integer P2P_N_HUB   = (N_REGIONS < 4) ? N_REGIONS : 4;
+    localparam integer P2P_HUB_K   = (N_REGIONS + P2P_N_HUB - 1) / P2P_N_HUB;
+    localparam integer P2P_N_SEND  = (N_REGIONS < 4) ? N_REGIONS : 4;
+    localparam integer P2P_SEND_K  = (N_REGIONS + P2P_N_SEND - 1) / P2P_N_SEND;
+    // Host DMA over NoC (Network-3). Unlike the P2P mesh (any-to-any), host<->vFPGA is
+    // a 1:N STAR: one host-side endpoint pair (near CPM5, SLR0) <-> N vFPGAs (SLR1/2),
+    // routed by tdest = target vFPGA id (h2c) / 0 (c2h). Reuses axis_p2p_arbiter/demux.
+    localparam integer HOSTNOC_FLOW     = {{ cnfg.en_host_noc }};
+    localparam integer HOSTNOC_DEST_BITS = clog2s({{ cnfg.n_reg }});
+    // vFPGA-side hubs (h2c receive demux 1->K, c2h send arbiter K->1), capped <=4 to
+    // keep each streaming endpoint under the 16-connection NoC cap.
+    localparam integer HOSTNOC_N_RECV   = (N_REGIONS < 4) ? N_REGIONS : 4;
+    localparam integer HOSTNOC_RECV_K   = (N_REGIONS + HOSTNOC_N_RECV - 1) / HOSTNOC_N_RECV;
+    localparam integer HOSTNOC_N_SEND   = (N_REGIONS < 4) ? N_REGIONS : 4;
+    localparam integer HOSTNOC_SEND_K   = (N_REGIONS + HOSTNOC_N_SEND - 1) / HOSTNOC_N_SEND;
+    // Host-side endpoints (SLR0, near CPM5): 1 pair suffices for PCIe Gen5x8 aggregate BW.
+    localparam integer HOSTNOC_N_HOST   = 1;
     localparam integer N_WBS = {{ cnfg.n_wbs }};
     localparam integer QSFP = {{ cnfg.qsfp }};
 
@@ -445,11 +491,8 @@ package lynxTypes;
     
     typedef struct packed {
         // Opcode
-        logic [OPCODE_BITS-1:0] opcode; // One of the values of coyote::CoyoteOper
+        logic [OPCODE_BITS-1:0] opcode; // LOCAL_* for local requests; RDMA_* for STRM_RDMA requests from user logic/host (RC_* after the shell's parser)
         logic [STRM_BITS-1:0] strm;     // One of STRM_CARD, STRM_HOST, STRM_TCP, or STRM_RDMA (this determines the where this request lands)
-        logic mode;                     // In the STRM_RDMA case, controls whether to skip the request splitter in the dreq_rdma_parser_wr module
-        logic rdma;
-        logic remote;
 
         // ID
         logic [DEST_BITS-1:0] vfid; // rsrvd
@@ -468,7 +511,7 @@ package lynxTypes;
         logic host; // rsrvd
         logic [OFFS_BITS-1:0] offs; // rsrvd
 
-        logic [128-OFFS_BITS-2-VADDR_BITS-LEN_BITS-1-2*DEST_BITS-PID_BITS-3-STRM_BITS-OPCODE_BITS-1:0] rsrvd;
+        logic [128-OFFS_BITS-2-VADDR_BITS-LEN_BITS-1-2*DEST_BITS-PID_BITS-STRM_BITS-OPCODE_BITS-1:0] rsrvd;
     } req_t;
 
     typedef struct packed {
@@ -477,14 +520,13 @@ package lynxTypes;
     } dreq_t;
 
     typedef struct packed {
-        logic [OPCODE_BITS-1:0] opcode; // One of the values of coyote::CoyoteOper
+        logic [OPCODE_BITS-1:0] opcode; // CoyoteOper value for local completions, RoCE opcode for RDMA completions
         logic [STRM_BITS-1:0] strm;     // One of STRM_CARD, STRM_HOST, STRM_TCP, or STRM_RDMA (this determines the where this request lands)
-        logic remote;
-        logic host;                     // Whether the corresponding request came from the corresponding vFPGA sq_* interface or a host-side invoke
+        logic host;                     // Whether the corresponding request came from a host-side invoke or the corresponding vFPGA sq_* interface
         logic [DEST_BITS-1:0] dest;     // The index of the AXI stream that data arrives at/departs from
         logic [PID_BITS-1:0] pid;
         logic [DEST_BITS-1:0] vfid;
-        logic [32-OPCODE_BITS-STRM_BITS-2-DEST_BITS-PID_BITS-DEST_BITS-1:0] rsrvd;
+        logic [32-OPCODE_BITS-STRM_BITS-1-DEST_BITS-PID_BITS-DEST_BITS-1:0] rsrvd;
     } ack_t;
 
     typedef struct packed {

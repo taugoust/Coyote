@@ -38,8 +38,30 @@ import lynxTypes::*;
 // ================-----------------------------------------------------------------
 
 module cyt_top (
+{% if cnfg.fdev == 'v80' and cnfg.en_net %}
+    // V80 QSFP56 cage, driven by the 200G DCMAC. EN_NET_0 uses GT 0
+    // (DCMAC_X1Y1, bank 209 = qsfp0); EN_NET_1 uses GT 1 (DCMAC_X0Y2,
+    // bank 111 = qsfp3). Exactly one is enabled. No qsfp*_ sideband pins:
+    // on the V80 the cage's control and I2C belong to the AVED satellite
+    // controller, not the PL.
+{% if cnfg.en_net_0 %}
+    (* io_buffer_type = "none" *) input  wire[3:0]            gt0_rxp_in,
+    (* io_buffer_type = "none" *) input  wire[3:0]            gt0_rxn_in,
+    (* io_buffer_type = "none" *) output  wire[3:0]           gt0_txp_out,
+    (* io_buffer_type = "none" *) output  wire[3:0]           gt0_txn_out,
+    (* io_buffer_type = "none" *) input  wire                 gt0_refclk_p,
+    (* io_buffer_type = "none" *) input  wire                 gt0_refclk_n,
+{% endif %}
+{% if cnfg.en_net_1 %}
+    (* io_buffer_type = "none" *) input  wire[3:0]            gt1_rxp_in,
+    (* io_buffer_type = "none" *) input  wire[3:0]            gt1_rxn_in,
+    (* io_buffer_type = "none" *) output  wire[3:0]           gt1_txp_out,
+    (* io_buffer_type = "none" *) output  wire[3:0]           gt1_txn_out,
+    (* io_buffer_type = "none" *) input  wire                 gt1_refclk_p,
+    (* io_buffer_type = "none" *) input  wire                 gt1_refclk_n,
+{% endif %}
+{% endif %}
 {% if cnfg.fdev != 'v80' %}
-    // TODO (Versal): Add networking support
     // GT 0
     (* io_buffer_type = "none" *) input  wire[3:0]            gt0_rxp_in,
     (* io_buffer_type = "none" *) input  wire[3:0]            gt0_rxn_in,
@@ -288,7 +310,26 @@ module cyt_top (
     input  wire[PCIE_GT_BITS-1:0]   pcie_rxn,
     input  wire[PCIE_GT_BITS-1:0]   pcie_rxp,
     output wire[PCIE_GT_BITS-1:0]   pcie_txn,
-    output wire[PCIE_GT_BITS-1:0]   pcie_txp
+    output wire[PCIE_GT_BITS-1:0]   pcie_txp{% if cnfg.fdev == 'v80' and cnfg.en_ddr4 == 1 %},
+
+    // V80 onboard DDR4 PHY pins (4 GB, axi_noc_mc_ddr4_0 in cr_ddr4_v80.tcl).
+    // Names mirror the BD wrapper / XDC: CH0_DDR4_0_0_* and sys_clk0_0_*.
+    (* io_buffer_type = "none" *) input  wire[0:0]   sys_clk0_0_clk_n,
+    (* io_buffer_type = "none" *) input  wire[0:0]   sys_clk0_0_clk_p,
+    (* io_buffer_type = "none" *) output wire[0:0]   CH0_DDR4_0_0_act_n,
+    (* io_buffer_type = "none" *) output wire[16:0]  CH0_DDR4_0_0_adr,
+    (* io_buffer_type = "none" *) output wire[1:0]   CH0_DDR4_0_0_ba,
+    (* io_buffer_type = "none" *) output wire[0:0]   CH0_DDR4_0_0_bg,
+    (* io_buffer_type = "none" *) output wire[0:0]   CH0_DDR4_0_0_ck_c,
+    (* io_buffer_type = "none" *) output wire[0:0]   CH0_DDR4_0_0_ck_t,
+    (* io_buffer_type = "none" *) output wire[0:0]   CH0_DDR4_0_0_cke,
+    (* io_buffer_type = "none" *) output wire[0:0]   CH0_DDR4_0_0_cs_n,
+    (* io_buffer_type = "none" *) inout  wire[8:0]   CH0_DDR4_0_0_dm_n,
+    (* io_buffer_type = "none" *) inout  wire[71:0]  CH0_DDR4_0_0_dq,
+    (* io_buffer_type = "none" *) inout  wire[8:0]   CH0_DDR4_0_0_dqs_c,
+    (* io_buffer_type = "none" *) inout  wire[8:0]   CH0_DDR4_0_0_dqs_t,
+    (* io_buffer_type = "none" *) output wire[0:0]   CH0_DDR4_0_0_odt,
+    (* io_buffer_type = "none" *) output wire[0:0]   CH0_DDR4_0_0_reset_n{% endif %}
     {% endif %}
 );
 
@@ -300,12 +341,21 @@ module cyt_top (
 {% endif %}
 
     // ISR
-    wire [14:0] usr_irq;
+    wire [N_USR_IRQ-1:0] usr_irq;
 
     // AXI Interfaces: config, data & command
     AXI4 axi_main_st2sh ();
 {% if cnfg.en_v80_r5_provider %}
     AXI4L #(.AXI4L_DATA_BITS(32), .AXI4L_ADDR_BITS(32)) axi_r5_provider_st2sh ();
+{% endif %}
+
+{% if cnfg.en_amc %}
+    // Example 15 — vFPGA <-> R5 OCM channel. Reverse of axi_main: the SHELL is
+    // the master (ocm_mbx in the vFPGA) and the STATIC is the slave (BD
+    // S_AXI_LPD -> OCM @0xFFFC0000). ocm_irq -> pl_ps_irq1 wakes the R5.
+    // 32-bit data / 64-bit addr / 1-bit id, matching ocm_mbx and shell_top.
+    AXI4 #(.AXI4_DATA_BITS(32), .AXI4_ADDR_BITS(64), .AXI4_ID_BITS(1)) axi_ocm_sh2st ();
+    wire ocm_irq;
 {% endif %}
 
     AXI4S axis_dyn_st2sh [N_SCHAN] ();
@@ -336,6 +386,8 @@ module cyt_top (
     // Debug
     AXI4 #(.AXI4_DATA_BITS(128), .AXI4_ADDR_BITS(64), .AXI4_ID_BITS(2)) axi_debug_hub_st2sh ();
 {% endif %}
+
+    // (Network-3 P2P: no axi_p2p_s/axi_p2p_m bridge interfaces; NoC is in the shell.)
 
 {% if cnfg.fdev == 'u280' or cnfg.fdev == 'u50d'%}
     // The notorius D32 pin
@@ -411,9 +463,15 @@ module cyt_top (
         .s_dma_rd_req(dma_rd_req_sh2st),
         .s_dma_wr_req(dma_wr_req_sh2st),
 
-        // Debug 
+        // Debug
         .m_axi_debug_hub(axi_debug_hub_st2sh),
 
+        // (Network-3 P2P: no p2p wiring on inst_static.)
+{% if cnfg.en_amc %}
+        // Example 15 — OCM channel (static slave side) + R5 wake IRQ
+        .s_axi_ocm(axi_ocm_sh2st),
+        .ocm_irq(ocm_irq),
+{% endif %}
         // Writeback
         .s_wback(wback_sh2st),
 
@@ -423,7 +481,25 @@ module cyt_top (
         .pcie_rxn(pcie_rxn),
         .pcie_rxp(pcie_rxp),
         .pcie_txn(pcie_txn),
-        .pcie_txp(pcie_txp)
+        .pcie_txp(pcie_txp){% if cnfg.fdev == 'v80' and cnfg.en_ddr4 == 1 %},
+
+        // V80 onboard DDR4 PHY pass-through
+        .sys_clk0_0_clk_n(sys_clk0_0_clk_n),
+        .sys_clk0_0_clk_p(sys_clk0_0_clk_p),
+        .CH0_DDR4_0_0_act_n(CH0_DDR4_0_0_act_n),
+        .CH0_DDR4_0_0_adr(CH0_DDR4_0_0_adr),
+        .CH0_DDR4_0_0_ba(CH0_DDR4_0_0_ba),
+        .CH0_DDR4_0_0_bg(CH0_DDR4_0_0_bg),
+        .CH0_DDR4_0_0_ck_c(CH0_DDR4_0_0_ck_c),
+        .CH0_DDR4_0_0_ck_t(CH0_DDR4_0_0_ck_t),
+        .CH0_DDR4_0_0_cke(CH0_DDR4_0_0_cke),
+        .CH0_DDR4_0_0_cs_n(CH0_DDR4_0_0_cs_n),
+        .CH0_DDR4_0_0_dm_n(CH0_DDR4_0_0_dm_n),
+        .CH0_DDR4_0_0_dq(CH0_DDR4_0_0_dq),
+        .CH0_DDR4_0_0_dqs_c(CH0_DDR4_0_0_dqs_c),
+        .CH0_DDR4_0_0_dqs_t(CH0_DDR4_0_0_dqs_t),
+        .CH0_DDR4_0_0_odt(CH0_DDR4_0_0_odt),
+        .CH0_DDR4_0_0_reset_n(CH0_DDR4_0_0_reset_n){% endif %}
     );
 {% endif %}
 
@@ -543,7 +619,7 @@ module cyt_top (
         .m_dma_wr_req_{{ i }}_rsp     (dma_wr_req_sh2st[{{ i }}].rsp),
 
     {% endfor %}
-    {% if cnfg.fdev != 'v80' %}  
+    {% if cnfg.fdev != 'v80' %}
         // I/O
         .gt0_rxp_in(gt0_rxp_in),
         .gt0_rxn_in(gt0_rxn_in),
@@ -551,7 +627,25 @@ module cyt_top (
         .gt0_txn_out(gt0_txn_out),
         .gt0_refclk_p(gt0_refclk_p),
         .gt0_refclk_n(gt0_refclk_n),
-    {% if cnfg.fdev != 'u50d' %}  
+    {% if cnfg.fdev != 'u50d' %}
+        .gt1_rxp_in(gt1_rxp_in),
+        .gt1_rxn_in(gt1_rxn_in),
+        .gt1_txp_out(gt1_txp_out),
+        .gt1_txn_out(gt1_txn_out),
+        .gt1_refclk_p(gt1_refclk_p),
+        .gt1_refclk_n(gt1_refclk_n),
+    {% endif %}
+    {% elif cnfg.en_net %}
+        // V80 DCMAC: whichever GT the selected DCMAC index drives
+    {% if cnfg.en_net_0 %}
+        .gt0_rxp_in(gt0_rxp_in),
+        .gt0_rxn_in(gt0_rxn_in),
+        .gt0_txp_out(gt0_txp_out),
+        .gt0_txn_out(gt0_txn_out),
+        .gt0_refclk_p(gt0_refclk_p),
+        .gt0_refclk_n(gt0_refclk_n),
+    {% endif %}
+    {% if cnfg.en_net_1 %}
         .gt1_rxp_in(gt1_rxp_in),
         .gt1_rxn_in(gt1_rxn_in),
         .gt1_txp_out(gt1_txp_out),
@@ -798,6 +892,51 @@ module cyt_top (
         .s_axi_debug_hub_bvalid(axi_debug_hub_st2sh.bvalid),
     {% endif %}
 
+        // (Network-3 P2P: no p2p port map on inst_shell; endpoints are inside it.)
+{% if cnfg.en_amc %}
+        // Example 15 — OCM channel: shell master (ocm_mbx) -> static slave.
+        // Flat ports here map 1:1 onto the axi_ocm_sh2st interface members.
+        .m_axi_ocm_awid(axi_ocm_sh2st.awid),
+        .m_axi_ocm_awaddr(axi_ocm_sh2st.awaddr),
+        .m_axi_ocm_awlen(axi_ocm_sh2st.awlen),
+        .m_axi_ocm_awsize(axi_ocm_sh2st.awsize),
+        .m_axi_ocm_awburst(axi_ocm_sh2st.awburst),
+        .m_axi_ocm_awlock(axi_ocm_sh2st.awlock),
+        .m_axi_ocm_awcache(axi_ocm_sh2st.awcache),
+        .m_axi_ocm_awprot(axi_ocm_sh2st.awprot),
+        .m_axi_ocm_awqos(axi_ocm_sh2st.awqos),
+        .m_axi_ocm_awregion(axi_ocm_sh2st.awregion),
+        .m_axi_ocm_awvalid(axi_ocm_sh2st.awvalid),
+        .m_axi_ocm_awready(axi_ocm_sh2st.awready),
+        .m_axi_ocm_wdata(axi_ocm_sh2st.wdata),
+        .m_axi_ocm_wstrb(axi_ocm_sh2st.wstrb),
+        .m_axi_ocm_wlast(axi_ocm_sh2st.wlast),
+        .m_axi_ocm_wvalid(axi_ocm_sh2st.wvalid),
+        .m_axi_ocm_wready(axi_ocm_sh2st.wready),
+        .m_axi_ocm_bid(axi_ocm_sh2st.bid),
+        .m_axi_ocm_bresp(axi_ocm_sh2st.bresp),
+        .m_axi_ocm_bvalid(axi_ocm_sh2st.bvalid),
+        .m_axi_ocm_bready(axi_ocm_sh2st.bready),
+        .m_axi_ocm_arid(axi_ocm_sh2st.arid),
+        .m_axi_ocm_araddr(axi_ocm_sh2st.araddr),
+        .m_axi_ocm_arlen(axi_ocm_sh2st.arlen),
+        .m_axi_ocm_arsize(axi_ocm_sh2st.arsize),
+        .m_axi_ocm_arburst(axi_ocm_sh2st.arburst),
+        .m_axi_ocm_arlock(axi_ocm_sh2st.arlock),
+        .m_axi_ocm_arcache(axi_ocm_sh2st.arcache),
+        .m_axi_ocm_arprot(axi_ocm_sh2st.arprot),
+        .m_axi_ocm_arqos(axi_ocm_sh2st.arqos),
+        .m_axi_ocm_arregion(axi_ocm_sh2st.arregion),
+        .m_axi_ocm_arvalid(axi_ocm_sh2st.arvalid),
+        .m_axi_ocm_arready(axi_ocm_sh2st.arready),
+        .m_axi_ocm_rid(axi_ocm_sh2st.rid),
+        .m_axi_ocm_rdata(axi_ocm_sh2st.rdata),
+        .m_axi_ocm_rresp(axi_ocm_sh2st.rresp),
+        .m_axi_ocm_rlast(axi_ocm_sh2st.rlast),
+        .m_axi_ocm_rvalid(axi_ocm_sh2st.rvalid),
+        .m_axi_ocm_rready(axi_ocm_sh2st.rready),
+        .ocm_irq(ocm_irq),
+{% endif %}
         // Writeback
         .m_wback_valid(wback_sh2st.valid),
         .m_wback_ready(wback_sh2st.ready),

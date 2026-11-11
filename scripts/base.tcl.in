@@ -95,6 +95,8 @@ set cfg(en_card)                ${EN_CARD}
 set cfg(en_pr)                  ${EN_PR}
 set cfg(n_config)               ${N_CONFIG}
 set cfg(en_shell_pblock)        ${EN_SHELL_PBLOCK}
+set cfg(en_p2p)                 ${EN_P2P}
+set cfg(en_host_noc)            ${EN_HOST_NOC}
 set cfg(n_outs)                 ${N_OUTSTANDING}
 set cfg(en_avx)                 ${EN_AVX}
 set cfg(en_wb)                  ${EN_WB}
@@ -104,8 +106,17 @@ set cfg(en_sniffer)             ${EN_SNIFFER}
 set cfg(sniffer_vfpga_id)       ${SNIFFER_VFPGA_ID}
 set cfg(en_net_0)               ${EN_NET_0}
 set cfg(en_net_1)               ${EN_NET_1}
-set cfg(en_net)                 ${EN_NET}   
+set cfg(en_net)                 ${EN_NET}
+set cfg(en_net_raw)             ${EN_NET_RAW}
+set cfg(net_raw_vfpga_id)       ${NET_RAW_VFPGA_ID}
 set cfg(qsfp)                   ${QSFP}
+set cfg(en_aurora_1)            ${EN_AURORA_1}
+set cfg(n_aurora_axi)           ${N_AURORA_AXI}
+set cfg(en_qlink_gty)           ${EN_QLINK_GTY}
+set cfg(en_qlink_loopback)      ${EN_QLINK_LOOPBACK}
+set cfg(en_amc)                 ${EN_AMC}
+set cfg(en_apu)                 ${EN_APU}
+set cfg(aved_iprepo)            "${AVED_IPREPO_PATH}"
 set cfg(pmtu)                   ${PMTU_BYTES}
 set cfg(cores)                  ${COMP_CORES}
 set cfg(build_opt)              ${BUILD_OPT}
@@ -185,6 +196,7 @@ set cfg(en_v80_r5_provider)       ${EN_V80_R5_PROVIDER}
 set cfg(v80_r5_provider_base)     ${V80_R5_PROVIDER_BASE}
 set cfg(v80_r5_provider_bytes)    ${V80_R5_PROVIDER_BYTES}
 set cfg(v80_r5_provider_depth)    ${V80_R5_PROVIDER_QUEUE_DEPTH}
+set cfg(v80_r5_provider_max_beats) ${V80_R5_PROVIDER_MAX_PACKET_BEATS}
 set cfg(v80_r5_provider_endpoint) ${V80_R5_PROVIDER_ENDPOINT_ID}
 set cfg(n_card_axi)             ${N_CARD_AXI}
 set cfg(mult_card_axi)          ${MULT_CARD_AXI}
