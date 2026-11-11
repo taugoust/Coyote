@@ -6,6 +6,13 @@ with the source functionality of `halalboro/Coyote:test`
 hardware-qualified release. The sibling `zcu216` branch is not imported.
 No merge into `develop` is implied.
 
+The branch also normally merges upstream `fpgasystems/Coyote:master` at
+`0fbc94ba60296c44fc76698396579ac719aadd3b`, preserving the published integration
+history. Upstream constructor cleanup, partial-beat write credits, independent
+packetization sizes and unused-module cleanup are included alongside our fork
+interfaces. Upstream agent documentation is a baseline, not a fresh audit of
+this fork's extensions or previously fixed issues.
+
 ## Reconciliation
 
 - Keep the generic `register_dynamic_service` interface, service-control ioctl,
@@ -66,6 +73,28 @@ The network submodule deliberately points to
 unauthenticated GitHub source/archive fetches must not be assumed sufficient.
 The source-only checks do not build that stack's HLS cores.
 
+## Packetization compatibility
+
+`PMTU_HOST`, `PMTU_CARD`, `PMTU_RDMA` and `PMTU_TCP` independently configure
+packetization. Values must be powers of two from 64 through 32768 bytes; RDMA
+must not exceed 4096. This is stricter than the old V80 configuration-only
+16-bit bound: a deprecated scalar value such as 65535 is no longer accepted.
+`PMTU_BYTES` remains a deprecated build input for host/card/RDMA, and the HDL
+`PMTU_BYTES` symbol remains a host-size alias for existing user logic.
+
+Application builds inherit all four sizes from the exact shell export, ignoring
+app-local values. A legacy export containing only `PMTU_BYTES` maps that size to
+all four paths, subject to the current bounds. Incomplete or mixed old/new size
+exports are rejected rather than filled from local defaults. New exports require
+a matching application build implementation; old Coyote sources do not understand
+the independent size fields.
+
+The deliberate TUM network fork is retained. Its RoCE HLS still consumes
+`PMTU_BYTES`; a scoped build adapter supplies `PMTU_RDMA` without modifying the
+parent shell's values. Upstream's two newer TOE notification/listen changes are
+not in that dependency. Native HLS synthesis, TCP support and peer compatibility
+remain unqualified; do not treat superproject ancestry as a network-stack test.
+
 ## Initial offline checks
 
 Run the public checks with the pinned repository flake:
@@ -76,7 +105,8 @@ nix flake check -L --cores 2 --max-jobs 2
 
 These cover debug routing, region/application flows and inventories, application
 and debug resets, control fanout, AXI-stream decoupling, and optional-feature
-configuration/export/import. They do not invoke Vivado or a board.
+configuration/export/import and partial/exact-beat write-credit behavior in the
+actual request-credit RTL. They do not invoke Vivado or a board.
 
 The integration validation additionally uses the source/driver checks from
 `coyote-nix` revision `d82969341b524e7cda2e774d5fac7b1cd785e1bb` against an
@@ -93,6 +123,8 @@ Before considering a later `develop` merge:
 1. Re-run the offline checks on the final candidate and test clean source
    acquisition, including authenticated submodule access and consumer Nix builds.
 2. Exercise legacy and both isolated driver variants on supported kernel versions:
+   inherited optional HMM notifier locking/registration and packet-sniffer example
+   error-path cleanup remain unqualified; this merge does not repair those paths.
    simultaneous devices, failed/dead QDMA probes, teardown, mapping/unmapping,
    writeback, service-control batches and GPU paths. Rebuild host applications;
    verify RDMA queue layout and real peer compatibility separately.

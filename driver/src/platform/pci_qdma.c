@@ -208,29 +208,20 @@ int wait_until_busy_cleared(struct bus_driver_data *bd_data, const char *op, uin
     ktime_t deadline = ktime_add_us(ktime_get(), QDMA_CTX_BUSY_TIMEOUT_US);
     uint32_t status;
 
-    do {
+    for (int i = 0; i < DMA_CTX_BUSY_POLLS && ktime_compare(ktime_get(), deadline) < 0; i++) {
         usleep_range(DMA_MIN_SLEEP_CMD, DMA_MAX_SLEEP_CMD);
         status = ioread32(bd_data->bar[BAR_DMA_CONFIG] + QDMA_CTX_CMD_REG);
-        // All-ones is the classic "device not responding" signature (BAR decode
-        // off, endpoint reset, or QDMA block dead). Bail at once instead of
-        // burning the whole deadline on every context of every queue.
         if (status == 0xffffffff) {
             pr_err("QDMA context command read 0xffffffff during %s; device not responding\n", op);
             return -ENODEV;
         }
-        if ((status & 0x1) == 0) {
+        if ((status & 0x1) == 0)
             return 0;
-        }
-    } while (ktime_compare(ktime_get(), deadline) < 0);
+    }
 
-    pr_err(
-        "QDMA context command timed out during %s: cmd_write=0x%08x cmd_reg=0x%08x data[0]=0x%08x data[1]=0x%08x\n",
-        op,
-        cmd_value,
-        status,
-        ioread32(bd_data->bar[BAR_DMA_CONFIG] + QDMA_CTX_DATA_REG_START),
-        ioread32(bd_data->bar[BAR_DMA_CONFIG] + QDMA_CTX_DATA_REG_START + 4)
-    );
+    status = ioread32(bd_data->bar[BAR_DMA_CONFIG] + QDMA_CTX_CMD_REG);
+    pr_err("QDMA context command timed out during %s: cmd_write=0x%08x cmd_reg=0x%08x\n",
+           op, cmd_value, status);
     return -ETIMEDOUT;
 }
 
@@ -806,6 +797,7 @@ int pci_probe(struct pci_dev *pdev, const struct pci_device_id *id) {
     struct bus_driver_data *bd_data = devm_kzalloc(&pdev->dev, sizeof(struct bus_driver_data), GFP_KERNEL);
     if (!bd_data) {
         dev_err(&pdev->dev, "device memory region not obtained\n");
+        ret_val = -ENOMEM;
         goto err_alloc;
     }
 
@@ -983,7 +975,6 @@ err_regions:
 err_irq_en:
     if (!bd_data->regions_in_use) { pci_disable_device(pdev); }
 err_enable:
-    kfree(bd_data);
 err_alloc:
 end:
     dbg_info("probe returning %d\n", ret_val);

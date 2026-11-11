@@ -126,7 +126,7 @@ void unmap_bars(struct bus_driver_data *data, struct pci_dev *pdev);
  * @param data Pointer to the bus driver data structure, containing Coyote device information
  * @param op Human-readable description of the operation being attempted.
  * @param cmd_value Command value written to QDMA_CTX_CMD_REG.
- * @return 0 on success, negative error code on timeout/failure.
+ * @return 0 on success, -ENODEV if the card is gone, or -ETIMEDOUT if it stays busy.
  */
 int wait_until_busy_cleared(struct bus_driver_data *bd_data, const char *op, uint32_t cmd_value);
 

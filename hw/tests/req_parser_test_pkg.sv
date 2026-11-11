@@ -1,6 +1,7 @@
 `timescale 1ns/1ps
 package lynxTypes;
-    localparam integer PMTU_BYTES = 4096;
+    localparam integer PMTU_HOST = 4096;
+    localparam integer PMTU_BYTES = PMTU_HOST;
     localparam integer OPCODE_BITS = 4;
     localparam integer PID_BITS = 8;
     localparam integer N_REGIONS_BITS = 4;

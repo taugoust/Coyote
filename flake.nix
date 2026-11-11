@@ -17,6 +17,7 @@
           application-reset-configuration = check "/tests/application_reset_copies/configuration.nix";
           shared-configuration = check "/tests/shared_configuration/check.nix";
           provider-firmware = check "/tests/coprocessor_ports/firmware-check.nix";
+          write-credits = check "/tests/write_credits/check.nix";
           debug-reset = check "/tests/debug_reset_copies/check.nix";
           control-fanout = check "/tests/control_fanout/check.nix";
           axis-decoupler = check "/tests/axis_decoupler/check.nix";

@@ -58,8 +58,13 @@ set(BUILD_SHELL 1 CACHE STRING "Build shell, linking against existing design che
 # Build the user logic (vFPGA) and link it against an existing shell 
 set(BUILD_APP 0 CACHE STRING "Build app portion of the design (on top of existing shell config)")
 
-# Packetization size; data transfers (host, card or net) of size > PMTU_BYTES are split into multiple packets
-set(PMTU_BYTES 4096 CACHE STRING "Packetization size [B]")
+# Packetization sizes [B]; transfers larger than these are split into multiple packets
+set(PMTU_HOST 4096 CACHE STRING "Host DMA packetization size [B]")
+set(PMTU_CARD 4096 CACHE STRING "Card memory packetization size [B]")
+set(PMTU_RDMA 4096 CACHE STRING "RDMA packetization size [B]")
+set(PMTU_TCP 32768 CACHE STRING "TCP packetization size [B]")
+# Deprecated; if set, overrides PMTU_HOST, PMTU_CARD and PMTU_RDMA
+set(PMTU_BYTES -1 CACHE STRING "Deprecated packetization size [B]")
 
 # Unit tests/Simulation
 set(UNIT_TEST_DIR "${CMAKE_SOURCE_DIR}/unit-tests" CACHE STRING "Path to the unit-test folder.")
@@ -135,7 +140,7 @@ set(TLBL_BITS 21 CACHE STRING "TLB (huge) page order")
 set(EN_NRU 0 CACHE STRING "Enable NRU eviction policy")
 
 # Number of outstanding requests in MMU
-set(N_TLB_ACTV 16 CACHE STRING "Number of outstanding PMTUs in MMU")
+set(N_TLB_ACTV 16 CACHE STRING "Number of outstanding packets in MMU")
 
 ##
 ## NETWORKING
@@ -944,6 +949,22 @@ macro(_validate_external_dynamic_service)
     endif()
 endmacro()
 
+function(_validate_packetization_sizes)
+    foreach(P PMTU_HOST PMTU_CARD PMTU_RDMA PMTU_TCP)
+        set(V "${${P}}")
+        if(NOT V MATCHES "^[0-9]+$" OR V LESS 64 OR V GREATER 32768)
+            message(FATAL_ERROR "${P}=${V} must be a power of 2 between 64 and 32768.")
+        endif()
+        math(EXPR POW2 "${V} & (${V} - 1)")
+        if(NOT POW2 EQUAL 0)
+            message(FATAL_ERROR "${P}=${V} must be a power of 2 between 64 and 32768.")
+        endif()
+    endforeach()
+    if(PMTU_RDMA GREATER 4096)
+        message(FATAL_ERROR "PMTU_RDMA=${PMTU_RDMA} must not exceed 4096.")
+    endif()
+endfunction()
+
 # Performs base validation checks of configured parmeters and sets the other params
 macro(validation_checks_hw)
     if(NOT DEFINED CYT_DIR)
@@ -953,7 +974,7 @@ macro(validation_checks_hw)
     # CPM streaming packets, including all bypass descriptors, must stay below
     # 64 KiB. Host transfers are packetized upstream; do not confuse transfer
     # length with this per-packet configuration limit.
-    if(FDEV_NAME STREQUAL "v80" AND EN_STRM)
+    if(FDEV_NAME STREQUAL "v80" AND EN_STRM AND NOT BUILD_APP AND NOT PMTU_BYTES EQUAL -1)
         if(NOT "${PMTU_BYTES}" MATCHES "^[1-9][0-9]*$" OR PMTU_BYTES GREATER 65535)
             message(FATAL_ERROR "V80 host-stream PMTU_BYTES must be an integer from 1 to 65535; larger host transfers are packetized upstream")
         endif()
@@ -1027,6 +1048,14 @@ macro(validation_checks_hw)
     endif()
 
     if(BUILD_SHELL OR BUILD_STATIC)
+        if(NOT PMTU_BYTES EQUAL -1)
+            message(WARNING "PMTU_BYTES is deprecated; setting PMTU_HOST, PMTU_CARD and PMTU_RDMA to ${PMTU_BYTES}")
+            set(PMTU_HOST ${PMTU_BYTES})
+            set(PMTU_CARD ${PMTU_BYTES})
+            set(PMTU_RDMA ${PMTU_BYTES})
+        endif()
+        _validate_packetization_sizes()
+
         if((SHELL_PROBE EQUAL STATIC_PROBE) AND BUILD_SHELL)
             message("** Maybe not a bad choice to set a unique probe ID for the shell.")
         endif()
@@ -1232,10 +1261,6 @@ macro(validation_checks_hw)
             # UltraScale+ devices only support PCIe Gen3x16, therefore 16 bits
             set(PCIE_GT_BITS 16)
         endif()
-
-        # User credits (enabled by default)
-        set(EN_CRED_LOCAL 1)
-        set(EN_CRED_REMOTE 1)
 
         # User regs
         set(EN_USER_REG 0)
@@ -1685,7 +1710,28 @@ macro(validation_checks_hw)
         set(EN_AMC 0)
         set(EN_APU 0)
         set(V80_R5_PROVIDER_MAX_PACKET_BEATS 64)
+        if(NOT PMTU_BYTES EQUAL -1)
+            message(WARNING "PMTU_BYTES is ignored in the app flow; the shell's values are used")
+        endif()
+        # A shell owns packetization; app-local cache values cannot fill gaps.
+        foreach(P PMTU_HOST PMTU_CARD PMTU_RDMA PMTU_TCP PMTU_BYTES)
+            set(${P} "")
+        endforeach()
         include("${SHELL_PATH}/export.cmake")
+        set(_pmtu_export_fields 0)
+        foreach(P PMTU_HOST PMTU_CARD PMTU_RDMA PMTU_TCP)
+            if(NOT "${${P}}" STREQUAL "")
+                math(EXPR _pmtu_export_fields "${_pmtu_export_fields} + 1")
+            endif()
+        endforeach()
+        if(_pmtu_export_fields EQUAL 0 AND NOT "${PMTU_BYTES}" STREQUAL "")
+            foreach(P PMTU_HOST PMTU_CARD PMTU_RDMA PMTU_TCP)
+                set(${P} "${PMTU_BYTES}")
+            endforeach()
+        elseif(NOT _pmtu_export_fields EQUAL 4 OR NOT "${PMTU_BYTES}" STREQUAL "")
+            message(FATAL_ERROR "Shell export must provide all four PMTU fields or legacy PMTU_BYTES, not both")
+        endif()
+        _validate_packetization_sizes()
         set(COMP_CORES "${_application_comp_cores}")
 
         if(COPROCESSOR_REQUESTED_PORTS GREATER 0 AND NOT COPROCESSOR_INTERFACE_PRESENT EQUAL 1)
@@ -2210,6 +2256,13 @@ macro(gen_dep_lists)
 
 endmacro()
 
+# Legacy network-stack forks consume PMTU_BYTES rather than PMTU_RDMA.
+# Isolate the alias so it cannot overwrite the shell's packetization exports.
+function(_coyote_add_network_stack)
+    set(PMTU_BYTES "${PMTU_RDMA}")
+    add_subdirectory(${CYT_DIR}/hw/services/network ${CMAKE_BINARY_DIR}/network)
+endfunction()
+
 # Generate build targets
 macro(gen_targets)
     # hw/services/network is the fpga-network-stack submodule. Raw Ethernet
@@ -2221,7 +2274,7 @@ macro(gen_targets)
             message(FATAL_ERROR "hw/services/network is empty; the fpga-network-stack submodule is not "
                                 "initialised. Run: git submodule update --init --recursive")
         endif()
-        add_subdirectory(${CYT_DIR}/hw/services/network ${CMAKE_BINARY_DIR}/network)
+        _coyote_add_network_stack()
         set(NET_SYNTH_CMD COMMAND make services)
     endif()
 

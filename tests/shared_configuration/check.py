@@ -49,7 +49,8 @@ def run_cmake(build, board, values, *, app=False, shell_path=None, local=None, i
                 if key in flags or key == "EN_V80_R5_PROVIDER")
     args.extend(f"-D{key}={selected[key]}" for key in (
         "PCIE_GEN", "ACLK_F", "SCLK_F", "V80_R5_PROVIDER_QUEUE_DEPTH",
-        "V80_R5_PROVIDER_MAX_PACKET_BEATS") if key in selected)
+        "V80_R5_PROVIDER_MAX_PACKET_BEATS", "PMTU_HOST", "PMTU_CARD",
+        "PMTU_RDMA", "PMTU_TCP", "PMTU_BYTES") if key in selected)
     result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return result
 
@@ -189,26 +190,59 @@ with tempfile.TemporaryDirectory(prefix="coyote-shared-config-") as temp:
         parse_hdl(static_project)
         print(f"SHARED_CONFIGURATION_PROVIDER_COMBINATION_PASS {name}")
 
-    # An old export lacking all newly introduced interface fields must restore
-    # their safe defaults before importing, even when the app requests enables.
+    # PMTU sizes belong to the shell and are imported unchanged by BUILD_APP.
+    pmtu_values = config(PMTU_HOST=8192, PMTU_CARD=2048,
+                         PMTU_RDMA=1024, PMTU_TCP=16384)
+    pmtu_shell = work / "pmtu-shell"
+    result = run_cmake(pmtu_shell, "v80", pmtu_values)
+    assert result.returncode == 0, result.stdout
+    assert_cfg(pmtu_shell, {key: value for key, value in pmtu_values.items()
+                            if key.startswith("PMTU_")})
+    pmtu_conflicts = {"PMTU_HOST": 4096, "PMTU_CARD": 4096,
+                      "PMTU_RDMA": 2048, "PMTU_TCP": 32768}
+    pmtu_app = work / "pmtu-app"
+    result = run_cmake(pmtu_app, "v80", config(), app=True,
+                       shell_path=pmtu_shell, local=pmtu_conflicts)
+    assert result.returncode == 0, result.stdout
+    assert_cfg(pmtu_app, {key: value for key, value in pmtu_values.items()
+                          if key.startswith("PMTU_")})
+    print("SHARED_CONFIGURATION_PMTU_BUILD_APP_IMPORT_PASS")
+
+    # A real legacy export has no split fields and carries only PMTU_BYTES.
     old_shell = work / "old-export-shell"
     result = run_cmake(old_shell, "v80", config())
     assert result.returncode == 0, result.stdout
-    export_path = old_shell / "export.cmake"
-    old_export = export_path.read_text()
-    for name in flags:
+    old_export = old_shell.joinpath("export.cmake").read_text()
+    for name in (*flags, "PMTU_HOST", "PMTU_CARD", "PMTU_RDMA", "PMTU_TCP"):
         old_export = re.sub(rf"^set\({name} .*\n", "", old_export, flags=re.M)
     legacy_shell = work / "legacy-export"
     legacy_shell.mkdir()
-    (legacy_shell / "export.cmake").write_text(old_export)
-    local_enabled = {key: "1" for key in flags if key.startswith("EN_")}
-    local_enabled.update({"NET_RAW_VFPGA_ID": "0", "N_AURORA_AXI": "1"})
+    (legacy_shell / "export.cmake").write_text(old_export + "\nset(PMTU_BYTES 4096)\n")
     old_app = work / "old-export-app"
+    legacy_local = {"PMTU_HOST": 8192, "PMTU_CARD": 2048,
+                    "PMTU_RDMA": 1024, "PMTU_TCP": 16384}
     result = run_cmake(old_app, "v80", config(), app=True, shell_path=legacy_shell,
-                       local=local_enabled, iprepo=str(aved))
+                       local=legacy_local, iprepo=str(aved))
     assert result.returncode == 0, result.stdout
-    assert_cfg(old_app, flags)
-    print("SHARED_CONFIGURATION_OLD_EXPORT_DEFAULTS_PASS")
+    assert_cfg(old_app, {**flags, "PMTU_HOST": 4096, "PMTU_CARD": 4096,
+                         "PMTU_RDMA": 4096, "PMTU_TCP": 4096})
+    print("SHARED_CONFIGURATION_OLD_PMTU_EXPORT_COMPAT_PASS")
+
+    # Partial modern exports and mixed modern/legacy exports are ambiguous;
+    # neither may fall back to app-local cache defaults.
+    modern_export = pmtu_shell.joinpath("export.cmake").read_text()
+    for label, export_text in (
+        ("incomplete", re.sub(r"^set\(PMTU_TCP .*\n", "", modern_export, flags=re.M)),
+        ("ambiguous", modern_export + "\nset(PMTU_BYTES 4096)\n"),
+    ):
+        bad_shell = work / f"pmtu-{label}-export"
+        bad_shell.mkdir()
+        (bad_shell / "export.cmake").write_text(export_text)
+        bad_app = work / f"pmtu-{label}-app"
+        result = run_cmake(bad_app, "v80", config(), app=True,
+                           shell_path=bad_shell, local=pmtu_conflicts)
+        assert result.returncode != 0 and "Shell export must provide" in result.stdout, (label, result.stdout)
+        print(f"SHARED_CONFIGURATION_PMTU_EXPORT_REJECT_PASS {label}")
 
     rejects = [
         ("host-noc-board", "u280", config(EN_HOST_NOC=1), "EN_HOST_NOC requires V80"),
@@ -216,6 +250,10 @@ with tempfile.TemporaryDirectory(prefix="coyote-shared-config-") as temp:
         ("aurora-qsfp-conflict", "u280", config(EN_AURORA_1=1, EN_NET_1=1), "EN_AURORA_1 and EN_NET_1 both enabled"),
         ("qlink-loopback-without-link", "u280", config(EN_QLINK_LOOPBACK=1), "EN_QLINK_LOOPBACK requires EN_QLINK_GTY=1"),
         ("region-limit-with-pr", "v80", config(N_REGIONS=32, EN_PR=1), "Max 15 vFPGAs supported"),
+        ("pmtu-nonpower", "v80", config(PMTU_HOST=1000), "PMTU_HOST=1000 must be a power of 2"),
+        ("pmtu-zero", "v80", config(PMTU_CARD=0), "PMTU_CARD=0 must be a power of 2"),
+        ("pmtu-host-upper-bound", "v80", config(PMTU_HOST=65536), "PMTU_HOST=65536 must be a power of 2 between 64 and 32768."),
+        ("pmtu-rdma-upper-bound", "v80", config(PMTU_RDMA=8192), "PMTU_RDMA=8192 must not exceed 4096"),
     ]
     for name, board, values, reason in rejects:
         build = work / f"reject-{name}"
