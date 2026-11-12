@@ -29,5 +29,5 @@ set fixture_placement_records [list \
     [list cell inst_shell/static_v80_b FDRE SLICE_X100Y100 AFF 1 1] \
     [list cell inst_static/static_v80_a LUT6 SLICE_X10Y10 A6LUT 1 1]]
 set fixture_routing_records [list \
-    [list net inst_shell/static_v80_route_b ROUTED {INT_X100Y100/EE2BEG0 INT_X101Y100/EE2END0}] \
-    [list net inst_static/static_v80_route_a ROUTED {INT_X10Y10/WW4BEG0 INT_X9Y10/WW4END0}]]
+    [list net inst_shell/static_v80_route_b] \
+    [list net inst_static/static_v80_route_a]]

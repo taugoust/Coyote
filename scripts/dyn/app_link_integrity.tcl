@@ -43,7 +43,24 @@ proc app_link_integrity_property {object property {required false}} {
 # Vivado assigned none. That is normal on Versal for pins driven by a
 # constant, pins the static region does not use and pins sharing one static
 # driver; an unplaced pin is still recorded and must stay unplaced.
+#
+# get_pplocs is asked first: on Versal, link_design drops HD.PARTPIN_LOCS
+# from the pins of a linked application, while get_pplocs still reports the
+# locations the locked shell fixed.
 proc app_link_integrity_partition_locations {pin} {
+    if {[llength [info commands get_pplocs]] > 0 &&
+        ![catch {set value [get_pplocs -pins $pin]}]} {
+        set locations {}
+        foreach location $value {
+            set location [string trim $location]
+            if {$location ne ""} {
+                lappend locations $location
+            }
+        }
+        if {[llength $locations] > 0} {
+            return [lsort -ascii -unique $locations]
+        }
+    }
     foreach property {HD.PARTPIN_LOCS HD.PARTPIN_LOC} {
         if {![catch {set value [get_property $property $pin]}] &&
             [string trim $value] ne ""} {
@@ -278,7 +295,7 @@ proc app_link_integrity_static_snapshot_from_records {
     app_link_integrity_write_canonical_records $placement_path \
         [linsert $placement_records 0 [list format coyote-protected-static-placement-v1]]
     app_link_integrity_write_canonical_records $routing_path \
-        [linsert $routing_records 0 [list format coyote-protected-static-routing-v1]]
+        [linsert $routing_records 0 [list format coyote-protected-static-routing-v2]]
     return [dict create \
         placement [dict create \
             objectCount [llength $placement_records] \
@@ -325,10 +342,13 @@ proc app_link_integrity_capture_protected_static {
             [app_link_integrity_property $net IS_ROUTE_FIXED]]} {
             continue
         }
-        lappend routing_records [list \
-            net $name \
-            [app_link_integrity_property $net ROUTE_STATUS] \
-            [app_link_integrity_property $net FIXED_ROUTE]]
+        # Only the set of nets with fixed routing is recorded. FIXED_ROUTE
+        # is too large (well over 100 GB of text for a V80 shell), and
+        # ROUTE_STATUS covers whole nets: nets entering the application
+        # become UNPLACED once its unplaced loads are linked. The shell is
+        # locked (lock_design -level routing), so Vivado cannot reroute these
+        # nets; the record catches nets that lose their fixed routing.
+        lappend routing_records [list net $name]
     }
 
     return [app_link_integrity_static_snapshot_from_records \

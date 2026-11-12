@@ -103,11 +103,9 @@ proc mutate_placement {records} {
     return $records
 }
 
+# A net that lost its fixed routing drops out of the protected set.
 proc mutate_routing {records} {
-    set record [lindex $records 0]
-    lset record 3 {INT_X999Y999/DRIFT}
-    lset records 0 $record
-    return $records
+    return [lrange $records 1 end]
 }
 
 proc require_json {path expression label} {
