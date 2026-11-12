@@ -78,6 +78,24 @@ proc mutate_boundary_location {regions} {
     return $regions
 }
 
+# Gives the first pin without a physical location one, or returns {} when
+# every pin is placed.
+proc mutate_unplaced_location {regions} {
+    set region [lindex $regions 0]
+    set pins [dict get $region pins]
+    for {set i 0} {$i < [llength $pins]} {incr i} {
+        set pin [lindex $pins $i]
+        if {[llength [dict get $pin locations]] == 0} {
+            dict set pin locations [list INT_X999Y999/NEW]
+            lset pins $i $pin
+            dict set region pins $pins
+            lset regions 0 $region
+            return $regions
+        }
+    }
+    return {}
+}
+
 proc mutate_placement {records} {
     set record [lindex $records 0]
     lset record 3 SLICE_X999Y999
@@ -219,6 +237,20 @@ foreach fixture_path [list $u280_fixture_path $v80_fixture_path] {
     require_json $rejected_summary_json \
         {.outcome == "rejected" and .partitionPins.identical == false and (.reasons | any(contains("partition-pin")))} \
         "$name boundary-drift rejection JSON"
+
+    set placed_regions [mutate_unplaced_location [dict get $fixture boundaryRegions]]
+    if {[llength $placed_regions] > 0} {
+        set placed_boundary [app_link_integrity_boundary_snapshot_from_regions \
+            $placed_regions [file join $case_dir placed-boundary.txt]]
+        if {![catch {
+            app_link_integrity_validate_and_write \
+                [file join $case_dir rejected-placed-partition.json] \
+                [file join $case_dir rejected-placed.json] $metadata \
+                $before_boundary $placed_boundary $before_static $after_static
+        } reason] || [string first "partition-pin" $reason] < 0} {
+            error "$name newly placed partition pin did not fail closed: $reason"
+        }
+    }
 
     set drift_placement [app_link_integrity_static_snapshot_from_records \
         [mutate_placement [dict get $fixture placementRecords]] \

@@ -39,6 +39,10 @@ proc app_link_integrity_property {object property {required false}} {
     return $value
 }
 
+# Returns the pin's physical partition-pin locations, or an empty list when
+# Vivado assigned none. That is normal on Versal for pins driven by a
+# constant, pins the static region does not use and pins sharing one static
+# driver; an unplaced pin is still recorded and must stay unplaced.
 proc app_link_integrity_partition_locations {pin} {
     foreach property {HD.PARTPIN_LOCS HD.PARTPIN_LOC} {
         if {![catch {set value [get_property $property $pin]}] &&
@@ -54,7 +58,7 @@ proc app_link_integrity_partition_locations {pin} {
             }
         }
     }
-    error "Partition pin $pin has no physical HD.PARTPIN_LOCS location"
+    return {}
 }
 
 proc app_link_integrity_write_canonical_records {path records} {
@@ -141,8 +145,7 @@ proc app_link_integrity_boundary_snapshot_from_regions {regions canonical_path} 
             set name [dict get $pin name]
             set direction [string toupper [dict get $pin direction]]
             set locations [lsort -ascii -unique [dict get $pin locations]]
-            if {$name eq "" || $direction ni {IN OUT INOUT} ||
-                [llength $locations] == 0} {
+            if {$name eq "" || $direction ni {IN OUT INOUT}} {
                 error "Partition $path has a malformed physical pin record"
             }
             if {$name in $pin_names} {
