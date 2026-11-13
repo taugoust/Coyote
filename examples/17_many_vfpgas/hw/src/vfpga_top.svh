@@ -9,10 +9,10 @@
 import lynxTypes::*;
 
 /////////////////////////////////////////////////////////////////////////////
-// Minimal vFPGA for the N=32 shared-hub P2P mesh bring-up.
+// Minimal vFPGA for Example 17: many vFPGAs at once.
 //
 // A tiny host-stream loopback (recv -> send) plus tie-offs. ~a handful of LUTs,
-// so 32 of these fit the shell region easily (unlike the heavy AES example).
+// so 32 of these fit the shell region easily (unlike the AES blocks of Example 3).
 //
 // The inter-vFPGA P2P NoC datapath (axis_to_mm -> hub NoC -> mm_to_axis_demux)
 // is instantiated and kept alive by the shell wrapper (DONT_TOUCH); this first
