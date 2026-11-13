@@ -705,7 +705,7 @@ proc cr_bd_design_static { parentCell } {
   # finalize the R5-0 subsystem with TCM_0_A/B ownership in the generated CDO.
   #
   # AMC-only (V80): leave non-AMC builds on the stock CIPS behaviour.
-  # PS_USE_S_AXI_LPD {1} exposes the PL->LPD slave port that the Example 15 OCM
+  # PS_USE_S_AXI_LPD {1} exposes the PL->LPD slave port that the Example 14 OCM
   # channel (vFPGA ocm_mbx) uses to reach the R5's OCM @0xFFFC0000. Its clock
   # (s_axi_lpd_aclk) and the S_AXI_LPD interface are wired in cr_aved_mgmt.tcl,
   # which runs (and is validated) later in this same EN_AMC path.
@@ -1177,7 +1177,6 @@ proc cr_bd_design_static { parentCell } {
   connect_bd_net [get_bd_pins const_0/dout] [get_bd_pins versal_cips_0/cpm_irq1]
 
   # PL->PS interrupts unused in this iteration; tie low.
-  # Reserved for future Micro Blossom completion notification.
   connect_bd_net [get_bd_pins const_0/dout] [get_bd_pins versal_cips_0/pl_ps_irq0]
   connect_bd_net [get_bd_pins const_0/dout] [get_bd_pins versal_cips_0/pl_ps_irq1]
 

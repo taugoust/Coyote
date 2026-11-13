@@ -1,5 +1,5 @@
 /*
- * Coyote Example 15 — R5-0 co-processor provider: minimal bare-metal entry.
+ * Coyote Example 14 — R5-0 co-processor provider: minimal bare-metal entry.
  *
  * No MMU, no caches, no BSP. The PLM hands off here after loading this ELF as a
  * delay_handoff psv_cortexr5_0 partition in the combine PDI. Cortex-R5 (ARMv7-R)

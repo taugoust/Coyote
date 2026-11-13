@@ -4,7 +4,7 @@
 # payload (DTB + TF-A + U-Boot). No bitgen. Writes bitstreams/cyt_top_a2.pdi and leaves
 # the A0 image (cyt_top.pdi) untouched.
 #
-#   bash fw/apu_v80/a2/recombine_a2.sh examples/15_amc_ping/hw/build_apu
+#   bash fw/apu_v80/a2/recombine_a2.sh examples/14_amc_ping/hw/build_apu
 #   bash program_fpga.sh bitstreams/cyt_top_a2      # from inside that build dir
 #
 # APU image layout is the standard Versal Linux boot chain:

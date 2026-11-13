@@ -162,7 +162,7 @@ proc cr_bd_design_aved_mgmt { parentCell } {
       [get_bd_addr_segs gcq_m2r/S01_AXI/S01_AXI_Reg] -force
 
   ########################################################################################################
-  # Example 15 — vFPGA -> R5 OCM channel (S_AXI_LPD -> OCM) + wake IRQ
+  # Example 14 — vFPGA -> R5 OCM channel (S_AXI_LPD -> OCM) + wake IRQ
   ########################################################################################################
   # The vFPGA's ocm_mbx drives a 32-bit AXI4 master that arrives here as the
   # external BD slave s_axi_ocm (threaded shell -> static -> BD, see
@@ -171,7 +171,7 @@ proc cr_bd_design_aved_mgmt { parentCell } {
   # ocm_irq feeds pl_ps_irq1 to wake the R5. Everything runs on the shell clock
   # (clk_wiz_0/clk_out1), the same clock the vFPGA (en_uclk=0) uses, so there is
   # no clock crossing — s_axi_lpd_aclk is driven from the same clk_out1.
-  puts "  ** Instantiating Example 15 OCM channel (s_axi_ocm -> S_AXI_LPD) + pl_ps_irq1"
+  puts "  ** Instantiating Example 14 OCM channel (s_axi_ocm -> S_AXI_LPD) + pl_ps_irq1"
 
   # External BD slave port for the vFPGA OCM master. Pinned to 32b data / 64b
   # addr / 1b id with the full AXI4 sideband so the design_static wrapper emits

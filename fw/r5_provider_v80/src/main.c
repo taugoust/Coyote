@@ -1,5 +1,5 @@
 /*
- * Coyote Example 15 — R5 co-processor provider firmware (bare-metal, R5-0).
+ * Coyote Example 14 — R5 co-processor provider firmware (bare-metal, R5-0).
  *
  * The R5 is the master/orchestrator. After the host binds this provider to the
  * logical co-processor port, the R5 runs a small self-test against the vFPGA

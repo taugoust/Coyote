@@ -21,7 +21,7 @@ Sequence:
  6. Stream the console until the shell prompt appears. --selftest then (a) exchanges tokens with
     Linux through shared DDR below 0x02000000 using busybox devmem, and (b) reads the vFPGA 0
     control registers from Linux (M_AXI_FPD, 0x4_0012_0000) and compares them with the host's view
-    (BAR4+0x120000). Offset 0 of example 15's axi_ctrl is the fixed magic 0x52355650 "R5VP".
+    (BAR4+0x120000). Offset 0 of example 14's axi_ctrl is the fixed magic 0x52355650 "R5VP".
 """
 import argparse, mmap, os, random, re, select, struct, sys, time, zlib
 

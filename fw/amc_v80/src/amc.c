@@ -85,7 +85,7 @@
 #define AMC_TASK_SLEEP_MS             ( 100 )
 #define AMC_GET_PROJECT_INFO_SLEEP_MS ( 1000 )
 
-/* ---- Example 15: on-card R5 <-> vFPGA OCM channel self-test --------------- */
+/* ---- Example 14: on-card R5 <-> vFPGA OCM channel self-test --------------- */
 /* The vFPGA's ocm_mbx runs a small mailbox in OCM (word offsets below). The R5
  * posts a "+1 over N words" request, the vFPGA reads it over S_AXI_LPD, computes,
  * writes the result back into OCM and bumps V2C_SEQ (also pulses pl_ps_irq1).

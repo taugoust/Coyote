@@ -54,7 +54,7 @@ module static_top (
     AXI4.m                                  m_axi_debug_hub,
 
 {% if cnfg.en_amc %}
-    // Example 15 — OCM channel: shell master (vFPGA ocm_mbx) drives this slave,
+    // Example 14 — OCM channel: shell master (vFPGA ocm_mbx) drives this slave,
     // which the design_static BD width/clock-converts into CIPS S_AXI_LPD and on
     // to OCM @0xFFFC0000. ocm_irq feeds CIPS pl_ps_irq[1] to wake the R5.
     AXI4.s                                  s_axi_ocm,
@@ -381,7 +381,7 @@ module static_top (
 
         // (Network-3 P2P: NoC endpoints are in the shell; no p2p port map here.)
 {% if cnfg.en_amc %}
-        // Example 15 — OCM channel slave (BD s_axi_ocm -> S_AXI_LPD -> OCM).
+        // Example 14 — OCM channel slave (BD s_axi_ocm -> S_AXI_LPD -> OCM).
         // Full AXI4 set; names mirror the design_static BD wrapper (cr_aved_mgmt.tcl).
         .s_axi_ocm_awid(s_axi_ocm.awid),
         .s_axi_ocm_awaddr(s_axi_ocm.awaddr),

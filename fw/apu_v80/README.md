@@ -63,7 +63,7 @@ moving the mailbox.
 
 `vApuFirstLightMirror()` in `fw/amc_v80/src/amc.c` samples this and mirrors it to
 DDR `0x01FE_0000`, which the host reads with
-`examples/15_amc_ping/sw/src/apu_first_light.cpp`.
+`examples/14_amc_ping/sw/src/apu_first_light.cpp`.
 
 ## Why the UARTs are written without being configured
 
@@ -81,7 +81,7 @@ live console.
 
 ```bash
 bash fw/apu_v80/a2/build_a2.sh                                 # TF-A + U-Boot + board DTB
-bash fw/apu_v80/a2/recombine_a2.sh examples/15_amc_ping/hw/build_apu   # -> bitstreams/cyt_top_a2.pdi (no bitgen)
+bash fw/apu_v80/a2/recombine_a2.sh examples/14_amc_ping/hw/build_apu   # -> bitstreams/cyt_top_a2.pdi (no bitgen)
 bash fw/apu_v80/a3/build_a3.sh                                 # kernel + Linux DTB + busybox initramfs
 # program cyt_top_a2 (U-Boot waits at `Versal>` on ttyUSB2), then:
 sudo python3 fw/apu_v80/a3/boot_a3.py --selftest               # push over PCIe, boot, check DDR + vFPGA

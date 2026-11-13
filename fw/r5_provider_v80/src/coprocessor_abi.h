@@ -1,7 +1,7 @@
 /*
- * Coyote Example 15 — R5 co-processor ABI (firmware view).
- * Mirror of examples/15_amc_ping/hw/src/hdl/coprocessor_abi.svh and
- * examples/15_amc_ping/sw/src/coprocessor_verdict.hpp — keep in lock-step.
+ * Coyote Example 14 — R5 co-processor ABI (firmware view).
+ * Mirror of examples/14_amc_ping/hw/src/hdl/coprocessor_abi.svh and
+ * examples/14_amc_ping/sw/src/coprocessor_verdict.hpp — keep in lock-step.
  *
  * One 512-bit beat (64 bytes) per request/response, little-endian:
  *   REQUEST  [0]=opcode [4]=operand_a [8]=operand_b [12]=seq

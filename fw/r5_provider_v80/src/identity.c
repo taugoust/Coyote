@@ -1,5 +1,5 @@
 /*
- * Coyote Example 15 — R5 provider immutable runtime identity.
+ * Coyote Example 14 — R5 provider immutable runtime identity.
  *
  * runtime_abi / firmware_abi must be non-zero (cyt_provider_open rejects zero)
  * and are reported to the host via CYT_REG_RUNTIME_ABI/FIRMWARE_ABI for

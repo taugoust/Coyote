@@ -1,5 +1,5 @@
 # =============================================================================
-# V80 static floorplan -- AMC bringup (Coyote example 15). Coyote AMC bringup.
+# V80 static floorplan -- AMC bringup (Coyote example 14). Coyote AMC bringup.
 # =============================================================================
 # WHY THIS FILE EXISTS (do not merge into ../fplan/v80_static_floorplan.xdc):
 #
@@ -13,7 +13,7 @@
 #   (NSU_USR_INTERRUPT_IN_0..3, IF_NOC_AXI_RUSER_9), so route_design fails with
 #   "[Route 35-7] ... unroutable pins ... GNDNet not completely routed".
 #
-#   Example 15 is an N=1 AMC build (EN_PR=0, no external vFPGA floorplan) and
+#   Example 14 is an N=1 AMC build (EN_PR=0, no external vFPGA floorplan) and
 #   needs none of the mesh. It uses this pre-mesh "Strategy A" floorplan --
 #   verbatim from ad253e66~1 -- which shell-owns the SLR1/SLR2 corridors and
 #   routed cleanly for the working Jul-20 PDI. link.tcl selects this directory

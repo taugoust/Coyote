@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 ######################################################################################
-# Coyote Example 15 — R5-0 co-processor provider firmware build (freestanding).
+# Coyote Example 14 — R5-0 co-processor provider firmware build (freestanding).
 #
 # Bare-metal Cortex-R5 image (no BSP, no XSA): links start.S + our service loop +
 # the transport-independent provider library + the R5 MMIO transport. Modeled on

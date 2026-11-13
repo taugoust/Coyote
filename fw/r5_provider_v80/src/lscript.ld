@@ -1,4 +1,4 @@
-/* Coyote Example 15 — R5-0 provider firmware memory map.
+/* Coyote Example 14 — R5-0 provider firmware memory map.
  *
  * Matches the platform contract (cmake/FindCoyoteHW.cmake):
  *   ATCM  0x00000000 .. 0x00010000  (64 KB) — code + data
