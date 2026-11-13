@@ -434,7 +434,6 @@ proc cr_bd_design_static { parentCell } {
           PS_MIO8 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
           PS_MIO9 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 1} {SLEW slow} {USAGE Reserved}} \
           PS_M_AXI_FPD_DATA_WIDTH {64} \
-          PS_M_AXI_LPD_DATA_WIDTH {32} \
           PS_NUM_FABRIC_RESETS {1} \
           PS_PCIE1_PERIPHERAL_ENABLE {0} \
           PS_PCIE2_PERIPHERAL_ENABLE {1} \
@@ -452,8 +451,6 @@ proc cr_bd_design_static { parentCell } {
           PS_UART1_PERIPHERAL {{ENABLE 1} {IO {PS_MIO 20 .. 21}}} \
           PS_USE_FPD_CCI_NOC {0} \
           PS_USE_M_AXI_FPD {1} \
-          PS_USE_M_AXI_LPD {1} \
-          PS_USE_NOC_LPD_AXI0 {1} \
           PS_USE_PMCPL_CLK0 {1} \
           PS_USE_PMCPL_CLK1 {1} \
           PS_USE_PMCPL_CLK2 {1} \
@@ -628,7 +625,6 @@ proc cr_bd_design_static { parentCell } {
           PS_MIO8 {{AUX_IO 0} {DIRECTION in} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 0} {SLEW slow} {USAGE Reserved}} \
           PS_MIO9 {{AUX_IO 0} {DIRECTION out} {DRIVE_STRENGTH 8mA} {OUTPUT_DATA default} {PULL pullup} {SCHMITT 1} {SLEW slow} {USAGE Reserved}} \
           PS_M_AXI_FPD_DATA_WIDTH {64} \
-          PS_M_AXI_LPD_DATA_WIDTH {32} \
           PS_NUM_FABRIC_RESETS {1} \
           PS_PCIE1_PERIPHERAL_ENABLE {1} \
           PS_PCIE2_PERIPHERAL_ENABLE {0} \
@@ -646,8 +642,6 @@ proc cr_bd_design_static { parentCell } {
           PS_UART1_PERIPHERAL {{ENABLE 1} {IO {PS_MIO 20 .. 21}}} \
           PS_USE_FPD_CCI_NOC {0} \
           PS_USE_M_AXI_FPD {1} \
-          PS_USE_M_AXI_LPD {1} \
-          PS_USE_NOC_LPD_AXI0 {1} \
           PS_USE_PMCPL_CLK0 {1} \
           PS_USE_PMCPL_CLK1 {1} \
           PS_USE_PMCPL_CLK2 {1} \
@@ -756,6 +750,20 @@ proc cr_bd_design_static { parentCell } {
     # faults in read_shell_config(). Recovering needs a full reboot, and only
     # if the card retains its JTAG-loaded PDI across it. Keeping BAR4 at 256 MB
     # keeps the SBR+remove+rescan reprogram shortcut working forever.
+  }
+
+  # The AMC's R5 reaches the GCQ through M_AXI_LPD and DDR4 through
+  # LPD_AXI_NOC_0. Enable both only for the AMC, so other static designs keep
+  # the base CIPS configuration; M_AXI_LPD is clocked below.
+  if {$amc_enabled} {
+    set amc_ps_pmc_config [get_property CONFIG.PS_PMC_CONFIG $versal_cips_0]
+    dict set amc_ps_pmc_config PS_M_AXI_LPD_DATA_WIDTH 32
+    dict set amc_ps_pmc_config PS_USE_M_AXI_LPD 1
+    dict set amc_ps_pmc_config PS_USE_NOC_LPD_AXI0 1
+    set_property -dict [list \
+      CONFIG.PS_PMC_CONFIG $amc_ps_pmc_config \
+      CONFIG.PS_PMC_CONFIG_APPLIED {1} \
+    ] $versal_cips_0
   }
 
   # byte-for-byte equivalent when it is disabled.
@@ -1186,8 +1194,9 @@ proc cr_bd_design_static { parentCell } {
   connect_bd_net [get_bd_pins versal_cips_0/pmc_axi_noc_axi0_clk] [get_bd_pins axi_noc_0/aclk2]
   connect_bd_net [get_bd_pins versal_cips_0/noc_pmc_axi_axi0_clk] [get_bd_pins axi_noc_0/aclk4]
 
-  # M_AXI_LPD is enabled by the optional R5 platform and must be clocked.
-  if {$r5_platform_enabled} {
+  # M_AXI_LPD is enabled by the optional R5 platform or the AMC and must be
+  # clocked.
+  if {$r5_platform_enabled || $amc_enabled} {
     connect_bd_net [get_bd_pins versal_cips_0/pl0_ref_clk] [get_bd_pins versal_cips_0/m_axi_lpd_aclk]
   }
   if {$amc_enabled} {
