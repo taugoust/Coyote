@@ -370,10 +370,12 @@ package lynxTypes;
     localparam integer N_REGIONS_BITS = clog2s({{ cnfg.n_reg }});
 
     // Width of the parallel user-interrupt vector (one IRQ line per vFPGA).
-    // Versal serializes it via qdma_interrupt_wrapper (usr_irq_vec is 5 bits ->
-    // up to 32), so it scales with N_REGIONS. UltraScale+ drives XDMA's fixed
-    // 16-line usr_irq (15 user + 1 PR), so it stays 15 there.
-{% if cnfg.fpga_arch == 'versal' %}
+    // It crosses the static/shell boundary, so it stays 15 wide for up to 15
+    // vFPGAs, matching existing static checkpoints. Versal serializes it via
+    // qdma_interrupt_wrapper and widens it for flat builds with more vFPGAs
+    // (up to 32). UltraScale+ drives XDMA's fixed 16-line usr_irq (15 user +
+    // 1 PR), so it stays 15 there.
+{% if cnfg.fpga_arch == 'versal' and cnfg.n_reg > 15 %}
     localparam integer N_USR_IRQ = {{ cnfg.n_reg }};
 {% else %}
     localparam integer N_USR_IRQ = 15;

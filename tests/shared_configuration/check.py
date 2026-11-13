@@ -81,6 +81,15 @@ def render(build, board):
     return shell, dynamic
 
 
+def usr_irq_width(build):
+    # The user-interrupt vector crosses the static/shell boundary, so its width
+    # decides whether a shell fits an existing static checkpoint.
+    (package,) = (build / "coyote-shared-configuration_shell").rglob("lynx_pkg.sv")
+    match = re.search(r"localparam integer N_USR_IRQ = (\d+);", package.read_text())
+    assert match, package
+    return int(match.group(1))
+
+
 def assert_cfg(build, expected):
     base = (build / "base.tcl").read_text()
     exported = (build / "export.cmake").read_text()
@@ -108,6 +117,7 @@ with tempfile.TemporaryDirectory(prefix="coyote-shared-config-") as temp:
     # Defaults must still match our existing shell/checkpoint recipes.
     assert_cfg(default, {"PCIE_GEN": 4, "ACLK_F": 250, "SCLK_F": 333})
     baseline_by_board = {"v80": render(default, "v80")}
+    assert usr_irq_width(default) == 15, usr_irq_width(default)
     assert "axis_p2p_send_tdata" not in baseline_by_board["v80"][1]
     u280_default = work / "u280-default"
     result = run_cmake(u280_default, "u280", config())
@@ -124,6 +134,7 @@ with tempfile.TemporaryDirectory(prefix="coyote-shared-config-") as temp:
     shell, dynamic = render(build, "v80")
     assert "axis_p2p_send_tdata" in dynamic
     assert "axis_p2p_arbiter" in dynamic
+    assert usr_irq_width(build) == 32, usr_irq_width(build)
     print("SHARED_CONFIGURATION_V80_FLAT_32_PASS")
 
     cases = [
