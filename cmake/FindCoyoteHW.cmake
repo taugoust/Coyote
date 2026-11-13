@@ -189,18 +189,6 @@ set(EN_AURORA_1 0 CACHE STRING "Enable Aurora 64B/66B on QSFP1")
 # Number of Aurora streams per vFPGA (currently always 1; reserved for future fan-out)
 set(N_AURORA_AXI 1 CACHE STRING "Number of Aurora streams per vFPGA")
 
-# QLINK: raw GTY on QSFP1, single lane at 10.3125 Gbps with 8B/10B, for
-# low-latency QEC syndrome transport (examples/16_qlink). Deliberately presents
-# the same 256-bit AXIS interface to the vFPGA that EN_AURORA_1 does, so no
-# dynamic/user template changes are needed -- only shell_top gains a branch.
-set(EN_QLINK_GTY 0 CACHE STRING "Enable QLINK raw-GTY link on QSFP1")
-
-# Build a QLINK self-test image: near-end PMA loopback, so a single card proves
-# its own GT + framing + protocol path with no cable and no peer attached. The
-# only way to distinguish "my receiver is broken" from "the far card is not
-# transmitting" without a scope.
-set(EN_QLINK_LOOPBACK 0 CACHE STRING "QLINK near-end PMA loopback (self-test image)")
-
 ##
 ## AVED MANAGEMENT CONTROL (AMC) firmware bringup on V80
 ##
@@ -1464,23 +1452,11 @@ macro(validation_checks_hw)
         if(EN_AURORA_1 AND EN_NET_1)
             message(FATAL_ERROR "EN_AURORA_1 and EN_NET_1 both enabled; both want the QSFP1 cage.")
         endif()
-        # QLINK drives the same cage, and reuses the same vFPGA-facing ports as
-        # Aurora, so it cannot coexist with either.
-        if(EN_QLINK_GTY AND EN_NET_1)
-            message(FATAL_ERROR "EN_QLINK_GTY and EN_NET_1 both enabled; both want the QSFP1 cage.")
+        if(EN_AURORA_1 AND NOT FDEV_NAME STREQUAL "u280")
+            message(FATAL_ERROR "Aurora QSFP1 pin mappings currently require FDEV_NAME=u280")
         endif()
-        if(EN_QLINK_GTY AND EN_AURORA_1)
-            message(FATAL_ERROR "EN_QLINK_GTY and EN_AURORA_1 both enabled; both want the QSFP1 cage "
-                                "and the same vFPGA AXIS ports.")
-        endif()
-        if((EN_AURORA_1 OR EN_QLINK_GTY) AND NOT FDEV_NAME STREQUAL "u280")
-            message(FATAL_ERROR "Aurora and QLINK QSFP1 pin mappings currently require FDEV_NAME=u280")
-        endif()
-        if((EN_AURORA_1 OR EN_QLINK_GTY) AND NOT N_AURORA_AXI EQUAL 1)
-            message(FATAL_ERROR "Aurora and QLINK currently expose exactly one stream per vFPGA")
-        endif()
-        if(EN_QLINK_LOOPBACK AND NOT EN_QLINK_GTY)
-            message(FATAL_ERROR "EN_QLINK_LOOPBACK requires EN_QLINK_GTY=1")
+        if(EN_AURORA_1 AND NOT N_AURORA_AXI EQUAL 1)
+            message(FATAL_ERROR "Aurora currently exposes exactly one stream per vFPGA")
         endif()
         if(EN_HOST_NOC AND (NOT FDEV_NAME STREQUAL "v80" OR NOT EN_STRM))
             message(FATAL_ERROR "EN_HOST_NOC requires V80 host streaming (FDEV_NAME=v80, EN_STRM=1)")
@@ -1703,10 +1679,8 @@ macro(validation_checks_hw)
         set(EN_HOST_NOC 0)
         set(N_AURORA_AXI 1)
         set(NET_RAW_VFPGA_ID 0)
-        set(EN_QLINK_LOOPBACK 0)
         set(EN_NET_RAW 0)
         set(EN_AURORA_1 0)
-        set(EN_QLINK_GTY 0)
         set(EN_AMC 0)
         set(EN_APU 0)
         set(V80_R5_PROVIDER_MAX_PACKET_BEATS 64)

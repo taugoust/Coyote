@@ -14,8 +14,6 @@ flags = {
     "NET_RAW_VFPGA_ID": "0",
     "EN_AURORA_1": "0",
     "N_AURORA_AXI": "1",
-    "EN_QLINK_GTY": "0",
-    "EN_QLINK_LOOPBACK": "0",
     "EN_AMC": "0",
     "EN_APU": "0",
 }
@@ -131,7 +129,6 @@ with tempfile.TemporaryDirectory(prefix="coyote-shared-config-") as temp:
     cases = [
         ("v80-raw-dcmac", "v80", config(EN_NET_RAW=1, NET_RAW_VFPGA_ID=0)),
         ("u280-aurora", "u280", config(EN_AURORA_1=1, N_AURORA_AXI=1)),
-        ("u280-qlink-loopback", "u280", config(EN_QLINK_GTY=1, EN_QLINK_LOOPBACK=1)),
         ("v80-amc", "v80", config(EN_AMC=1)),
         ("v80-apu", "v80", config(EN_APU=1)),
         ("v80-amc-apu", "v80", config(EN_AMC=1, EN_APU=1)),
@@ -248,7 +245,6 @@ with tempfile.TemporaryDirectory(prefix="coyote-shared-config-") as temp:
         ("host-noc-board", "u280", config(EN_HOST_NOC=1), "EN_HOST_NOC requires V80"),
         ("raw-stack-mode", "v80", config(EN_NET_RAW=1, NET_RAW_VFPGA_ID=0, EN_STATS=1), "EN_NET_RAW bypasses the network stack"),
         ("aurora-qsfp-conflict", "u280", config(EN_AURORA_1=1, EN_NET_1=1), "EN_AURORA_1 and EN_NET_1 both enabled"),
-        ("qlink-loopback-without-link", "u280", config(EN_QLINK_LOOPBACK=1), "EN_QLINK_LOOPBACK requires EN_QLINK_GTY=1"),
         ("region-limit-with-pr", "v80", config(N_REGIONS=32, EN_PR=1), "Max 15 vFPGAs supported"),
         ("pmtu-nonpower", "v80", config(PMTU_HOST=1000), "PMTU_HOST=1000 must be a power of 2"),
         ("pmtu-zero", "v80", config(PMTU_CARD=0), "PMTU_CARD=0 must be a power of 2"),

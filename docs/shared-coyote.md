@@ -32,7 +32,7 @@ this fork's extensions or previously fixed issues.
   `DRIVER_VARIANT=versal` or `DRIVER_VARIANT=ultrascale_plus`, with matching
   `TARGET_PLATFORM`, select isolated module/device namespaces for coexistence.
 - Include the newer upstream driver/host changes and optional AMC/APU, DDR4,
-  host/inter-vFPGA NoC, raw DCMAC, Aurora and QLINK source paths. New interface
+  host/inter-vFPGA NoC, raw DCMAC and Aurora source paths. New interface
   flags travel with shell exports; old exports default absent optional features
   off rather than inheriting an application's local requests.
 
@@ -59,8 +59,7 @@ at least 391 MHz at 512 bits, not the legacy 250 MHz default.
 | APU/Linux | V80; shares the DDR4/NoC platform construction with AMC but does not require enabling AMC firmware. |
 | R5 provider | Retains one region/one logical port and a common shell clock; static platform/provider selections and queue metadata must agree with the actual artifact. |
 | V80 Ethernet | Raw mode only, no RDMA/TCP/sniffer/statistics stack. DCMAC must remain outside a reconfigurable shell; use the supported flat/static or application-PR topology. |
-| Aurora / QLINK | Current QSFP1 pin mappings are U280-specific; mutually exclusive with each other and QSFP1 Ethernet. One stream per region is supported. |
-| QLINK loopback | Explicit self-test mode; requires QLINK. Source uses fixed-size framing/CRC; historical README performance claims are not acceptance evidence. |
+| Aurora | Current QSFP1 pin mappings are U280-specific; mutually exclusive with QSFP1 Ethernet. One stream per region is supported. |
 
 The existing V80 checkpoint is intentionally retained, not represented as an
 AMC/APU/NoC/DCMAC-enabled artifact. Hardware-changing configurations need newly
@@ -140,8 +139,8 @@ Before considering a later `develop` merge:
    ordering, backpressure, reset, fairness and IRQ delivery. Exercise multi-region
    PR and existing reset options within their separate supported limits.
 6. Qualify V80 raw DCMAC clock/CDC, framing, saturation and overflow behavior;
-   qualify Aurora link bring-up/recovery and QLINK loopback plus real-peer CRC,
-   framing and recovery. Do not adopt historical throughput/latency claims.
+   qualify Aurora link bring-up/recovery. Do not adopt historical
+   throughput/latency claims.
 7. Require real synthesis, place/route, DRC, timing and runtime evidence for every
    promoted board/feature combination. Do not infer coverage of a combination
    from independent feature tests or successful template generation.

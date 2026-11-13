@@ -143,9 +143,6 @@ if {$cfg(en_net) eq 1} {
         add_files "$hw_dir/hdl/network/tcp"
     }
 }
-if {$cfg(en_qlink_gty) eq 1} {
-    add_files "$hw_dir/hdl/qlink"
-}
 if {$cfg(en_aurora_1) eq 1} {
     add_files "$hw_dir/hdl/aurora"
 }
@@ -228,9 +225,6 @@ foreach provider_init $coprocessor_provider_init_tcl {
 }
 if {$cfg(en_aurora_1) eq 1} {
     source "$scripts_dir/ip_inst/aurora_infrastructure.tcl" -notrace
-}
-if {$cfg(en_qlink_gty) eq 1} {
-    source "$scripts_dir/ip_inst/qlink_infrastructure.tcl" -notrace
 }
 
 ########################################################################################################
